@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/verification.schema.json",
+  "title": "Material Code Review post-fix verification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "plan_hash",
+    "fix_summary_hash",
+    "verifier_id",
+    "independence_group",
+    "mode",
+    "finding_results",
+    "regressions",
+    "record_only_observations",
+    "verdict",
+    "summary",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/verification/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "plan_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fix_summary_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "verifier_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "independence_group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "enum": [
+        "independent",
+        "controller_direct",
+        "degraded_self_audit"
+      ]
+    },
+    "finding_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "status",
+          "root_cause_resolved",
+          "reason",
+          "evidence_checked",
+          "tests_checked"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "pattern": "^F[0-9]{3,}$"
+          },
+          "status": {
+            "enum": [
+              "resolved",
+              "unresolved",
+              "uncertain"
+            ]
+          },
+          "root_cause_resolved": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence_checked": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "tests_checked": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "resolved"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "root_cause_resolved": {
+                  "const": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "unresolved",
+                    "uncertain"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "root_cause_resolved": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "regressions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "regression_id",
+          "title",
+          "severity",
+          "file",
+          "line_start",
+          "evidence_quote",
+          "caused_by_fix",
+          "repair_owner_finding_id",
+          "repair_paths",
+          "reason"
+        ],
+        "properties": {
+          "regression_id": {
+            "type": "string",
+            "pattern": "^R[0-9]{3,}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidence_quote": {
+            "type": "string",
+            "minLength": 1
+          },
+          "caused_by_fix": {
+            "const": true
+          },
+          "repair_owner_finding_id": {
+            "type": "string",
+            "pattern": "^F[0-9]{3,}$"
+          },
+          "repair_paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "record_only_observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "file",
+          "line_start",
+          "reason"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "repair_required",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

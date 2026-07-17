@@ -1,0 +1,6 @@
+interface:
+  display_name: "Material Code Review"
+  short_description: "Evidence-gated review and bounded repair"
+  default_prompt: "Use $material-code-review to review the current changes for material issues only, show kept and discarded candidates, and stop at Gate A before any repair planning."
+policy:
+  allow_implicit_invocation: true

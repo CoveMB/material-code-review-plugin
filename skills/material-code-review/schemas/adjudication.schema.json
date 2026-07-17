@@ -1,0 +1,404 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/adjudication.schema.json",
+  "title": "Material Code Review adjudication",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "candidate_bundle_hash",
+    "adjudicator_id",
+    "groups",
+    "verdict",
+    "summary",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/adjudication/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidate_bundle_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "adjudicator_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "candidate_ids",
+          "canonical_title",
+          "nature",
+          "category",
+          "severity",
+          "confidence",
+          "file",
+          "line_start",
+          "line_end",
+          "evidence_side",
+          "evidence_quote",
+          "source_reviewers",
+          "source_independence_groups",
+          "validation",
+          "materiality",
+          "disposition",
+          "decision_reason",
+          "discard_reason_code",
+          "recommended_action",
+          "required_pre_fix_verification"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "candidate_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "canonical_title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nature": {
+            "enum": [
+              "defect",
+              "coverage_gap",
+              "documentation_gap",
+              "improvement",
+              "risk"
+            ]
+          },
+          "category": {
+            "enum": [
+              "correctness",
+              "security",
+              "privacy",
+              "reliability",
+              "tests",
+              "docs",
+              "performance",
+              "api_contract",
+              "migration",
+              "concurrency",
+              "simplification",
+              "dry",
+              "architecture",
+              "standards"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "certain",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidence_side": {
+            "enum": [
+              "comparison",
+              "baseline",
+              "diff"
+            ]
+          },
+          "evidence_quote": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_reviewers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "source_independence_groups": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "validation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mode",
+              "validator_id",
+              "independence_group",
+              "verdict",
+              "reason",
+              "evidence_checked",
+              "counterevidence",
+              "causality",
+              "root_cause_supported"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "independent",
+                  "controller_direct",
+                  "degraded_self_audit"
+                ]
+              },
+              "validator_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "independence_group": {
+                "type": "string",
+                "minLength": 1
+              },
+              "verdict": {
+                "enum": [
+                  "confirmed",
+                  "rejected",
+                  "uncertain"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence_checked": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "counterevidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "causality": {
+                "enum": [
+                  "introduced",
+                  "exposed",
+                  "pre_existing",
+                  "uncertain"
+                ]
+              },
+              "root_cause_supported": {
+                "type": "boolean"
+              }
+            }
+          },
+          "materiality": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "concrete_evidence",
+              "plausible_negative_consequence",
+              "beyond_preference",
+              "current_scope_relevance",
+              "improvement_current_cost",
+              "improvement_benefit_exceeds_churn",
+              "coverage_targets_fragile_behavior"
+            ],
+            "properties": {
+              "concrete_evidence": {
+                "type": "boolean"
+              },
+              "plausible_negative_consequence": {
+                "type": "boolean"
+              },
+              "beyond_preference": {
+                "type": "boolean"
+              },
+              "current_scope_relevance": {
+                "type": "boolean"
+              },
+              "improvement_current_cost": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "improvement_benefit_exceeds_churn": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "coverage_targets_fragile_behavior": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          },
+          "disposition": {
+            "enum": [
+              "keep",
+              "discard"
+            ]
+          },
+          "decision_reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "discard_reason_code": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "DUPLICATE",
+                  "NOT_IN_SCOPE",
+                  "PRE_EXISTING_UNRELATED",
+                  "HANDLED_ELSEWHERE",
+                  "EVIDENCE_MISMATCH",
+                  "CONSEQUENCE_UNSUPPORTED",
+                  "VALIDATOR_REJECTED",
+                  "UNCERTAIN_BELOW_HIGH_IMPACT",
+                  "STYLE_OR_LINTER",
+                  "SPECULATIVE_FUTURE",
+                  "HARMLESS_DUPLICATION",
+                  "ABSTRACTION_COST_EXCEEDS_VALUE",
+                  "SIMPLIFICATION_NOT_MATERIAL",
+                  "TEST_GAP_NOT_FRAGILE",
+                  "DOC_MISMATCH_NOT_OPERATIONAL",
+                  "SETTLED_PREFERENCE",
+                  "OUTSIDE_REVIEWER_CONTRACT"
+                ]
+              }
+            ]
+          },
+          "recommended_action": {
+            "enum": [
+              "fix_now",
+              "defer",
+              "monitor",
+              "none"
+            ]
+          },
+          "required_pre_fix_verification": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "disposition": {
+                  "const": "keep"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "discard_reason_code": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "disposition": {
+                  "const": "discard"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "discard_reason_code": {
+                  "enum": [
+                    "DUPLICATE",
+                    "NOT_IN_SCOPE",
+                    "PRE_EXISTING_UNRELATED",
+                    "HANDLED_ELSEWHERE",
+                    "EVIDENCE_MISMATCH",
+                    "CONSEQUENCE_UNSUPPORTED",
+                    "VALIDATOR_REJECTED",
+                    "UNCERTAIN_BELOW_HIGH_IMPACT",
+                    "STYLE_OR_LINTER",
+                    "SPECULATIVE_FUTURE",
+                    "HARMLESS_DUPLICATION",
+                    "ABSTRACTION_COST_EXCEEDS_VALUE",
+                    "SIMPLIFICATION_NOT_MATERIAL",
+                    "TEST_GAP_NOT_FRAGILE",
+                    "DOC_MISMATCH_NOT_OPERATIONAL",
+                    "SETTLED_PREFERENCE",
+                    "OUTSIDE_REVIEWER_CONTRACT"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "verdict": {
+      "enum": [
+        "READY",
+        "READY WITH OPTIONAL FOLLOW-UPS",
+        "SHOULD FIX BEFORE MERGE",
+        "NOT READY"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "material-code-review",
+  "version": "1.1.0",
+  "description": "Evidence-gated code review and bounded repair with frozen scope, independent validation, two mandatory user approvals, exact write boundaries, and finite post-fix verification.",
+  "author": {
+    "name": "Cove"
+  },
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "quality",
+    "workflow",
+    "agent-skills",
+    "repair"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Material Code Review",
+    "shortDescription": "Evidence-gated review with two approval gates",
+    "longDescription": "Freeze the exact change scope, capture and independently validate review candidates, show kept and discarded decisions, require explicit approval of findings and the exact repair plan, then perform checkpointed fixes inside strict path and retry limits.",
+    "developerName": "Cove",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use $material-code-review to review the current uncommitted changes for material issues only. Show all kept and discarded candidates, then stop at Gate A.",
+      "Use $material-code-review on the current branch. Require both user gates and repair only findings and paths approved at Gate B."
+    ]
+  }
+}

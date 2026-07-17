@@ -1,0 +1,26 @@
+{
+  "name": "material-code-review-marketplace",
+  "description": "Evidence-gated review and repair plugins for AI coding agents.",
+  "version": "1.1.0",
+  "owner": {
+    "name": "Cove"
+  },
+  "plugins": [
+    {
+      "name": "material-code-review",
+      "displayName": "Material Code Review",
+      "description": "Review, adjudicate, obtain two user approvals, repair, and verify code changes without open-ended improvement loops.",
+      "author": {
+        "name": "Cove"
+      },
+      "source": "./",
+      "category": "development",
+      "tags": [
+        "code-review",
+        "quality",
+        "workflow-automation",
+        "ai-agents"
+      ]
+    }
+  ]
+}

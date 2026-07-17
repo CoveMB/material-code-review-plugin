@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "material-code-review",
+  "displayName": "Material Code Review",
+  "version": "1.1.0",
+  "description": "Evidence-gated code review and repair with two mandatory user approvals, scope freezing, independent validation, bounded fixes, and post-fix verification.",
+  "author": {
+    "name": "Cove"
+  },
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "review",
+    "quality",
+    "workflow",
+    "ai-agents",
+    "repair"
+  ]
+}

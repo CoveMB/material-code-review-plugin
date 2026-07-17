@@ -1,0 +1,20 @@
+{
+  "name": "material-code-review-local",
+  "interface": {
+    "displayName": "Material Code Review"
+  },
+  "plugins": [
+    {
+      "name": "material-code-review",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

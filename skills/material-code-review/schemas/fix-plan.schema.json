@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/fix-plan.schema.json",
+  "title": "Material Code Review fix plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "findings_gate_hash",
+    "plan_summary",
+    "items",
+    "global_tests",
+    "no_unrelated_cleanup",
+    "no_new_improvements_during_fix",
+    "post_fix_review_scope",
+    "scope_expansion_policy",
+    "max_repair_rounds"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/fix-plan/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "findings_gate_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "plan_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "root_cause",
+          "objective",
+          "depends_on",
+          "steps",
+          "allowed_paths",
+          "tests",
+          "manual_verification",
+          "rollback_strategy",
+          "risk_controls",
+          "success_evidence",
+          "max_attempts"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "pattern": "^F[0-9]{3,}$"
+          },
+          "root_cause": {
+            "type": "string",
+            "minLength": 1
+          },
+          "objective": {
+            "type": "string",
+            "minLength": 1
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^F[0-9]{3,}$"
+            },
+            "uniqueItems": true
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "allowed_paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "command",
+                "working_directory",
+                "required",
+                "timeout_seconds",
+                "purpose"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "working_directory": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600
+                },
+                "purpose": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "manual_verification": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "rollback_strategy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "risk_controls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "success_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "max_attempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          }
+        },
+        "anyOf": [
+          {
+            "properties": {
+              "tests": {
+                "contains": {
+                  "properties": {
+                    "required": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "required"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "manual_verification": {
+                "minItems": 1
+              }
+            }
+          }
+        ]
+      },
+      "minItems": 1
+    },
+    "global_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "command",
+          "working_directory",
+          "required",
+          "timeout_seconds",
+          "purpose"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "working_directory": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "no_unrelated_cleanup": {
+      "const": true
+    },
+    "no_new_improvements_during_fix": {
+      "const": true
+    },
+    "post_fix_review_scope": {
+      "const": "approved_findings_and_fix_introduced_regressions_only"
+    },
+    "scope_expansion_policy": {
+      "const": "restore_and_reapprove"
+    },
+    "max_repair_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2
+    }
+  }
+}

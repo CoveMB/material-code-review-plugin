@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/candidate-set.schema.json",
+  "title": "Material Code Review candidate set",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "reviewer_id",
+    "independence_group",
+    "review_mode",
+    "findings",
+    "coverage"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/candidate-set/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewer_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "independence_group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_mode": {
+      "enum": [
+        "subagent",
+        "controller",
+        "external"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "local_id",
+          "title",
+          "nature",
+          "category",
+          "severity",
+          "confidence",
+          "file",
+          "line_start",
+          "line_end",
+          "evidence_side",
+          "evidence_quote",
+          "scope_relation",
+          "related_changed_files",
+          "direct_dependency",
+          "observable_consequence",
+          "trigger_conditions",
+          "counterevidence_checked",
+          "why_not_preference",
+          "proposed_resolution",
+          "estimated_fix_risk",
+          "requires_user_decision",
+          "assumptions"
+        ],
+        "properties": {
+          "local_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "nature": {
+            "enum": [
+              "defect",
+              "coverage_gap",
+              "documentation_gap",
+              "improvement",
+              "risk"
+            ]
+          },
+          "category": {
+            "enum": [
+              "correctness",
+              "security",
+              "privacy",
+              "reliability",
+              "tests",
+              "docs",
+              "performance",
+              "api_contract",
+              "migration",
+              "concurrency",
+              "simplification",
+              "dry",
+              "architecture",
+              "standards"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "certain",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidence_side": {
+            "enum": [
+              "comparison",
+              "baseline",
+              "diff"
+            ]
+          },
+          "evidence_quote": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope_relation": {
+            "enum": [
+              "primary",
+              "secondary",
+              "pre_existing"
+            ]
+          },
+          "related_changed_files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+            },
+            "uniqueItems": true
+          },
+          "direct_dependency": {
+            "type": "boolean"
+          },
+          "observable_consequence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trigger_conditions": {
+            "type": "string",
+            "minLength": 1
+          },
+          "counterevidence_checked": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "why_not_preference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "proposed_resolution": {
+            "type": "string",
+            "minLength": 1
+          },
+          "estimated_fix_risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ]
+          },
+          "requires_user_decision": {
+            "type": "boolean"
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "confidence": {
+                  "const": "low"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "severity": {
+                  "const": "blocker"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "confidence": {
+                  "enum": [
+                    "certain",
+                    "high"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "counterevidence_checked": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_reviewed",
+        "areas",
+        "limitations"
+      ],
+      "properties": {
+        "files_reviewed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "uniqueItems": true
+        },
+        "areas": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
