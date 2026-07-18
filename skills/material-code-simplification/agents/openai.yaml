@@ -1,0 +1,6 @@
+interface:
+  display_name: "Material Code Simplification"
+  short_description: "Evidence-gated behavior-preserving complexity reduction"
+  default_prompt: "Use $material-code-simplification on a bounded codebase scope. Map behavior and architecture, show every kept and discarded simplification candidate, and stop at Gate A before planning or editing."
+policy:
+  allow_implicit_invocation: true

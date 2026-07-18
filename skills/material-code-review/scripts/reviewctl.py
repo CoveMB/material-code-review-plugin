@@ -347,13 +347,18 @@ def normalize_repo_path(raw: str, *, allow_dot: bool = False) -> str:
 
 def repo_path(repo: Path, relative: str) -> Path:
     normalized = normalize_repo_path(relative)
-    target = repo / normalized
+    # Canonicalize the repository root before containment checks. On macOS,
+    # temporary paths may be exposed as /var/... while resolving a parent
+    # produces /private/var/.... Comparing those aliases directly causes a
+    # valid in-repository path to be rejected as an escape.
+    canonical_repo = repo.resolve(strict=True)
+    target = canonical_repo / normalized
     # Resolve the parent, not the final component. Resolving the final
     # component would follow a repository symlink and make checkpoint logic
     # operate on its target rather than on the symlink itself.
     resolved_parent = target.parent.resolve(strict=False)
     try:
-        resolved_parent.relative_to(repo)
+        resolved_parent.relative_to(canonical_repo)
     except ValueError as exc:
         raise ReviewError(f"Path escapes repository through a parent symlink: {relative}") from exc
     return target

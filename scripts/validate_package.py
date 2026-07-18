@@ -112,9 +112,27 @@ def load_toml(path: Path, errors: list[str]) -> dict[str, object] | None:
 
 
 def iter_files(root: Path) -> Iterable[Path]:
-    for path in sorted(root.rglob("*")):
-        if path.is_file() or path.is_symlink():
-            yield path
+    """Yield package files while excluding this checkout's own Git metadata.
+
+    Only the root-level `.git` entry is ignored. Nested `.git` entries remain
+    visible so accidental vendored repository metadata is still rejected by
+    the existing forbidden-path checks.
+    """
+    for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        base = Path(directory)
+        if base == root:
+            dirnames[:] = [name for name in dirnames if name != ".git"]
+            filenames[:] = [name for name in filenames if name != ".git"]
+
+        symlink_directories = [name for name in dirnames if (base / name).is_symlink()]
+        dirnames[:] = sorted(name for name in dirnames if name not in symlink_directories)
+
+        for name in sorted(symlink_directories):
+            yield base / name
+        for name in sorted(filenames):
+            path = base / name
+            if path.is_file() or path.is_symlink():
+                yield path
 
 
 def check_source_package(root: Path) -> list[str]:
@@ -248,8 +266,9 @@ def check_source_package(root: Path) -> list[str]:
             if data.get("additionalProperties") is not False:
                 fail(errors, f"{path.relative_to(root)} must set additionalProperties=false")
 
-    for path in root.rglob("*.json"):
-        load_json(path, errors)
+    for path in iter_files(root):
+        if path.suffix.lower() == ".json" and path.is_file():
+            load_json(path, errors)
 
     wrapper = root / "bin/material-reviewctl"
     if wrapper.exists() and os.name != "nt" and not (wrapper.stat().st_mode & stat.S_IXUSR):
