@@ -195,26 +195,49 @@ def _read_current_source(
 ) -> tuple[bytes, int, str] | None:
     target = core.repo_path(repo, path)
     try:
-        info = target.lstat()
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
         return None
-    mode = stat.S_IMODE(info.st_mode)
-    if stat.S_ISLNK(info.st_mode):
-        data = os.fsencode(os.readlink(target))
-    elif stat.S_ISREG(info.st_mode):
+    except OSError as exc:
+        if exc.errno == 40:  # ELOOP: symlink encountered with O_NOFOLLOW
+            try:
+                info = target.lstat()
+                if not stat.S_ISLNK(info.st_mode):
+                    raise
+                mode = stat.S_IMODE(info.st_mode)
+                data = os.fsencode(os.readlink(target))
+            except FileNotFoundError:
+                return None
+            if max_bytes is not None and len(data) > max_bytes:
+                raise core.ReviewError(
+                    f"Selected source {path} exceeds the remaining --max-selected-bytes budget of {max_bytes}"
+                )
+            return data, mode, "symlink"
+        raise
+    try:
+        info = os.fstat(fd)
+        mode = stat.S_IMODE(info.st_mode)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            return None
         if max_bytes is not None and info.st_size > max_bytes:
             raise core.ReviewError(
                 f"Selected file {path} is {info.st_size} bytes, exceeding the remaining "
                 f"--max-selected-bytes budget of {max_bytes}; narrow or exclude the path"
             )
-        data = target.read_bytes()
-    else:
-        return None
+        data = os.read(fd, info.st_size)
+        os.close(fd)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
     if max_bytes is not None and len(data) > max_bytes:
         raise core.ReviewError(
             f"Selected source {path} exceeds the remaining --max-selected-bytes budget of {max_bytes}"
         )
-    return data, mode, "symlink" if stat.S_ISLNK(info.st_mode) else "file"
+    return data, mode, "file"
 
 
 def build_codebase_scope(

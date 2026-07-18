@@ -5,7 +5,7 @@ The canonical skill defines simplification judgment. `simplifyctl.py` adds bound
 | State | Command | Result |
 |---|---|---|
 | new | `init --scope codebase --path ...` | selected current files frozen and hashed; `CONTEXT_FROZEN` |
-| new | `init --scope auto|uncommitted|branch ...` | delegated mutable Git-change scope |
+| new | `init --scope auto\|uncommitted\|branch ...` | delegated mutable Git-change scope |
 | new | `init --scope range --base ... --head ...` | delegated immutable review-only range; refreeze before mutation |
 | context | `check-scope` | selected file/ref identity remains fresh |
 | context | `ingest-candidates --input ...` | strict shared candidate validation and normalization |

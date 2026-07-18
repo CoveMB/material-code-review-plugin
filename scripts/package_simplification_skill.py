@@ -126,14 +126,22 @@ def main() -> int:
                     raise SystemExit(f"duplicate normalized archive entry: {normalized_archive_path}")
                 seen.add(normalized_archive_path)
                 write_file(archive, source, normalized_archive_path)
-        os.replace(temp, output)
+        digest = hashlib.sha256(temp.read_bytes()).hexdigest()
+        checksum_path = output.with_suffix(output.suffix + ".sha256")
+        checksum_fd, checksum_temp_name = tempfile.mkstemp(
+            prefix=f".{checksum_path.name}.", dir=checksum_path.parent
+        )
+        try:
+            os.write(checksum_fd, f"{digest}  {output.name}\n".encode("utf-8"))
+            os.close(checksum_fd)
+            os.replace(temp, output)
+            os.replace(checksum_temp_name, checksum_path)
+        except Exception:
+            os.close(checksum_fd)
+            Path(checksum_temp_name).unlink(missing_ok=True)
+            raise
     finally:
         temp.unlink(missing_ok=True)
-
-    digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    output.with_suffix(output.suffix + ".sha256").write_text(
-        f"{digest}  {output.name}\n", encoding="utf-8", newline="\n"
-    )
     print(f"[OK] Wrote {output}")
     print(f"SHA-256: {digest}")
     return 0

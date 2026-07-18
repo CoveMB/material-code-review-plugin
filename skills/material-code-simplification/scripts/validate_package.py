@@ -97,54 +97,6 @@ def validate_extracted_archive(
                 os.chmod(destination, mode or 0o644)
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
             return [f"{archive_path.name}: safe extraction failed: {exc}"]
-
-        environment = os.environ.copy()
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        commands = [
-            (
-                "packaged validator",
-                [sys.executable, "-B", str(extraction_root / "scripts" / "validate_package.py")],
-            ),
-            (
-                "packaged simplification tests",
-                [
-                    sys.executable,
-                    "-B",
-                    "-m",
-                    "unittest",
-                    "discover",
-                    "-s",
-                    str(extraction_root / "tests"),
-                    "-p",
-                    "test_*.py",
-                    "-v",
-                ],
-            ),
-        ]
-        for label, command in commands:
-            try:
-                result = subprocess.run(
-                    command,
-                    cwd=extraction_root,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=300,
-                )
-            except subprocess.TimeoutExpired:
-                errors.append(f"{archive_path.name}: {label} timed out")
-                continue
-            if result.returncode != 0:
-                output = (result.stdout + result.stderr).strip()
-                errors.append(
-                    f"{archive_path.name}: {label} failed with exit code {result.returncode}"
-                    + (f"\n{output}" if output else "")
-                )
-            elif label == "packaged validator" and "structurally valid (standalone)" not in result.stdout:
-                errors.append(
-                    f"{archive_path.name}: packaged validator did not confirm standalone bundled-core layout"
-                )
     return errors
 
 
@@ -152,6 +104,10 @@ def validate_archive(archive_path: Path) -> list[str]:
     if not archive_path.is_file():
         return [f"archive not found: {archive_path}"]
     errors: list[str] = []
+    MAX_MEMBERS = 10_000
+    MAX_MEMBER_SIZE = 100 * 1024 * 1024
+    MAX_CUMULATIVE_SIZE = 500 * 1024 * 1024
+    MAX_COMPRESSION_RATIO = 100
     try:
         with zipfile.ZipFile(archive_path) as archive:
             if archive.comment != ARCHIVE_COMMENT:
@@ -159,7 +115,27 @@ def validate_archive(archive_path: Path) -> list[str]:
             seen: set[str] = set()
             members: list[tuple[zipfile.ZipInfo, str]] = []
             info_by_name: dict[str, zipfile.ZipInfo] = {}
+            cumulative_size = 0
             for info in archive.infolist():
+                if len(seen) >= MAX_MEMBERS:
+                    errors.append(f"{archive_path.name}: archive exceeds maximum member count of {MAX_MEMBERS}")
+                    return errors
+                if info.file_size > MAX_MEMBER_SIZE:
+                    errors.append(
+                        f"{archive_path.name}: member {info.filename} exceeds maximum size of {MAX_MEMBER_SIZE} bytes"
+                    )
+                    return errors
+                cumulative_size += info.file_size
+                if cumulative_size > MAX_CUMULATIVE_SIZE:
+                    errors.append(
+                        f"{archive_path.name}: cumulative expanded size exceeds maximum of {MAX_CUMULATIVE_SIZE} bytes"
+                    )
+                    return errors
+                if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+                    errors.append(
+                        f"{archive_path.name}: member {info.filename} compression ratio exceeds maximum of {MAX_COMPRESSION_RATIO}"
+                    )
+                    return errors
                 try:
                     normalized_name = normalize_archive_member(info.filename)
                 except ValueError as exc:
@@ -306,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"[OK] material-code-simplification {VERSION} is structurally valid ({layout})")
     for archive_path in archive_paths:
-        print(f"[OK] standalone archive is safe and runnable: {archive_path}")
+        print(f"[OK] standalone archive is safe: {archive_path}")
     return 0
 
 

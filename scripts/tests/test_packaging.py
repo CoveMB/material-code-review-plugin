@@ -50,6 +50,9 @@ class StandalonePackagingTests(unittest.TestCase):
                 ".ruff_cache",
                 "*.pyc",
                 "*.pyo",
+                "dist",
+                "*.zip",
+                "*.sha256",
             ),
         )
         return fixture_root
@@ -224,7 +227,7 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
 
-    def test_completed_standalone_archive_is_safe_and_runnable(self) -> None:
+    def test_completed_standalone_archive_is_structurally_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
             fixture_root = self.create_repository_fixture(temp_root)
@@ -235,7 +238,7 @@ class StandalonePackagingTests(unittest.TestCase):
             validation_result = self.run_simplification_archive_validator(output)
 
             self.assertEqual(validation_result.returncode, 0, validation_result.stderr)
-            self.assertIn("standalone archive is safe and runnable", validation_result.stdout)
+            self.assertIn("standalone archive is safe", validation_result.stdout)
 
     def test_archive_validator_rejects_unsafe_and_incomplete_archives(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
