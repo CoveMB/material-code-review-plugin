@@ -65,6 +65,19 @@ def normalize_archive_path(archive_path: str) -> str:
     return "/".join(parts)
 
 
+def windows_collision_key(archive_path: str) -> str:
+    """Derive a Windows-safe collision key that accounts for case-insensitive matching
+    and trailing dots or spaces."""
+    parts = archive_path.split("/")
+    normalized_parts = []
+    for part in parts:
+        # Strip trailing dots and spaces (Windows semantics)
+        stripped = part.rstrip(". ")
+        # Convert to lowercase for case-insensitive comparison
+        normalized_parts.append(stripped.lower())
+    return "/".join(normalized_parts)
+
+
 def write_file(archive: zipfile.ZipFile, source: Path, archive_path: str) -> None:
     info = zipfile.ZipInfo(archive_path, date_time=FIXED_TIMESTAMP)
     info.compress_type = zipfile.ZIP_DEFLATED
@@ -118,6 +131,7 @@ def main() -> int:
     temp = Path(temp_name)
     try:
         seen: set[str] = set()
+        seen_windows_keys: set[str] = set()
         with zipfile.ZipFile(temp, "w", allowZip64=True) as archive:
             archive.comment = b"material-code-simplification standalone Agent Skill"
             for source, archive_path in entries:
@@ -125,6 +139,13 @@ def main() -> int:
                 if normalized_archive_path in seen:
                     raise SystemExit(f"duplicate normalized archive entry: {normalized_archive_path}")
                 seen.add(normalized_archive_path)
+                collision_key = windows_collision_key(normalized_archive_path)
+                if collision_key in seen_windows_keys:
+                    raise SystemExit(
+                        f"archive entry {normalized_archive_path} collides with an earlier entry "
+                        f"under Windows case-insensitive/trailing-character semantics"
+                    )
+                seen_windows_keys.add(collision_key)
                 write_file(archive, source, normalized_archive_path)
         digest = hashlib.sha256(temp.read_bytes()).hexdigest()
         checksum_path = output.with_suffix(output.suffix + ".sha256")

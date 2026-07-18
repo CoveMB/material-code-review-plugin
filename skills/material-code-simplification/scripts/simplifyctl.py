@@ -11,6 +11,7 @@ sibling/standalone core controller.
 from __future__ import annotations
 
 import argparse
+import errno
 import importlib.util
 import inspect
 import os
@@ -199,7 +200,7 @@ def _read_current_source(
     except FileNotFoundError:
         return None
     except OSError as exc:
-        if exc.errno == 40:  # ELOOP: symlink encountered with O_NOFOLLOW
+        if exc.errno == errno.ELOOP:  # ELOOP: symlink encountered with O_NOFOLLOW
             try:
                 info = target.lstat()
                 if not stat.S_ISLNK(info.st_mode):
@@ -225,7 +226,18 @@ def _read_current_source(
                 f"Selected file {path} is {info.st_size} bytes, exceeding the remaining "
                 f"--max-selected-bytes budget of {max_bytes}; narrow or exclude the path"
             )
-        data = os.read(fd, info.st_size)
+        chunks: list[bytes] = []
+        bytes_read = 0
+        while bytes_read < info.st_size:
+            remaining = info.st_size - bytes_read
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                raise core.ReviewError(
+                    f"Selected file {path} returned EOF after {bytes_read} bytes, expected {info.st_size}"
+                )
+            chunks.append(chunk)
+            bytes_read += len(chunk)
+        data = b"".join(chunks)
         os.close(fd)
     except Exception:
         try:

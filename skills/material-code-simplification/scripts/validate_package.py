@@ -75,6 +75,19 @@ def normalize_archive_member(name: str) -> str:
     return "/".join(parts)
 
 
+def windows_collision_key(archive_path: str) -> str:
+    """Derive a Windows-safe collision key that accounts for case-insensitive matching
+    and trailing dots or spaces."""
+    parts = archive_path.split("/")
+    normalized_parts = []
+    for part in parts:
+        # Strip trailing dots and spaces (Windows semantics)
+        stripped = part.rstrip(". ")
+        # Convert to lowercase for case-insensitive comparison
+        normalized_parts.append(stripped.lower())
+    return "/".join(normalized_parts)
+
+
 def validate_extracted_archive(
     archive: zipfile.ZipFile,
     members: list[tuple[zipfile.ZipInfo, str]],
@@ -113,6 +126,7 @@ def validate_archive(archive_path: Path) -> list[str]:
             if archive.comment != ARCHIVE_COMMENT:
                 errors.append(f"{archive_path.name}: identifying archive comment mismatch")
             seen: set[str] = set()
+            seen_windows_keys: set[str] = set()
             members: list[tuple[zipfile.ZipInfo, str]] = []
             info_by_name: dict[str, zipfile.ZipInfo] = {}
             cumulative_size = 0
@@ -147,6 +161,14 @@ def validate_archive(archive_path: Path) -> list[str]:
                     errors.append(f"{archive_path.name}: duplicate normalized entry: {normalized_name}")
                     continue
                 seen.add(normalized_name)
+                collision_key = windows_collision_key(normalized_name)
+                if collision_key in seen_windows_keys:
+                    errors.append(
+                        f"{archive_path.name}: entry {normalized_name} collides with an earlier entry "
+                        f"under Windows case-insensitive/trailing-character semantics"
+                    )
+                    continue
+                seen_windows_keys.add(collision_key)
                 info_by_name[normalized_name] = info
                 members.append((info, normalized_name))
                 relative = Path(normalized_name)

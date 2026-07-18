@@ -263,6 +263,54 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(incomplete_result.returncode, 0)
             self.assertIn("missing archive entry: core/reviewctl.py", incomplete_result.stderr)
 
+    @unittest.skipIf(sys.platform.startswith("win"), "fixture requires POSIX filename semantics")
+    def test_packager_rejects_case_only_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_repository_fixture(temp_root)
+            skill_root = fixture_root / "skills" / "material-code-simplification"
+            # Create a file that differs only in case from an existing file
+            (skill_root / "skill.md").write_text("collision\n", encoding="utf-8")
+            output = temp_root / "standalone.zip"
+
+            package_result = self.run_packager(fixture_root, output)
+
+            self.assertNotEqual(package_result.returncode, 0)
+            self.assertIn("collides with an earlier entry", package_result.stderr)
+            self.assertIn("Windows case-insensitive", package_result.stderr)
+
+    @unittest.skipIf(sys.platform.startswith("win"), "fixture requires POSIX filename semantics")
+    def test_packager_rejects_trailing_dot_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_repository_fixture(temp_root)
+            skill_root = fixture_root / "skills" / "material-code-simplification"
+            # Create a file with trailing dot that collides with an existing file
+            (skill_root / "SKILL.md.").write_text("collision\n", encoding="utf-8")
+            output = temp_root / "standalone.zip"
+
+            package_result = self.run_packager(fixture_root, output)
+
+            self.assertNotEqual(package_result.returncode, 0)
+            self.assertIn("collides with an earlier entry", package_result.stderr)
+            self.assertIn("trailing-character", package_result.stderr)
+
+    @unittest.skipIf(sys.platform.startswith("win"), "fixture requires POSIX filename semantics")
+    def test_packager_rejects_trailing_space_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_repository_fixture(temp_root)
+            skill_root = fixture_root / "skills" / "material-code-simplification"
+            # Create a file with trailing space that collides with an existing file
+            (skill_root / "SKILL.md ").write_text("collision\n", encoding="utf-8")
+            output = temp_root / "standalone.zip"
+
+            package_result = self.run_packager(fixture_root, output)
+
+            self.assertNotEqual(package_result.returncode, 0)
+            self.assertIn("collides with an earlier entry", package_result.stderr)
+            self.assertIn("trailing-character", package_result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
