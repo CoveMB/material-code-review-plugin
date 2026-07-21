@@ -1,6 +1,6 @@
 {
   "name": "material-code-review-marketplace",
-  "description": "Evidence-gated review and repair plugins for AI coding agents.",
+  "description": "Evidence-gated material review of concrete Git change scopes for AI coding agents.",
   "version": "1.1.0",
   "owner": {
     "name": "Cove"
@@ -9,7 +9,7 @@
     {
       "name": "material-code-review",
       "displayName": "Material Code Review",
-      "description": "Review, adjudicate, obtain two user approvals, repair, and verify code changes without open-ended improvement loops.",
+      "description": "Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.",
       "author": {
         "name": "Cove"
       },

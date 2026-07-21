@@ -75,6 +75,7 @@ This separation is the main defense against both false-positive review output an
 
 ## Known limitations
 
+- This repository has no behavioral skill-selection evaluation harness. Static validation can prevent the packaged activation metadata and preflight from drifting, but implicit selection remains model-mediated and cannot be proven by these tests.
 - The control tool can enforce files, hashes, commands, state transitions, and local restoration. It cannot prove that an AI reviewer reasoned correctly; independent review and user gates reduce but do not eliminate that risk.
 - A passing targeted test is evidence, not proof that auth, concurrency, distributed-system, migration, or public-contract changes are safe.
 - Host platforms expose different subagent, model-routing, and plugin APIs. The skill contains fallbacks, but exact parallelism and model identity remain host-dependent.

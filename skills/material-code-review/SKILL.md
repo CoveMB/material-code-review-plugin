@@ -1,6 +1,6 @@
 ---
 name: material-code-review
-description: 'High-precision, multi-stage code review and repair with frozen scope, complete kept/discarded candidate adjudication, two mandatory user gates, bounded checkpoints, executable validation, and a no-new-improvements post-fix stop rule. Use for uncommitted changes, the current branch, a local ref range, or a locally aligned PR.'
+description: 'Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.'
 argument-hint: "[scope:auto|uncommitted|branch|range] [base:<ref>] [head:<ref>] [depth:auto|full] [external-review:off|ask]"
 ---
 
@@ -15,6 +15,17 @@ Use this skill when code changes need a review that is precise enough to drive r
 
 The workflow is evidence-gated rather than score-gated. It persists scope, candidates, decisions, approvals, checkpoints, test logs, and final verification outside the worktree through `scripts/reviewctl.py`.
 
+## Activation eligibility preflight
+
+Apply this preflight before repository inspection, scope resolution, or any `reviewctl init` operation.
+
+- **Explicit invocation remains supported.** `$material-code-review` may use the existing default scope or any supported selector below. Explicit invocation does not make a non-Git object supported: if the user explicitly invokes the skill for a document, generated artifact, output diagnosis, general analysis, architecture exploration, or planning-only task, report the mismatch and stop safely instead of repurposing this workflow.
+- **Implicit eligibility requires both conditions in the prompt itself.** First, the review object must be concrete Git changes: uncommitted changes, a branch or diff, a local ref range, or a PR. Second, the requested outcome must assess material code defects, regressions or risks introduced or exposed by those changes, test gaps protecting changed behavior, or merge readiness.
+- **Generic terminology is insufficient.** Words such as “review,” “analyze,” “issues,” “findings,” or “plan” do not establish eligibility. Document or generated-artifact comparison, diagnosis of another skill's output, general skill or plugin analysis, architecture exploration, planning-only work, and general repository analysis remain outside the implicit boundary.
+- **Context cannot create eligibility.** The working directory, the existence of a Git repository, a supplied repository path, and `scope:auto` cannot manufacture change-review intent. `scope:auto` resolves a scope only after activation eligibility is already established.
+- **Fail closed before initialization.** If implicit eligibility is absent, stop before initializing a run and explain that this workflow is not applicable to the request.
+
+For example, “Review this plugin” is not eligible. “Review the changes on this plugin branch for merge blockers” is eligible.
 
 ## Codex and Agent Skills compatibility
 

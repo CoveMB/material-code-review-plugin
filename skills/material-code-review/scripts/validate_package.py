@@ -10,6 +10,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.1.0"
+ACTIVATION_DISCOVERY_DESCRIPTION = (
+    "Evidence-gated review and bounded repair of a concrete Git change scope. "
+    "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
+    "for material defects, regressions, test gaps protecting changed behavior, or merge readiness. "
+    "Do not implicitly use for document or generated-output review, output diagnosis, general skill, "
+    "plugin, or repository analysis, architecture exploration, or planning-only work."
+)
+ACTIVATION_SHORT_DESCRIPTION = "Material-defect review of Git changes"
+ACTIVATION_PREFLIGHT_MARKERS = (
+    "## Activation eligibility preflight",
+    "**Implicit eligibility requires both conditions in the prompt itself.**",
+    "**Context cannot create eligibility.**",
+    "**Fail closed before initialization.**",
+)
 REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -34,6 +48,37 @@ REQUIRED = {
 }
 
 
+def parse_frontmatter(text: str) -> dict[str, str]:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    try:
+        end = next(index for index in range(1, len(lines)) if lines[index].strip() == "---")
+    except StopIteration:
+        return {}
+    result: dict[str, str] = {}
+    for line in lines[1:end]:
+        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        result[key.strip()] = value.strip().strip("'\"")
+    return result
+
+
+def yaml_block_entries(text: str, block_name: str, key: str) -> list[str] | None:
+    lines = text.splitlines()
+    block_indices = [index for index, line in enumerate(lines) if line == f"{block_name}:"]
+    if len(block_indices) != 1:
+        return None
+    entries: list[str] = []
+    for line in lines[block_indices[0] + 1 :]:
+        if line and not line[0].isspace():
+            break
+        if line.lstrip().startswith(f"{key}:"):
+            entries.append(line)
+    return entries
+
+
 def main() -> int:
     errors: list[str] = []
     if sys.version_info < (3, 10):
@@ -48,8 +93,14 @@ def main() -> int:
     skill = ROOT / "SKILL.md"
     if skill.is_file():
         text = skill.read_text(encoding="utf-8")
-        if not text.startswith("---\n") or "name: material-code-review" not in text.split("---", 2)[1]:
+        frontmatter = parse_frontmatter(text)
+        if frontmatter.get("name") != "material-code-review":
             errors.append("SKILL.md frontmatter is missing or has the wrong name")
+        if frontmatter.get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
+            errors.append("SKILL.md description does not match the Git-change activation contract")
+        for marker in ACTIVATION_PREFLIGHT_MARKERS:
+            if marker not in text:
+                errors.append(f"SKILL.md activation preflight missing marker: {marker}")
         for rel in sorted(set(re.findall(r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")
@@ -70,9 +121,16 @@ def main() -> int:
     yaml = ROOT / "agents/openai.yaml"
     if yaml.is_file():
         text = yaml.read_text(encoding="utf-8")
-        for token in ("interface:", "display_name:", "default_prompt:", "allow_implicit_invocation:"):
+        for token in ("interface:", "display_name:", "short_description:", "default_prompt:", "policy:"):
             if token not in text:
                 errors.append(f"openai.yaml missing {token}")
+        implicit_policy = yaml_block_entries(text, "policy", "allow_implicit_invocation")
+        if implicit_policy != ["  allow_implicit_invocation: true"]:
+            errors.append("openai.yaml must set policy.allow_implicit_invocation exactly to true")
+        short_description = yaml_block_entries(text, "interface", "short_description")
+        expected_short_description = f'  short_description: "{ACTIVATION_SHORT_DESCRIPTION}"'
+        if short_description != [expected_short_description]:
+            errors.append("openai.yaml short_description does not match the Git-change activation contract")
     if errors:
         print("[FAIL] standalone material-code-review skill validation", file=sys.stderr)
         for error in errors:

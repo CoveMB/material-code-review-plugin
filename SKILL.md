@@ -1,6 +1,6 @@
 ---
 name: material-code-review
-description: Evidence-gated code review and bounded repair for Codex and other Agent Skills hosts. Freeze the exact change scope, independently validate findings, show kept and discarded candidates, require user approval of findings and the exact repair plan, apply checkpointed fixes, and prevent open-ended improvement loops.
+description: Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.
 ---
 
 # Material Code Review — portable source-tree adapter

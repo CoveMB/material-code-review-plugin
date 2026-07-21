@@ -1,5 +1,5 @@
 ---
-description: Run the evidence-gated material code-review workflow and stop at mandatory user gates.
+description: Run the evidence-gated material-defect workflow for a concrete Git change scope and stop at mandatory user gates.
 argument-hint: "[scope:auto|uncommitted|branch|range] [base:<ref>] [head:<ref>] [depth:auto|full] [external-review:off|ask]"
 ---
 

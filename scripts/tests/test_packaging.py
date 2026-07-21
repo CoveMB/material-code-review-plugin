@@ -12,6 +12,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_simplification_skill.py"
 PACKAGE_VALIDATOR = REPOSITORY_ROOT / "scripts" / "validate_package.py"
+REVIEW_VALIDATOR = REPOSITORY_ROOT / "skills" / "material-code-review" / "scripts" / "validate_package.py"
 SIMPLIFICATION_VALIDATOR = (
     REPOSITORY_ROOT / "skills" / "material-code-simplification" / "scripts" / "validate_package.py"
 )
@@ -72,6 +73,20 @@ class StandalonePackagingTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def run_review_validator(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
+        validator = fixture_root / REVIEW_VALIDATOR.relative_to(REPOSITORY_ROOT)
+        return subprocess.run(
+            [sys.executable, "-B", str(validator)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def replace_once(self, path: Path, original: str, replacement: str) -> None:
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count(original), 1, f"expected one occurrence in {path}")
+        path.write_text(text.replace(original, replacement, 1), encoding="utf-8")
 
     def run_simplification_archive_validator(self, archive: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -226,6 +241,61 @@ class StandalonePackagingTests(unittest.TestCase):
 
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
+
+    def test_review_validators_require_implicit_invocation_true(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            metadata = fixture_root / "skills" / "material-code-review" / "agents" / "openai.yaml"
+            self.replace_once(
+                metadata,
+                "  allow_implicit_invocation: true",
+                "  allow_implicit_invocation: false",
+            )
+
+            source_result = self.run_package_validator(fixture_root)
+            standalone_result = self.run_review_validator(fixture_root)
+
+            expected = "openai.yaml must set policy.allow_implicit_invocation exactly to true"
+            self.assertNotEqual(source_result.returncode, 0)
+            self.assertIn(expected, source_result.stderr)
+            self.assertNotEqual(standalone_result.returncode, 0)
+            self.assertIn(expected, standalone_result.stderr)
+
+    def test_review_validators_require_activation_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            skill = fixture_root / "skills" / "material-code-review" / "SKILL.md"
+            self.replace_once(
+                skill,
+                "## Activation eligibility preflight",
+                "## Review eligibility",
+            )
+
+            source_result = self.run_package_validator(fixture_root)
+            standalone_result = self.run_review_validator(fixture_root)
+
+            self.assertNotEqual(source_result.returncode, 0)
+            self.assertIn("canonical skill activation preflight missing marker", source_result.stderr)
+            self.assertNotEqual(standalone_result.returncode, 0)
+            self.assertIn("SKILL.md activation preflight missing marker", standalone_result.stderr)
+
+    def test_source_validator_requires_aligned_activation_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            manifest = fixture_root / ".codex-plugin" / "plugin.json"
+            self.replace_once(
+                manifest,
+                '"shortDescription": "Material-defect review of Git changes"',
+                '"shortDescription": "Evidence-gated review"',
+            )
+
+            validation_result = self.run_package_validator(fixture_root)
+
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "Codex manifest shortDescription does not match the Git-change activation contract",
+                validation_result.stderr,
+            )
 
     def test_completed_standalone_archive_is_structurally_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:

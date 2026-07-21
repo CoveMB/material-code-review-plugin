@@ -20,6 +20,20 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.1.0"
+ACTIVATION_DISCOVERY_DESCRIPTION = (
+    "Evidence-gated review and bounded repair of a concrete Git change scope. "
+    "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
+    "for material defects, regressions, test gaps protecting changed behavior, or merge readiness. "
+    "Do not implicitly use for document or generated-output review, output diagnosis, general skill, "
+    "plugin, or repository analysis, architecture exploration, or planning-only work."
+)
+ACTIVATION_SHORT_DESCRIPTION = "Material-defect review of Git changes"
+ACTIVATION_PREFLIGHT_MARKERS = (
+    "## Activation eligibility preflight",
+    "**Implicit eligibility requires both conditions in the prompt itself.**",
+    "**Context cannot create eligibility.**",
+    "**Fail closed before initialization.**",
+)
 
 REQUIRED = {
     ".codex-plugin/plugin.json",
@@ -111,6 +125,36 @@ def load_toml(path: Path, errors: list[str]) -> dict[str, object] | None:
     return result
 
 
+def yaml_block_entries(text: str, block_name: str, key: str) -> list[str] | None:
+    """Return matching scalar lines from one top-level YAML block.
+
+    The OpenAI metadata shape used here is deliberately small. Keeping this
+    parser narrow preserves the standard-library-only validation contract.
+    """
+    lines = text.splitlines()
+    block_indices = [index for index, line in enumerate(lines) if line == f"{block_name}:"]
+    if len(block_indices) != 1:
+        return None
+    entries: list[str] = []
+    for line in lines[block_indices[0] + 1 :]:
+        if line and not line[0].isspace():
+            break
+        if line.lstrip().startswith(f"{key}:"):
+            entries.append(line)
+    return entries
+
+
+def validate_openai_activation_metadata(text: str, errors: list[str]) -> None:
+    implicit_policy = yaml_block_entries(text, "policy", "allow_implicit_invocation")
+    if implicit_policy != ["  allow_implicit_invocation: true"]:
+        fail(errors, "openai.yaml must set policy.allow_implicit_invocation exactly to true")
+
+    short_description = yaml_block_entries(text, "interface", "short_description")
+    expected_short_description = f'  short_description: "{ACTIVATION_SHORT_DESCRIPTION}"'
+    if short_description != [expected_short_description]:
+        fail(errors, "openai.yaml short_description does not match the Git-change activation contract")
+
+
 def iter_files(root: Path) -> Iterable[Path]:
     """Yield package files while excluding this checkout's own Git metadata.
 
@@ -162,6 +206,16 @@ def check_source_package(root: Path) -> list[str]:
             fail(errors, "Codex plugin name is not kebab-case")
         if codex.get("version") != VERSION:
             fail(errors, f"Codex manifest version must be {VERSION}")
+        if codex.get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
+            fail(errors, "Codex manifest description does not match the Git-change activation contract")
+        interface = codex.get("interface")
+        if not isinstance(interface, dict):
+            fail(errors, "Codex manifest interface must be an object")
+        else:
+            if interface.get("shortDescription") != ACTIVATION_SHORT_DESCRIPTION:
+                fail(errors, "Codex manifest shortDescription does not match the Git-change activation contract")
+            if interface.get("longDescription") != ACTIVATION_DISCOVERY_DESCRIPTION:
+                fail(errors, "Codex manifest longDescription does not match the Git-change activation contract")
         skills_value = codex.get("skills")
         if isinstance(skills_value, str):
             if not skills_value.startswith("./"):
@@ -200,8 +254,16 @@ def check_source_package(root: Path) -> list[str]:
     if isinstance(claude, dict):
         if claude.get("name") != "material-code-review" or claude.get("version") != VERSION:
             fail(errors, "Claude and Codex manifest identity/version differ")
+        if claude.get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
+            fail(errors, "Claude manifest description does not match the Git-change activation contract")
     if isinstance(claude_market, dict) and claude_market.get("version") != VERSION:
         fail(errors, f"Claude marketplace version must be {VERSION}")
+    if isinstance(claude_market, dict):
+        plugins = claude_market.get("plugins")
+        if not isinstance(plugins, list) or len(plugins) != 1 or not isinstance(plugins[0], dict):
+            fail(errors, "Claude marketplace must expose exactly this plugin")
+        elif plugins[0].get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
+            fail(errors, "Claude marketplace description does not match the Git-change activation contract")
 
     for rel in ("SKILL.md", "skills/material-code-review/SKILL.md"):
         path = root / rel
@@ -210,15 +272,16 @@ def check_source_package(root: Path) -> list[str]:
         frontmatter = parse_frontmatter(path, errors)
         if frontmatter.get("name") != "material-code-review":
             fail(errors, f"{rel} has wrong skill name")
-        if not frontmatter.get("description"):
-            fail(errors, f"{rel} lacks a description")
+        if frontmatter.get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
+            fail(errors, f"{rel} description does not match the Git-change activation contract")
 
     openai_yaml = root / "skills/material-code-review/agents/openai.yaml"
     if openai_yaml.is_file():
         text = openai_yaml.read_text(encoding="utf-8")
-        for token in ("interface:", "display_name:", "short_description:", "default_prompt:", "policy:", "allow_implicit_invocation:"):
+        for token in ("interface:", "display_name:", "short_description:", "default_prompt:", "policy:"):
             if token not in text:
                 fail(errors, f"openai.yaml missing {token}")
+        validate_openai_activation_metadata(text, errors)
 
     custom_agents = sorted((root / "examples/codex-project-config/.codex/agents").glob("*.toml"))
     for path in custom_agents:
@@ -257,6 +320,9 @@ def check_source_package(root: Path) -> list[str]:
             fail(errors, "canonical skill no longer states the pre-Gate-B mutation invariant")
         if "No improvement recursion" not in text:
             fail(errors, "canonical skill must preserve the post-fix no-improvement-loop rule")
+        for marker in ACTIVATION_PREFLIGHT_MARKERS:
+            if marker not in text:
+                fail(errors, f"canonical skill activation preflight missing marker: {marker}")
 
     for path in sorted((root / "skills/material-code-review/schemas").glob("*.json")):
         data = load_json(path, errors)
@@ -291,7 +357,14 @@ def check_source_package(root: Path) -> list[str]:
     readme = root / "README.md"
     if readme.is_file():
         text = readme.read_text(encoding="utf-8")
-        for token in (".codex-plugin/plugin.json", "codex plugin marketplace add", "19 lifecycle"):
+        for token in (
+            ".codex-plugin/plugin.json",
+            "codex plugin marketplace add",
+            "19 lifecycle",
+            "## Invocation and activation boundary",
+            "implicit selection remains model-mediated",
+            "no behavioral skill-selection evaluation harness",
+        ):
             if token not in text:
                 fail(errors, f"README lacks required Codex or validation text: {token}")
 

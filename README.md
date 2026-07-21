@@ -1,6 +1,6 @@
 # Material Code Review
 
-`material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
+`material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
 The package freezes the exact Git change set, gathers repository context, captures review candidates, independently validates them, and produces a complete kept/discarded ledger. It then stops at two mandatory user gates:
 
@@ -19,6 +19,21 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 | Other Agent Skills hosts | Portable skill | `skills/material-code-review/` |
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
+
+## Invocation and activation boundary
+
+Explicit invocation with `$material-code-review` is always available and remains the most deterministic option. It supports the existing uncommitted, branch, local ref-range, and locally aligned PR scopes. If the skill is explicitly invoked for an unsupported non-Git object, it reports the mismatch and stops instead of silently becoming a document-review, output-diagnosis, architecture, or planning workflow.
+
+Narrowly qualified implicit invocation is also supported. The prompt itself must identify concrete Git changes and ask for assessment of material defects, regressions or risks introduced or exposed by those changes, test gaps protecting changed behavior, or merge readiness. For example:
+
+- Eligible: “Review the uncommitted changes for material regressions before merge.”
+- Eligible: “Review this branch diff against `main` for merge blockers and missing tests.”
+- Not eligible: “Review this plugin and prepare an improvement plan.”
+- Not eligible: “Compare these two documents and diagnose why the producing skill generated the wrong artifact.”
+
+A repository path, Git working directory, `scope:auto`, or generic words such as “review,” “issues,” “findings,” or “plan” are insufficient. `scope:auto` resolves the change scope only after activation eligibility has been established from the prompt.
+
+The narrowed descriptions and the workflow preflight reduce false activation; they do not guarantee host or model routing. Implicit selection remains model-mediated, while explicit invocation remains deterministic.
 
 ## Package contents
 
@@ -216,7 +231,7 @@ Core tests alone:
 python3 -m unittest discover -s skills/material-code-review/tests -p 'test_*.py' -v
 ```
 
-The package includes **19 lifecycle, boundary, restoration, and artifact-integrity tests**. Packaging validation also checks the Codex and Claude manifests, skill frontmatter, referenced support files, JSON schemas, generated-file hygiene, Python compilation, the Bash wrapper, and both extracted ZIP layouts. A live local install was also validated with **Codex CLI 0.144.5** in an isolated `CODEX_HOME`: marketplace registration, plugin installation, enablement, cache population, and skill-resource discovery all succeeded. The ChatGPT desktop UI was not available in this environment, so desktop-side invocation was not exercised.
+The package includes **19 lifecycle, boundary, restoration, and artifact-integrity tests**. Packaging validation also checks the Codex and Claude manifests, skill frontmatter, activation contract, referenced support files, JSON schemas, generated-file hygiene, Python compilation, the Bash wrapper, and both extracted ZIP layouts. These static checks prove that the intended activation contract is packaged and cannot silently drift; they do not prove model-selection behavior. This repository has no behavioral skill-selection evaluation harness, so implicit selection remains model-mediated. A live local install was also validated with **Codex CLI 0.144.5** in an isolated `CODEX_HOME`: marketplace registration, plugin installation, enablement, cache population, and skill-resource discovery all succeeded. The ChatGPT desktop UI was not available in this environment, so desktop-side invocation was not exercised.
 
 ## Distribution files
 

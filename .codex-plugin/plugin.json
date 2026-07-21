@@ -1,7 +1,7 @@
 {
   "name": "material-code-review",
   "version": "1.1.0",
-  "description": "Evidence-gated code review and bounded repair with frozen scope, independent validation, two mandatory user approvals, exact write boundaries, and finite post-fix verification.",
+  "description": "Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.",
   "author": {
     "name": "Cove"
   },
@@ -16,8 +16,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Material Code Review",
-    "shortDescription": "Evidence-gated review with two approval gates",
-    "longDescription": "Freeze the exact change scope, capture and independently validate review candidates, show kept and discarded decisions, require explicit approval of findings and the exact repair plan, then perform checkpointed fixes inside strict path and retry limits.",
+    "shortDescription": "Material-defect review of Git changes",
+    "longDescription": "Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.",
     "developerName": "Cove",
     "category": "Productivity",
     "capabilities": [
