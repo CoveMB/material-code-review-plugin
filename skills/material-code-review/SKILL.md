@@ -243,7 +243,15 @@ Validators may reject or mark uncertainty. They may not invent new findings. For
 
 Do not batch unrelated findings into one validator context. Fresh per-finding context is the point. Bound validator concurrency and total attempts; never drop P0/high-impact candidates solely because validator infrastructure failed. Instead mark validation degraded and route the uncertainty visibly to Gate A.
 
-#### 2.2 Adjudication
+#### 2.2 Repair-direction audit
+
+Use `references/remediation-auditor-template.md`, `references/remediation-rubric.md`, and `references/test-evidence-rubric.md`. The audit determines whether the candidate suggestions support one safe provisional repair direction. It does not revalidate the finding, discover a new finding, or produce the exact Gate-B plan.
+
+Require a fresh repair-direction audit whenever a kept candidate group is blocker or high severity; concerns security, privacy, public APIs, configuration, schemas, serialization, migration, concurrency, or authorization; has medium, high, or unknown fix risk; requires a user decision; crosses canonical contract owners; or contains materially different candidate repair suggestions. A mechanically entailed low-risk local correction may use a controller-direct audit, but label the weaker independence accurately.
+
+The audit must compare the literal candidate suggestion with the smallest safe root-cause correction, preserve material states and exceptions, reject guessed authority, keep orthogonal policy dimensions separate, and name causal verification evidence. A real finding remains valid when its direction is `needs_refinement`, `needs_user_decision`, `unsafe_to_apply`, or `insufficient_evidence`.
+
+#### 2.3 Adjudication
 
 Use `references/adjudicator-template.md` and `schemas/adjudication.schema.json`. In Codex, use a fresh read-only `default` subagent or installed project-scoped adjudicator when available. The adjudicator must not have generated or validated the same candidates and may not invent a finding. When no fresh role exists, the controller adjudicates and records the weaker independence accurately.
 
@@ -255,7 +263,9 @@ The adjudicator must:
 4. attach the independent validation result;
 5. apply the nature-specific materiality tests;
 6. choose `keep` or `discard` with a reason code;
-7. produce no new finding that lacks a candidate ID.
+7. attach one canonical provisional `repair_direction` to every kept group and null to every discarded group;
+8. keep finding confidence separate from repair-direction status and confidence;
+9. produce no new finding that lacks a candidate ID.
 
 A serious evidenced defect may be kept even when the eventual fix is large or risky; that risk belongs in planning and Gate B. Optional simplification, DRY, or architecture candidates require demonstrated current cost and a change that is safer than leaving the cost in place.
 
@@ -269,7 +279,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" compile-ledger \
 
 The tool writes a stable finding ledger in JSON and Markdown, with `F###` IDs for kept findings and explicit discarded groups/reasons.
 
-#### 2.3 Merge-readiness decision
+#### 2.4 Merge-readiness decision
 
 Use this mapping:
 
@@ -289,7 +299,7 @@ Present:
 - frozen scope summary and hash;
 - review coverage and degraded areas;
 - merge-readiness decision;
-- every kept `F###` finding with evidence, impact, confidence, validation result, risk, and recommendation;
+- every kept `F###` finding with evidence, impact, finding confidence, validation result, risk, and the provisional repair direction's status, confidence, constraints, alternatives, causal evidence, open decisions, and known limits;
 - every discarded candidate group with its reason;
 - a precise decision request: approve, reject, or defer each kept ID.
 
@@ -324,6 +334,8 @@ Use `references/planner-template.md` and `schemas/fix-plan.schema.json`. In Code
 The plan must include every Gate-A-approved ID exactly once and no rejected/deferred ID. Each item must define:
 
 - root cause and observable goal;
+- the provisional repair direction, constraints, states and exceptions, and any material reason the exact plan differs from it;
+- alternatives considered and why the selected repair is the smallest safe root-cause correction;
 - ordered, concrete repair steps;
 - exact allowed file or final-symlink paths, including any new file anticipated; directory-wide permissions are invalid;
 - dependencies on other approved findings;

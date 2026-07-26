@@ -50,6 +50,12 @@ class RepairDirectionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(reviewctl.ReviewError, "must name the user decision"):
             reviewctl.validate_repair_direction(value, "group.repair_direction", required=True)
 
+    def test_skill_requires_a_conditional_repair_direction_audit(self) -> None:
+        skill_text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("#### 2.2 Repair-direction audit", skill_text)
+        self.assertIn("Require a fresh repair-direction audit whenever", skill_text)
+        self.assertIn("smallest safe root-cause correction", skill_text)
+
     def test_valid_direction_is_normalized_without_candidate_suggestion(self) -> None:
         expected = valid_direction()
         actual = reviewctl.validate_repair_direction(expected, "group.repair_direction", required=True)
