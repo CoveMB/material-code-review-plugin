@@ -21,6 +21,7 @@ If any required input is absent or stale, return no findings and state the limit
 5. Name observable consequence and triggering conditions.
 6. Suppress style, lint, speculative, handled-elsewhere, and generic improvement advice.
 7. Record all assumptions and coverage limitations.
+8. Treat `proposed_resolution` as a provisional direction, not an approved fix. State the smallest root-cause correction you can support, constraints and exceptions it must preserve, authority still needed, alternatives rejected, and causal test evidence. If that cannot fit safely, say that the direction requires refinement rather than guessing.
 
 Do not read another reviewer's candidate output. Do not edit, stage, commit, switch branches, push, post, or file tickets.
 
