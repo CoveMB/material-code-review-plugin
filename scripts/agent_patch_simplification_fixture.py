@@ -30,3 +30,21 @@ replacement = '''                    "recommended_action": "fix_now",
 if text.count(anchor) != 1:
     raise RuntimeError(f"expected one simplification kept-group anchor, found {text.count(anchor)}")
 path.write_text(text.replace(anchor, replacement, 1), encoding="utf-8")
+
+makefile = root / "Makefile"
+make_text = makefile.read_text(encoding="utf-8")
+compile_line = "\t$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py\n"
+if make_text.count(compile_line) != 2:
+    raise RuntimeError(f"expected compile command in validate and compile targets, found {make_text.count(compile_line)}")
+validate_prefix = "validate:\n\t$(MAKE) clean\n\t$(PYTHON) scripts/validate_package.py --package-root .\n\t$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py\n" + compile_line
+if make_text.count(validate_prefix) != 1:
+    raise RuntimeError("validate target compile anchor is not unique")
+make_text = make_text.replace(validate_prefix, validate_prefix + "\t$(MAKE) clean\n", 1)
+for old, new in (
+    ("\t$(PYTHON) -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v\n", "\t$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v\n"),
+    ("\t$(PYTHON) -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v\n", "\t$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v\n"),
+):
+    if make_text.count(old) != 2:
+        raise RuntimeError(f"expected command in validate and test targets, found {make_text.count(old)}")
+    make_text = make_text.replace(old, new)
+makefile.write_text(make_text, encoding="utf-8")
