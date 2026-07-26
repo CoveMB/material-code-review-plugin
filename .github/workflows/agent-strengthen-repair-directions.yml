@@ -26,6 +26,7 @@ jobs:
         shell: bash
         run: |
           chmod +x skills/material-code-simplification/scripts/simplifyctl.py
+          python3 scripts/agent_patch_simplification_fixture.py
           set +e
           python3 scripts/agent_strengthen_repair_directions.py 2>&1 | tee /tmp/repair-patch.log
           status=${PIPESTATUS[0]}
@@ -45,6 +46,7 @@ jobs:
         if: steps.patch.outputs.status == '0'
         shell: bash
         run: |
+          rm -f scripts/agent_patch_simplification_fixture.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
