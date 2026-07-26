@@ -1,0 +1,40 @@
+name: Add and verify repair audit phase
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    if: github.head_ref == 'agent/strengthen-repair-directions'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Add the operational repair audit phase
+        run: python3 scripts/agent_add_repair_audit_phase.py
+      - name: Verify the intended final tree
+        shell: bash
+        run: |
+          rm -f scripts/agent_add_repair_audit_phase.py .github/workflows/add-repair-audit-phase.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+          make validate
+      - name: Commit verified audit phase
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "No audit-phase changes produced"; exit 1; }
+          git commit -m "Add conditional repair direction audit"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
