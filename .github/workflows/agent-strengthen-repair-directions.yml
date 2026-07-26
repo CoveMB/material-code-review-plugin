@@ -25,7 +25,9 @@ jobs:
         id: patch
         shell: bash
         run: |
-          chmod +x skills/material-code-simplification/scripts/simplifyctl.py
+          chmod +x \
+            skills/material-code-simplification/scripts/simplifyctl.py \
+            skills/material-code-simplification/scripts/validate_package.py
           python3 scripts/agent_patch_simplification_fixture.py
           set +e
           python3 scripts/agent_strengthen_repair_directions.py 2>&1 | tee /tmp/repair-patch.log
