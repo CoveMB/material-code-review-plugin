@@ -555,7 +555,7 @@ class SimplifyCtlTest(unittest.TestCase):
         )
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = {
-            "schema_version": "material-review/adjudication/v1",
+            "schema_version": "material-review/adjudication/v2",
             "scope_hash": scope_hash,
             "candidate_bundle_hash": candidate_hash,
             "adjudicator_id": "fixture-adjudicator",
@@ -600,6 +600,19 @@ class SimplifyCtlTest(unittest.TestCase):
                     "discard_reason_code": None,
                     "recommended_action": "fix_now",
                     "required_pre_fix_verification": None,
+                    "repair_direction": {
+                        "status": "reviewed",
+                        "confidence": "high",
+                        "root_cause": "The fixture service still owns the obsolete return value.",
+                        "objective": "Return the replacement fixture value while preserving the public value() contract.",
+                        "smallest_safe_change": "Replace only the obsolete return literal.",
+                        "constraints_to_preserve": ["Keep value() callable without arguments."],
+                        "state_or_exception_cases": ["The fixture has one deterministic return path."],
+                        "alternatives_checked": ["Changing the expected fixture value would redefine the established test contract."],
+                        "required_test_evidence": ["A regression check fails while the old literal remains and passes after value() returns 2."],
+                        "open_user_decisions": [],
+                        "known_limits": []
+                    },
                 }
             ],
             "verdict": "SHOULD FIX BEFORE MERGE",

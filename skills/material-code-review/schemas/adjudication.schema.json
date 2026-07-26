@@ -16,7 +16,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "material-review/adjudication/v1"
+      "const": "material-review/adjudication/v2"
     },
     "scope_hash": {
       "type": "string",
@@ -56,7 +56,8 @@
           "decision_reason",
           "discard_reason_code",
           "recommended_action",
-          "required_pre_fix_verification"
+          "required_pre_fix_verification",
+          "repair_direction"
         ],
         "properties": {
           "group_id": {
@@ -325,6 +326,132 @@
               "string",
               "null"
             ]
+          },
+          "repair_direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "confidence",
+                  "root_cause",
+                  "objective",
+                  "smallest_safe_change",
+                  "constraints_to_preserve",
+                  "state_or_exception_cases",
+                  "alternatives_checked",
+                  "required_test_evidence",
+                  "open_user_decisions",
+                  "known_limits"
+                ],
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "reviewed",
+                      "needs_refinement",
+                      "needs_user_decision",
+                      "unsafe_to_apply",
+                      "insufficient_evidence"
+                    ]
+                  },
+                  "confidence": {
+                    "enum": [
+                      "certain",
+                      "high",
+                      "medium",
+                      "low"
+                    ]
+                  },
+                  "root_cause": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "objective": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "smallest_safe_change": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "constraints_to_preserve": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true,
+                    "minItems": 1
+                  },
+                  "state_or_exception_cases": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "alternatives_checked": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "required_test_evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true,
+                    "minItems": 1
+                  },
+                  "open_user_decisions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "known_limits": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "status": {
+                          "const": "needs_user_decision"
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "open_user_decisions": {
+                          "minItems": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
           }
         },
         "allOf": [
@@ -340,6 +467,9 @@
               "properties": {
                 "discard_reason_code": {
                   "type": "null"
+                },
+                "repair_direction": {
+                  "type": "object"
                 }
               }
             }
@@ -374,6 +504,9 @@
                     "SETTLED_PREFERENCE",
                     "OUTSIDE_REVIEWER_CONTRACT"
                   ]
+                },
+                "repair_direction": {
+                  "type": "null"
                 }
               }
             }

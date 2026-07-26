@@ -51,3 +51,8 @@ Unchanged code is primary only when the current change directly calls it, change
 - `high`: likely defect or significant contract/maintenance failure under normal use.
 - `medium`: meaningful bounded downside or fragile behavior with a clear fix.
 - `low`: narrow consequence; keep only when it still clears every materiality gate.
+
+
+## Repair-direction quality
+
+Finding validity and repair sufficiency are separate. Use [remediation-rubric.md](remediation-rubric.md) for every kept finding and [test-evidence-rubric.md](test-evidence-rubric.md) for coverage recommendations and planned regression evidence. A real defect is not discarded merely because its candidate response needs refinement.

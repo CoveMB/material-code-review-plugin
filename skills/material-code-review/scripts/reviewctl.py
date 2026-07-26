@@ -33,8 +33,8 @@ STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
-ADJUDICATION_SCHEMA = "material-review/adjudication/v1"
-LEDGER_SCHEMA = "material-review/ledger/v1"
+ADJUDICATION_SCHEMA = "material-review/adjudication/v2"
+LEDGER_SCHEMA = "material-review/ledger/v2"
 FINDINGS_GATE_SCHEMA = "material-review/findings-gate/v1"
 FIX_PLAN_SCHEMA = "material-review/fix-plan/v1"
 PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
@@ -91,6 +91,7 @@ VALIDATION_VERDICTS = {"confirmed", "rejected", "uncertain"}
 CAUSALITIES = {"introduced", "exposed", "pre_existing", "uncertain"}
 DISPOSITIONS = {"keep", "discard"}
 RECOMMENDATIONS = {"fix_now", "defer", "monitor", "none"}
+REPAIR_DIRECTION_STATUSES = {"reviewed", "needs_refinement", "needs_user_decision", "unsafe_to_apply", "insufficient_evidence"}
 MERGE_VERDICTS = {
     "READY",
     "READY WITH OPTIONAL FOLLOW-UPS",
@@ -1609,6 +1610,23 @@ def validate_materiality_object(value: Any, context: str) -> dict[str, Any]:
     return result
 
 
+
+def validate_repair_direction(value: Any, context: str, *, required: bool) -> dict[str, Any] | None:
+    if value is None:
+        if required: raise ReviewError(f"{context} is required for a kept finding")
+        return None
+    if not required: raise ReviewError(f"{context} must be null for a discarded finding")
+    obj = require_object(value, context)
+    keys = {"status", "confidence", "root_cause", "objective", "smallest_safe_change", "constraints_to_preserve", "state_or_exception_cases", "alternatives_checked", "required_test_evidence", "open_user_decisions", "known_limits"}
+    require_exact_keys(obj, keys, context)
+    status=require_string(obj["status"],f"{context}.status"); confidence=require_string(obj["confidence"],f"{context}.confidence")
+    if status not in REPAIR_DIRECTION_STATUSES: raise ReviewError(f"{context}.status is invalid")
+    if confidence not in CONFIDENCES: raise ReviewError(f"{context}.confidence is invalid")
+    constraints=require_string_array(obj["constraints_to_preserve"],f"{context}.constraints_to_preserve"); evidence=require_string_array(obj["required_test_evidence"],f"{context}.required_test_evidence"); decisions=require_string_array(obj["open_user_decisions"],f"{context}.open_user_decisions")
+    if not constraints or not evidence: raise ReviewError(f"{context} needs constraints and causal test evidence")
+    if status=="needs_user_decision" and not decisions: raise ReviewError(f"{context} must name the user decision")
+    return {"status":status,"confidence":confidence,"root_cause":require_string(obj["root_cause"],f"{context}.root_cause"),"objective":require_string(obj["objective"],f"{context}.objective"),"smallest_safe_change":require_string(obj["smallest_safe_change"],f"{context}.smallest_safe_change"),"constraints_to_preserve":constraints,"state_or_exception_cases":require_string_array(obj["state_or_exception_cases"],f"{context}.state_or_exception_cases"),"alternatives_checked":require_string_array(obj["alternatives_checked"],f"{context}.alternatives_checked"),"required_test_evidence":evidence,"open_user_decisions":decisions,"known_limits":require_string_array(obj["known_limits"],f"{context}.known_limits")}
+
 def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     obj = require_object(raw, "adjudication")
     top_keys = {
@@ -1658,6 +1676,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "discard_reason_code",
         "recommended_action",
         "required_pre_fix_verification",
+        "repair_direction",
     }
 
     for index, raw_group in enumerate(groups_raw):
@@ -1737,6 +1756,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         required_pre_fix = group["required_pre_fix_verification"]
         if required_pre_fix is not None:
             required_pre_fix = require_string(required_pre_fix, f"{context}.required_pre_fix_verification")
+        repair_direction = validate_repair_direction(group["repair_direction"], f"{context}.repair_direction", required=disposition == "keep")
 
         if disposition == "keep":
             if discard_reason is not None:
@@ -1795,6 +1815,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             "discard_reason_code": discard_reason,
             "recommended_action": recommendation,
             "required_pre_fix_verification": required_pre_fix,
+            "repair_direction": repair_direction,
         }
         groups.append(normalized_group)
 
@@ -2071,6 +2092,8 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
         "",
         "## Kept material findings",
         "",
+        "Gate A approves findings for repair planning only. It does not approve the provisional repair direction or authorize edits.",
+        "",
     ]
     if not ledger["findings"]:
         lines.append("No material findings survived adjudication.")
@@ -2088,12 +2111,17 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
                 f"- Validation: `{finding['validation']['mode']}` / `{finding['validation']['verdict']}` — "
                 f"{finding['validation']['reason']}",
                 f"- Why material: {finding['decision_reason']}",
-                f"- Suggested response: {finding['proposed_resolution']}",
                 f"- Fix risk: `{finding['estimated_fix_risk']}`",
                 f"- Recommendation: `{finding['recommended_action']}`",
                 f"- Candidate sources: {', '.join(finding['candidate_ids'])}",
             ]
         )
+        direction = finding["repair_direction"]
+        lines.extend(["- Provisional repair direction:", f"  - Status / confidence: `{direction['status']}` / `{direction['confidence']}`", f"  - Root cause: {direction['root_cause']}", f"  - Objective: {direction['objective']}", f"  - Smallest safe change: {direction['smallest_safe_change']}"])
+        for label, key in (("Constraints to preserve", "constraints_to_preserve"), ("States and exceptions", "state_or_exception_cases"), ("Alternatives checked", "alternatives_checked"), ("Required test evidence", "required_test_evidence"), ("Open user decisions", "open_user_decisions"), ("Known limits", "known_limits")):
+            if direction[key]:
+                lines.append(f"  - {label}:")
+                lines.extend(f"    - {value}" for value in direction[key])
         if finding["required_pre_fix_verification"]:
             lines.append(f"- Required pre-fix verification: {finding['required_pre_fix_verification']}")
         lines.append("")
@@ -2393,7 +2421,7 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
                 "evidence_quote": group["evidence_quote"],
                 "observable_consequence": representative["observable_consequence"],
                 "trigger_conditions": representative["trigger_conditions"],
-                "proposed_resolution": representative["proposed_resolution"],
+                "repair_direction": group["repair_direction"],
                 "estimated_fix_risk": representative["estimated_fix_risk"],
                 "requires_user_decision": representative["requires_user_decision"],
                 "assumptions": representative["assumptions"],

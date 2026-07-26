@@ -192,6 +192,19 @@ class ReviewCtlTest(unittest.TestCase):
                 "discard_reason_code": None,
                 "recommended_action": "fix_now",
                 "required_pre_fix_verification": None,
+                "repair_direction": {
+                    "status": "reviewed",
+                    "confidence": "high",
+                    "root_cause": "The implementation violates the established addition contract.",
+                    "objective": "Restore addition while preserving the public function signature.",
+                    "smallest_safe_change": "Restore the addition operator and retain the existing API.",
+                    "constraints_to_preserve": ["Keep the public add(a, b) signature unchanged."],
+                    "state_or_exception_cases": ["Negative operands retain addition semantics."],
+                    "alternatives_checked": ["Changing the test would redefine established behavior."],
+                    "required_test_evidence": ["A regression test fails for subtraction and passes for addition."],
+                    "open_user_decisions": [],
+                    "known_limits": []
+                },
             }
         ]
         if include_style:
@@ -236,10 +249,11 @@ class ReviewCtlTest(unittest.TestCase):
                     "discard_reason_code": "STYLE_OR_LINTER",
                     "recommended_action": "none",
                     "required_pre_fix_verification": None,
+                    "repair_direction": None,
                 }
             )
         return {
-            "schema_version": "material-review/adjudication/v1",
+            "schema_version": "material-review/adjudication/v2",
             "scope_hash": scope_hash,
             "candidate_bundle_hash": candidate_hash,
             "adjudicator_id": "controller",
@@ -462,6 +476,24 @@ class ReviewCtlTest(unittest.TestCase):
             "Approve F001.",
         )
         self.assertEqual(self.load("state.json")["phase"], "FINDINGS_APPROVED")
+
+    def test_ledger_uses_adjudicated_repair_direction(self) -> None:
+        scope_hash = self.init()
+        candidates = self.candidate_set(scope_hash, include_style=False)
+        candidates["findings"][0]["proposed_resolution"] = "Unsafe candidate suggestion."
+        candidate_path = self.write_json("candidate-repair.json", candidates)
+        self.run_tool("ingest-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(candidate_path))
+        candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
+        adjudication = self.adjudication(scope_hash, candidate_hash, include_style=False)
+        adjudication["groups"][0]["repair_direction"]["smallest_safe_change"] = "Restore only the operator."
+        adjudication_path = self.write_json("adjudication-repair.json", adjudication)
+        self.run_tool("compile-ledger", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(adjudication_path))
+        ledger = self.load("ledger.json")
+        self.assertEqual(ledger["findings"][0]["repair_direction"]["smallest_safe_change"], "Restore only the operator.")
+        rendered = (self.run_dir / "ledger.md").read_text(encoding="utf-8")
+        self.assertIn("Gate A approves findings for repair planning only", rendered)
+        self.assertNotIn("Unsafe candidate suggestion", rendered)
+        self.assertNotIn("Suggested response", rendered)
 
     def test_plan_rejects_unapproved_or_missing_ids(self) -> None:
         scope_hash = self.reach_adjudicated()
@@ -819,7 +851,7 @@ class ReviewCtlTest(unittest.TestCase):
         )
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = {
-            "schema_version": "material-review/adjudication/v1",
+            "schema_version": "material-review/adjudication/v2",
             "scope_hash": scope_hash,
             "candidate_bundle_hash": candidate_hash,
             "adjudicator_id": "controller",

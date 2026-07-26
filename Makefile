@@ -14,10 +14,11 @@ validate:
 	$(PYTHON) scripts/validate_package.py --package-root .
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
 	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
+	$(MAKE) clean
 	$(PYTHON) -c 'import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json")]; print("JSON OK")'
 	bash -n bin/material-reviewctl
-	$(PYTHON) -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
-	$(PYTHON) -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
+	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
+	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
 	$(MAKE) clean
 	$(PYTHON) scripts/validate_package.py --package-root .
@@ -47,8 +48,8 @@ shell:
 	bash -n bin/material-reviewctl
 
 test:
-	$(PYTHON) -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
-	$(PYTHON) -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
+	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
+	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
 
 clean:

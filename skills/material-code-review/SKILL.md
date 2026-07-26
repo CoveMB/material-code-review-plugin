@@ -280,9 +280,9 @@ Use this mapping:
 
 Do not let pre-existing record-only observations affect the verdict.
 
-### Gate A — User validates findings
+### Gate A — User approves findings for repair planning
 
-This is a hard pause. Do not draft a fix plan before the user responds.
+This is a hard pause. Gate A approves whether each finding should proceed to planning. It does not approve the provisional repair direction, exact edits, paths, commands, or any mutation. Do not draft a fix plan before the user responds.
 
 Present:
 
@@ -551,6 +551,9 @@ Load references only at the stage that needs them:
 
 - `references/context-checklist.md` — Phase 0
 - `references/materiality-rubric.md` — Phases 1–2
+- `references/remediation-rubric.md` — repair-direction audit, adjudication, and planning
+- `references/test-evidence-rubric.md` — coverage findings and repair-test design
+- `references/remediation-auditor-template.md` — Phase 2 repair-direction audit
 - `references/reviewer-template.md` — Phase 1
 - `references/validator-template.md` — Phase 2 validation
 - `references/adjudicator-template.md` — Phase 2 adjudication
