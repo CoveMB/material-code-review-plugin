@@ -51,8 +51,17 @@ REQUIRED = {
     "bin/material-reviewctl",
     "bin/material-reviewctl.cmd",
     "bin/material-reviewctl.ps1",
+    "bin/material-review-evaluate",
+    "scripts/evaluate_material_review.py",
+    "scripts/material_review_evaluation/cli.py",
+    "scripts/material_review_evaluation/reporting.py",
     "scripts/package_plugin.py",
     "scripts/validate_package.py",
+    "evaluations/material-code-review/benchmarks/discogs-album-recovery/manifest.json",
+    "evaluations/material-code-review/benchmarks/discogs-album-recovery/judge-oracle.json",
+    "evaluations/material-code-review/schemas/agreement.schema.json",
+    "evaluations/material-code-review/schemas/evaluation-run.schema.json",
+    "evaluations/material-code-review/schemas/judgment.schema.json",
     "skills/material-code-review/SKILL.md",
     "skills/material-code-review/agents/openai.yaml",
     "skills/material-code-review/scripts/reviewctl.py",
@@ -73,6 +82,26 @@ REQUIRED = {
 
 FORBIDDEN_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
+MAINTAINER_ONLY_ARCHIVE_PREFIXES = (
+    ".evaluation-runs/",
+    ".superpowers/",
+    "docs/superpowers/",
+    "evaluations/",
+    "scripts/material_review_evaluation/",
+)
+MAINTAINER_ONLY_ARCHIVE_EXACT = frozenset(
+    {
+        "bin/material-review-evaluate",
+        "scripts/evaluate_material_review.py",
+        "scripts/tests/test_evaluate_material_review.py",
+    }
+)
+
+
+def is_maintainer_only_archive_entry(name: str) -> bool:
+    return name in MAINTAINER_ONLY_ARCHIVE_EXACT or name.startswith(
+        MAINTAINER_ONLY_ARCHIVE_PREFIXES
+    )
 
 
 def fail(errors: list[str], message: str) -> None:
@@ -339,9 +368,14 @@ def check_source_package(root: Path) -> list[str]:
         if path.suffix.lower() == ".json" and path.is_file():
             load_json(path, errors)
 
-    wrapper = root / "bin/material-reviewctl"
-    if wrapper.exists() and os.name != "nt" and not (wrapper.stat().st_mode & stat.S_IXUSR):
-        fail(errors, "bin/material-reviewctl is not executable")
+    for relative_wrapper in ("bin/material-reviewctl", "bin/material-review-evaluate"):
+        wrapper = root / relative_wrapper
+        if (
+            wrapper.exists()
+            and os.name != "nt"
+            and not (wrapper.stat().st_mode & stat.S_IXUSR)
+        ):
+            fail(errors, f"{relative_wrapper} is not executable")
 
     controller = root / "skills/material-code-review/scripts/reviewctl.py"
     if controller.is_file():
@@ -389,6 +423,11 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     fail(errors, f"{path.name}: unsafe archive path {name}")
                 if any(part in FORBIDDEN_PARTS for part in rel.parts) or rel.suffix in FORBIDDEN_SUFFIXES:
                     fail(errors, f"{path.name}: forbidden archive entry {name}")
+                if is_maintainer_only_archive_entry(name):
+                    fail(
+                        errors,
+                        f"{path.name}: forbidden maintainer-only archive entry {name}",
+                    )
             required = (
                 {"SKILL.md", "agents/openai.yaml", "scripts/reviewctl.py", "schemas/candidate-set.schema.json"}
                 if standalone

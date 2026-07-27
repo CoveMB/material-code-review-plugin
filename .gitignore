@@ -41,3 +41,7 @@ env/
 /material-code-review-plugin-*.zip.sha256
 /material-code-review-codex-skill-*.zip
 /material-code-review-codex-skill-*.zip.sha256
+
+# Repository-maintainer evaluation state and local SDD scratch data
+.evaluation-runs/
+.superpowers/

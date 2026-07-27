@@ -26,6 +26,27 @@ EXCLUDED_PARTS = {
     "dist",
 }
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
+MAINTAINER_ONLY_PREFIXES = (
+    ".evaluation-runs/",
+    ".superpowers/",
+    "docs/superpowers/",
+    "evaluations/",
+    "scripts/material_review_evaluation/",
+)
+MAINTAINER_ONLY_EXACT = frozenset(
+    {
+        "bin/material-review-evaluate",
+        "scripts/evaluate_material_review.py",
+        "scripts/tests/test_evaluate_material_review.py",
+    }
+)
+
+
+def is_maintainer_only_path(relative: Path) -> bool:
+    archive_name = relative.as_posix()
+    return archive_name in MAINTAINER_ONLY_EXACT or archive_name.startswith(
+        MAINTAINER_ONLY_PREFIXES
+    )
 
 
 def should_include(path: Path, root: Path, explicit_outputs: set[Path]) -> bool:
@@ -33,6 +54,8 @@ def should_include(path: Path, root: Path, explicit_outputs: set[Path]) -> bool:
     if resolved in explicit_outputs:
         return False
     relative = path.relative_to(root)
+    if is_maintainer_only_path(relative):
+        return False
     if any(part in EXCLUDED_PARTS for part in relative.parts):
         return False
     if path.suffix.lower() in EXCLUDED_SUFFIXES:

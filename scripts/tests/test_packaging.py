@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = REPOSITORY_ROOT / "scripts" / "package_simplification_skill.py"
+FULL_PACKAGER = REPOSITORY_ROOT / "scripts" / "package_plugin.py"
 PACKAGE_VALIDATOR = REPOSITORY_ROOT / "scripts" / "validate_package.py"
 REVIEW_VALIDATOR = REPOSITORY_ROOT / "skills" / "material-code-review" / "scripts" / "validate_package.py"
 SIMPLIFICATION_VALIDATOR = (
@@ -65,6 +66,30 @@ class StandalonePackagingTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+        )
+
+    def run_full_packager(
+        self,
+        fixture_root: Path,
+        output: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        packager = fixture_root / FULL_PACKAGER.relative_to(REPOSITORY_ROOT)
+        return subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(packager),
+                "--package-root",
+                str(fixture_root),
+                "--output",
+                str(output),
+                "--standalone-output",
+                "",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
         )
 
     def run_package_validator(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
@@ -242,6 +267,121 @@ class StandalonePackagingTests(unittest.TestCase):
 
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
+
+    def test_source_validator_requires_executable_evaluator_wrapper(self) -> None:
+        for mutation in ("missing", "not executable"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                wrapper = fixture_root / "bin/material-review-evaluate"
+                if mutation == "missing":
+                    wrapper.unlink(missing_ok=True)
+                else:
+                    wrapper.parent.mkdir(parents=True, exist_ok=True)
+                    wrapper.write_text(
+                        "#!/usr/bin/env bash\nexit 0\n",
+                        encoding="utf-8",
+                    )
+                    wrapper.chmod(0o644)
+
+                validation_result = self.run_package_validator(fixture_root)
+
+                self.assertNotEqual(validation_result.returncode, 0)
+                self.assertIn("bin/material-review-evaluate", validation_result.stderr)
+
+    def test_source_validator_still_validates_committed_evaluation_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            manifest = (
+                fixture_root
+                / "evaluations/material-code-review/benchmarks/discogs-album-recovery/manifest.json"
+            )
+            manifest.write_text("{ invalid evaluation JSON\n", encoding="utf-8")
+
+            validation_result = self.run_package_validator(fixture_root)
+
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "evaluations/material-code-review/benchmarks/"
+                "discogs-album-recovery/manifest.json",
+                validation_result.stderr,
+            )
+
+    def test_archive_validator_rejects_maintainer_only_evaluator_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            output = temp_root / "full-plugin.zip"
+            package_result = self.run_full_packager(fixture_root, output)
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            with zipfile.ZipFile(output, "a") as archive:
+                archive.writestr("evaluations/private-scratch.json", "{}\n")
+
+            validation_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(PACKAGE_VALIDATOR),
+                    "--package-root",
+                    str(fixture_root),
+                    "--full-archive",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "forbidden maintainer-only archive entry evaluations/private-scratch.json",
+                validation_result.stderr,
+            )
+
+    def test_make_evaluator_requires_explicit_configuration_and_is_not_in_validation(
+        self,
+    ) -> None:
+        for missing_variable in ("MODEL", "REASONING_EFFORT"):
+            with self.subTest(missing=missing_variable):
+                variables = {
+                    "BASE_REF": "origin/main",
+                    "CANDIDATE_REF": "HEAD",
+                    "BENCHMARK": "discogs-album-recovery",
+                    "MODEL": "gpt-5.6-sol",
+                    "REASONING_EFFORT": "high",
+                }
+                variables.pop(missing_variable)
+                result = subprocess.run(
+                    [
+                        "make",
+                        "evaluate-review",
+                        *(f"{name}={value}" for name, value in variables.items()),
+                    ],
+                    cwd=REPOSITORY_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(
+                    "BASE_REF, CANDIDATE_REF, BENCHMARK, MODEL, and REASONING_EFFORT are required",
+                    result.stderr,
+                )
+
+        dry_run = subprocess.run(
+            ["make", "-n", "validate"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+        self.assertIn("scripts/evaluate_material_review.py", dry_run.stdout)
+        self.assertIn("scripts/material_review_evaluation", dry_run.stdout)
+        self.assertIn("bash -n bin/material-reviewctl bin/material-review-evaluate", dry_run.stdout)
+        self.assertNotIn("scripts/evaluate_material_review.py compare", dry_run.stdout)
 
     def test_review_validators_require_implicit_invocation_true(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:

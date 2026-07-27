@@ -247,6 +247,53 @@ python3 -m unittest discover -s skills/material-code-review/tests -p 'test_*.py'
 
 The package includes lifecycle, boundary, restoration, direction-audit, plan-handoff, simplification, and artifact-integrity tests. Packaging validation also checks the Codex and Claude manifests, skill frontmatter, activation contract, referenced support files, JSON schemas, generated-file hygiene, Python compilation, the Bash wrapper, and all extracted ZIP layouts. These static checks prove that the intended activation contract is packaged and cannot silently drift; they do not prove model-selection behavior. This repository has no behavioral skill-selection evaluation harness, so implicit selection remains model-mediated. A live local install was also validated with **Codex CLI 0.144.5** in an isolated `CODEX_HOME`: marketplace registration, plugin installation, enablement, cache population, and skill-resource discovery all succeeded. The ChatGPT desktop UI was not available in this environment, so desktop-side invocation was not exercised.
 
+## Maintainer-only version evaluation
+
+Repository maintainers can explicitly compare two immutable `material-code-review` commits against the committed Discogs album-recovery benchmark:
+
+```bash
+make evaluate-review \
+  BASE_REF=origin/main \
+  CANDIDATE_REF=HEAD \
+  BENCHMARK=discogs-album-recovery \
+  MODEL=gpt-5.6-sol \
+  REASONING_EFFORT=high
+```
+
+There is deliberately no default model or reasoning effort. A complete comparison normally starts four reviewer trials, two agreement checks, and one comparison judgment; inconsistent results can add one trial and another agreement check per variant. It therefore consumes meaningful model tokens, time, and tool execution. Review the chosen model's current cost and availability before starting.
+
+This evaluator is repository-maintainer tooling. It is excluded from the full plugin and every standalone skill archive, so the command is available only from a source checkout and is not part of an installed plugin. It explicitly tells every trial to use the selected materialized skill. It does not test or make any claim about implicit skill activation.
+
+Raw evidence stays local under the Git-ignored `.evaluation-runs/<run-id>/` directory. That directory retains native controller artifacts, agent logs, trial evidence, agreement results, the locked judgment, and the private identity reveal. Raw artifacts can contain machine-specific paths and are not exported automatically. `comparison-report.md` is the separately sanitized, hash-bound report intended for copying or printing.
+
+The current Codex CLI adapter records `logical_blinding`: prompts and semantic bundles remove identities and prohibit prior-run discovery, but the host is not claimed to provide a hermetic filesystem boundary. A future host that exposes only the trial workflow, target, and output roots may record `filesystem_blinding`. The distinction is part of every run's executor configuration.
+
+Evaluation-only policy automatically approves every retained Gate A finding for planning and approves the exact validated Gate B plan for comparison evidence. It never enters repair, executes a generated plan command, pushes, publishes, calls live Spotify APIs, or uses private Discogs data. The live Discogs smoke test is manual because it is costly and environment-dependent; `make validate` and CI run only deterministic fixtures and never start a live comparison.
+
+An interrupted exact-match comparison resumes its newest incomplete run by default. Pass `--new-run` to create a separate run instead:
+
+```bash
+bin/material-review-evaluate compare \
+  --base-ref origin/main \
+  --candidate-ref HEAD \
+  --benchmark discogs-album-recovery \
+  --model gpt-5.6-sol \
+  --reasoning-effort high \
+  --new-run
+```
+
+Inspect and retain results with the remaining explicit commands:
+
+```bash
+bin/material-review-evaluate status
+bin/material-review-evaluate status --run-id <run-id>
+bin/material-review-evaluate report --run-id <run-id>
+bin/material-review-evaluate report --run-id <run-id> --output /path/to/report.md
+bin/material-review-evaluate clean --run-id <run-id>
+```
+
+`report` refuses incomplete or unlocked runs and emits only the sanitized report. `clean` removes only exact controller-recorded clean workspaces; it preserves `run.json`, the private map, native evidence, judgment, reveal, and sanitized report.
+
 ## Distribution files
 
 Packaging produces:

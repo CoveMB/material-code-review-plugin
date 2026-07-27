@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
+import zipfile
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path, PurePosixPath
 from subprocess import CompletedProcess, TimeoutExpired
 from types import MappingProxyType, SimpleNamespace
+from unittest import mock
 
 from scripts.material_review_evaluation.benchmark import Benchmark, CommandSpec, load_benchmark
 from scripts.material_review_evaluation.artifacts import (
@@ -3892,8 +3896,24 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertIn("repair phase", summary.terminal_reason.lower())
 
     def test_status_and_clean_remove_only_owned_workspaces(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
         controller = self.controller(FakeExecutor())
         summary = controller.compare(self.request())
+        report_path = render_comparison_report(
+            summary.run_root,
+            path_prefixes={
+                summary.run_root: "<run>",
+                self.runs_root: "<runs>",
+                self.skill_repository: "<repository>",
+                self.target_repository: "<target>",
+            },
+        )
+        native_state = next(
+            summary.run_root.glob(
+                "trials/A/1/attempt-*/native-controller-artifacts/runs/*/state.json"
+            )
+        )
 
         status = controller.status(summary.run_id)
         removed = controller.clean(summary.run_id)
@@ -3901,8 +3921,12 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertEqual(status.phase, "COMPLETE")
         self.assertTrue(removed)
         self.assertTrue((summary.run_root / "run.json").is_file())
+        self.assertTrue((summary.run_root / "private/variant-map.json").is_file())
+        self.assertTrue((summary.run_root / "trials/A/1/normalized.json").is_file())
+        self.assertTrue(native_state.is_file())
         self.assertTrue((summary.run_root / "judge/judgment.json").is_file())
         self.assertTrue((summary.run_root / "judge/reveal.json").is_file())
+        self.assertTrue(report_path.is_file())
         self.assertTrue(all(not path.exists() for path in removed))
 
     def _create_skill_repository(self) -> Path:
@@ -4091,6 +4115,463 @@ class EvaluationControllerTests(unittest.TestCase):
     @staticmethod
     def read_json(path: Path) -> dict[str, object]:
         return json.loads(path.read_text(encoding="utf-8"))
+
+
+class EvaluationCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.runs_root = self.root / "evaluation-runs"
+        self.repository_root = self.root / "repository"
+        self.repository_root.mkdir()
+        self.run_root = self._write_complete_run("evaluation-newest")
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def _judgment(self) -> dict[str, object]:
+        dimensions = {
+            name: {
+                "decision": "TIE",
+                "rationale": f"{name} is materially equivalent.",
+                "artifact_citations": [
+                    "variants/A/trial-1.json",
+                    "variants/B/trial-1.json",
+                ],
+            }
+            for name in (
+                "finding_validity_and_coverage",
+                "validation_quality",
+                "repair_safety",
+                "scope_and_gate_integrity",
+                "traceability",
+                "machine_validation_and_artifact_completeness",
+                "consistency_across_trials",
+                "report_clarity_and_copyability",
+                "efficiency_and_cost",
+            )
+        }
+        return {
+            "schema": "material-review-evaluation/judgment/v1",
+            "dimensions": dimensions,
+            "overall_decision": "MATERIAL_TIE",
+            "overall_rationale": (
+                f"Evidence under {self.repository_root} is equivalent; "
+                "OPENAI_API_KEY=report-secret and "
+                'PASSWORD="space separated secret" must be redacted.'
+            ),
+            "trial_stability": "Both anonymous variants were materially stable.",
+            "known_failures": [
+                "Found: stale negative cache repetition.",
+                "Missed: malformed manual override authority.",
+            ],
+            "unsupported_findings": ["Variant A included no unsupported finding."],
+            "plan_boundary_comparison": "Both variants stopped before repair.",
+            "workflow_failures": ["No workflow failure was observed."],
+            "cost_observations": ["Variant B used fewer output tokens."],
+            "confidence": "high",
+            "limitations": ["This invented fixture is not a live model comparison."],
+            "locked_at": "2026-07-27T12:00:00Z",
+        }
+
+    def _write_complete_run(self, run_id: str) -> Path:
+        run_root = self.runs_root / run_id
+        (run_root / "judge").mkdir(parents=True)
+        (run_root / "private").mkdir()
+        (run_root / "variant-a").mkdir()
+        (run_root / "variant-b").mkdir()
+        judgment = self._judgment()
+        atomic_write_json(run_root / "judge/judgment.json", judgment)
+        judgment_hash = sha256_file(run_root / "judge/judgment.json")
+        atomic_write_json(
+            run_root / "judge/reveal.json",
+            {
+                "schema": "material-review-evaluation/reveal/v1",
+                "variant_map": {"A": "baseline", "B": "candidate"},
+                "judgment_sha256": judgment_hash,
+                "revealed_at": "2026-07-27T12:00:01Z",
+            },
+        )
+        atomic_write_json(
+            run_root / "private/request.json",
+            {
+                "schema": "material-review-evaluation/private-request/v1",
+                "request_fingerprint": "f" * 64,
+                "repository_root": str(self.repository_root),
+                "base_ref": "origin/main",
+                "candidate_ref": "HEAD",
+                "target_repository": "https://example.invalid/target.git",
+            },
+        )
+        atomic_write_json(
+            run_root / "private/resolved-variants.json",
+            {
+                "schema": "material-review-evaluation/resolved-variants/v1",
+                "baseline": {
+                    "supplied_ref": "origin/main",
+                    "commit_sha": "1" * 40,
+                    "commit_subject_sha256": "a" * 64,
+                },
+                "candidate": {
+                    "supplied_ref": "HEAD",
+                    "commit_sha": "2" * 40,
+                    "commit_subject_sha256": "b" * 64,
+                },
+            },
+        )
+        for variant in ("A", "B"):
+            atomic_write_json(
+                run_root / f"variant-{variant.lower()}/agreement.json",
+                {
+                    "anonymous_variant": variant,
+                    "classification": "materially_similar",
+                    "confidence": "high",
+                },
+            )
+        atomic_write_json(
+            run_root / "run.json",
+            {
+                "schema": "material-review-evaluation/run/v1",
+                "run_id": run_id,
+                "phase": "COMPLETE",
+                "trials": [
+                    {
+                        "anonymous_variant": variant,
+                        "trial_number": trial_number,
+                        "status": "complete",
+                        "artifact_sha256": str(trial_number) * 64,
+                        "session_id": f"{variant}{trial_number}-session",
+                    }
+                    for variant in ("A", "B")
+                    for trial_number in (1, 2)
+                ],
+                "updated_at": "2026-07-27T12:00:02Z",
+                "terminal_reason": None,
+                "judgment_sha256": judgment_hash,
+                "report_sha256": None,
+            },
+        )
+        return run_root
+
+    def _run_cli(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(REPOSITORY_ROOT / "scripts/evaluate_material_review.py"),
+                *arguments,
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def test_compare_requires_explicit_model_and_reasoning_before_side_effects(
+        self,
+    ) -> None:
+        untouched_runs_root = self.root / "missing-argument-runs"
+
+        result = self._run_cli(
+            [
+                "compare",
+                "--base-ref",
+                "main",
+                "--candidate-ref",
+                "HEAD",
+                "--benchmark",
+                "discogs-album-recovery",
+                "--runs-root",
+                str(untouched_runs_root),
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("--model", result.stderr)
+        self.assertIn("--reasoning-effort", result.stderr)
+        self.assertFalse(untouched_runs_root.exists())
+
+    def test_compare_returns_nonzero_for_incomplete_and_aborted_runs(self) -> None:
+        from scripts.material_review_evaluation import cli
+
+        for phase in ("INCOMPLETE", "ABORTED"):
+            with self.subTest(phase=phase):
+                controller = mock.Mock()
+                controller.compare.return_value = SimpleNamespace(
+                    run_id=f"evaluation-{phase.lower()}",
+                    phase=phase,
+                    terminal_reason=f"fake {phase.lower()} reason",
+                )
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(
+                        cli,
+                        "EvaluationController",
+                        return_value=controller,
+                    ),
+                    mock.patch.object(cli, "CodexExecutor", return_value=mock.Mock()),
+                ):
+                    returncode = cli.main(
+                        [
+                            "compare",
+                            "--base-ref",
+                            "HEAD^",
+                            "--candidate-ref",
+                            "HEAD",
+                            "--benchmark",
+                            "discogs-album-recovery",
+                            "--model",
+                            "gpt-5.6-sol",
+                            "--reasoning-effort",
+                            "high",
+                            "--repository-root",
+                            str(REPOSITORY_ROOT),
+                            "--runs-root",
+                            str(self.root / f"{phase.lower()}-runs"),
+                            "--executor",
+                            "codex",
+                            "--new-run",
+                        ],
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+
+                self.assertNotEqual(returncode, 0)
+                self.assertIn(phase, stderr.getvalue())
+
+    def test_status_selects_newest_run_and_prints_all_semantic_state(self) -> None:
+        older = self.runs_root / "evaluation-older"
+        older.mkdir()
+        atomic_write_json(
+            older / "run.json",
+            {
+                "run_id": older.name,
+                "phase": "PREPARED",
+                "trials": [],
+                "updated_at": "2026-07-27T11:00:00Z",
+                "judgment_sha256": None,
+            },
+        )
+
+        result = self._run_cli(["status", "--runs-root", str(self.runs_root)])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("evaluation-newest", result.stdout)
+        self.assertIn("Phase: COMPLETE", result.stdout)
+        self.assertIn("Variant A trials: 2 complete", result.stdout)
+        self.assertIn("Variant B trials: 2 complete", result.stdout)
+        self.assertIn("Variant A agreement: materially_similar", result.stdout)
+        self.assertIn("Variant B agreement: materially_similar", result.stdout)
+        self.assertIn("Judgment: MATERIAL_TIE", result.stdout)
+
+    def test_report_refuses_unlocked_run(self) -> None:
+        state = json.loads((self.run_root / "run.json").read_text(encoding="utf-8"))
+        state["phase"] = "BLINDED_JUDGMENT"
+        state["judgment_sha256"] = None
+        atomic_write_json(self.run_root / "run.json", state)
+
+        result = self._run_cli(
+            [
+                "report",
+                "--runs-root",
+                str(self.runs_root),
+                "--run-id",
+                self.run_root.name,
+            ]
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("COMPLETE", result.stderr)
+
+    def test_report_is_ordered_sanitized_atomic_and_hash_bound(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        report_path = render_comparison_report(
+            self.run_root,
+            path_prefixes={
+                self.run_root: "<run>",
+                self.runs_root: "<runs>",
+                self.repository_root: "<repository>",
+            },
+        )
+
+        report = report_path.read_text(encoding="utf-8")
+        headings = (
+            "## Locked blinded decision",
+            "## Per-dimension evidence",
+            "## Trial stability",
+            "## Known failures found or missed",
+            "## Unsupported findings",
+            "## Plan-boundary comparison",
+            "## Workflow failures",
+            "## Cost observations",
+            "## Confidence",
+            "## Limitations",
+            "## Post-lock identity reveal",
+        )
+        self.assertEqual(
+            [report.index(heading) for heading in headings],
+            sorted(report.index(heading) for heading in headings),
+        )
+        self.assertIn("MATERIAL_TIE", report)
+        self.assertIn("origin/main", report)
+        self.assertIn("`" + "1" * 40 + "`", report)
+        self.assertNotIn(str(self.root), report)
+        self.assertNotIn("report-secret", report)
+        self.assertNotIn("separated secret", report)
+        self.assertNotRegex(report, r"(?m)(?:^|\s)/(?:Users|private|tmp)/")
+        state = json.loads((self.run_root / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["report_sha256"], sha256_file(report_path))
+
+    def test_report_rejects_unconfigured_absolute_path_after_colon(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        judgment_path = self.run_root / "judge/judgment.json"
+        judgment = json.loads(judgment_path.read_text(encoding="utf-8"))
+        judgment["limitations"] = [
+            "Unexpected machine path:/opt/material-review/private.json"
+        ]
+        atomic_write_json(judgment_path, judgment)
+        judgment_hash = sha256_file(judgment_path)
+
+        reveal_path = self.run_root / "judge/reveal.json"
+        reveal = json.loads(reveal_path.read_text(encoding="utf-8"))
+        reveal["judgment_sha256"] = judgment_hash
+        atomic_write_json(reveal_path, reveal)
+
+        state_path = self.run_root / "run.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["judgment_sha256"] = judgment_hash
+        atomic_write_json(state_path, state)
+
+        with self.assertRaisesRegex(EvaluationError, "absolute machine path"):
+            render_comparison_report(self.run_root)
+
+        self.assertFalse((self.run_root / "comparison-report.md").exists())
+
+    def test_report_command_prints_and_atomically_copies_only_sanitized_report(
+        self,
+    ) -> None:
+        output = self.root / "copied-report.md"
+
+        result = self._run_cli(
+            [
+                "report",
+                "--runs-root",
+                str(self.runs_root),
+                "--run-id",
+                self.run_root.name,
+                "--output",
+                str(output),
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, output.read_text(encoding="utf-8"))
+        self.assertNotIn(str(self.root), result.stdout)
+        self.assertNotIn("report-secret", result.stdout)
+
+    def test_clean_requires_run_id_and_calls_controller_bounded_cleanup(self) -> None:
+        from scripts.material_review_evaluation import cli
+
+        controller = mock.Mock()
+        controller.clean.return_value = (self.root / "removed-workspace",)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.object(
+            cli,
+            "EvaluationController",
+            return_value=controller,
+        ):
+            returncode = cli.main(
+                [
+                    "clean",
+                    "--runs-root",
+                    str(self.runs_root),
+                    "--run-id",
+                    self.run_root.name,
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self.assertEqual(returncode, 0, stderr.getvalue())
+        controller.clean.assert_called_once_with(self.run_root.name)
+        self.assertIn("Removed 1 disposable workspace", stdout.getvalue())
+        self.assertTrue((self.run_root / "run.json").is_file())
+        self.assertTrue((self.run_root / "judge/judgment.json").is_file())
+
+
+class EvaluationPackagingTests(unittest.TestCase):
+    FORBIDDEN_PREFIXES = (
+        "evaluations/",
+        "scripts/material_review_evaluation/",
+        "docs/superpowers/",
+        ".evaluation-runs/",
+        ".superpowers/",
+    )
+    FORBIDDEN_EXACT = {
+        "scripts/evaluate_material_review.py",
+        "scripts/tests/test_evaluate_material_review.py",
+        "bin/material-review-evaluate",
+    }
+
+    def test_plugin_archives_exclude_repository_maintainer_evaluator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = root / "repository"
+            shutil.copytree(
+                REPOSITORY_ROOT,
+                fixture,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    "__pycache__",
+                    ".pytest_cache",
+                    "dist",
+                    "*.zip",
+                    "*.sha256",
+                ),
+            )
+            scratch = fixture / ".evaluation-runs/evaluation-leak/run.json"
+            scratch.parent.mkdir(parents=True, exist_ok=True)
+            scratch.write_text("{}\n", encoding="utf-8")
+            full_archive = root / "full.zip"
+            standalone_archive = root / "standalone.zip"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(fixture / "scripts/package_plugin.py"),
+                    "--package-root",
+                    str(fixture),
+                    "--output",
+                    str(full_archive),
+                    "--standalone-output",
+                    str(standalone_archive),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            for archive_path in (full_archive, standalone_archive):
+                with self.subTest(archive=archive_path.name), zipfile.ZipFile(
+                    archive_path
+                ) as archive:
+                    names = set(archive.namelist())
+                leaked = sorted(
+                    name
+                    for name in names
+                    if name in self.FORBIDDEN_EXACT
+                    or name.startswith(self.FORBIDDEN_PREFIXES)
+                )
+                self.assertEqual(leaked, [])
+
 
 
 if __name__ == "__main__":
