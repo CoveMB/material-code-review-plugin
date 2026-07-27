@@ -172,21 +172,6 @@ def resolve_variant(repo_root: Path, ref: str) -> ResolvedVariant:
     )
 
 
-def resolved_variant_subject(repo_root: Path, variant: ResolvedVariant) -> str:
-    """Load and hash-check the immutable commit subject for launch blinding."""
-
-    repository = Path(repo_root).resolve(strict=True)
-    commit_sha = _ensure_sha(variant.commit_sha, "resolved variant")
-    subject = _git_output(
-        repository,
-        ["show", "-s", "--format=%s", commit_sha],
-        "resolved variant subject lookup",
-    )
-    if _sha256_text(subject) != variant.commit_subject_sha256:
-        raise EvaluationError("resolved variant subject changed")
-    return subject
-
-
 def verify_benchmark_range(mirror: Path, benchmark: Benchmark) -> None:
     """Require the frozen comparison commit to be the baseline's immediate child."""
 

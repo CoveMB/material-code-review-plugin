@@ -2032,11 +2032,13 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         self.workflow_path = self.root / "workflow"
         self.trial_output = self.root / "trial-output"
         self.bundle_output = self.root / "bundle-output"
+        self.executor_state = self.root / "executor-private-state"
         for path in (
             self.target_path,
             self.workflow_path,
             self.trial_output,
             self.bundle_output,
+            self.executor_state,
         ):
             path.mkdir()
         self.skill_path = self.workflow_path / "SKILL.md"
@@ -2093,6 +2095,7 @@ class ExecutorAndBlindingTests(unittest.TestCase):
             reasoning_effort="high",
             sandbox_mode=sandbox_mode,
             timeout_seconds=123,
+            state_directory=self.executor_state if role == "trial" else None,
         )
 
     def execute_with_schema(
@@ -2194,10 +2197,7 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         spec = self.session_spec()
         executor.start(spec)
         persisted_spec = (
-            self.trial_output
-            / "executor-state"
-            / "sessions"
-            / "trial-session.json"
+            self.executor_state / "sessions" / "trial-session.json"
         )
         self.assertTrue(persisted_spec.is_file())
         persisted_text = persisted_spec.read_text(encoding="utf-8")
@@ -2256,13 +2256,37 @@ class ExecutorAndBlindingTests(unittest.TestCase):
             )
         self.assertEqual(len(runner.calls), calls_before_drift)
 
+    def test_codex_resume_rejects_session_spec_deleted_during_invocation(self) -> None:
+        start_runner = RecordingRunner(stdout=self.successful_jsonl())
+        spec = self.session_spec()
+        CodexExecutor(runner=start_runner, environment=self.environment).start(spec)
+        persisted_spec = next(self.root.rglob("trial-session.json"))
+
+        class DeletingRunner(RecordingRunner):
+            def __call__(
+                self,
+                argv: list[str],
+                **options: object,
+            ) -> CompletedProcess[str]:
+                persisted_spec.unlink()
+                return super().__call__(argv, **options)
+
+        resume_runner = DeletingRunner(stdout=self.successful_jsonl())
+
+        with self.assertRaisesRegex(EvaluationError, "unrecorded.*session"):
+            CodexExecutor(
+                runner=resume_runner,
+                environment=self.environment,
+            ).resume("trial-session", "Approve Gate A.", spec)
+
     def test_executor_state_symlink_is_rejected_without_out_of_root_write(self) -> None:
         external = self.root / "external-state"
         external.mkdir()
-        os.symlink(external, self.trial_output / "executor-state")
+        self.executor_state.rmdir()
+        os.symlink(external, self.executor_state)
         runner = RecordingRunner(stdout=self.successful_jsonl())
 
-        with self.assertRaisesRegex(EvaluationError, "must not use symlinks"):
+        with self.assertRaisesRegex(EvaluationError, "private executor state"):
             CodexExecutor(runner=runner, environment=self.environment).start(
                 self.session_spec()
             )
@@ -3710,6 +3734,30 @@ class EvaluationControllerTests(unittest.TestCase):
                 & {part.casefold() for part in spec.readable_workflow.parts}
             )
 
+    def test_generic_commit_subject_does_not_trigger_identity_leak(self) -> None:
+        self.run_git(
+            self.skill_repository,
+            "checkout",
+            "--quiet",
+            "--detach",
+            "current",
+        )
+        skill_path = self.skill_repository / "skills/material-code-review/SKILL.md"
+        skill_path.write_text("# Generic subject baseline\n", encoding="utf-8")
+        self.run_git(self.skill_repository, "add", skill_path)
+        self.run_git(self.skill_repository, "commit", "--quiet", "-m", "fix")
+        self.run_git(self.skill_repository, "branch", "subject-fix")
+        skill_path.write_text("# Generic subject candidate\n", encoding="utf-8")
+        self.run_git(self.skill_repository, "add", skill_path)
+        self.run_git(self.skill_repository, "commit", "--quiet", "-m", "quasar")
+        self.run_git(self.skill_repository, "branch", "subject-quasar")
+
+        summary = self.controller(FakeExecutor()).compare(
+            self.request(base_ref="subject-fix", candidate_ref="subject-quasar")
+        )
+
+        self.assertEqual(summary.phase, "COMPLETE")
+
     def test_workflow_tamper_is_terminal_before_trial_evidence_is_accepted(
         self,
     ) -> None:
@@ -3849,11 +3897,16 @@ class EvaluationControllerTests(unittest.TestCase):
                 for component in re.split(r"[/\\]+", argument)
             }
         )
-        self.assertTrue(
+        private_session_spec = (
+            run_root
+            / "private/executor-state/A/1/attempt-1/sessions/restart-session.json"
+        )
+        self.assertTrue(private_session_spec.is_file())
+        self.assertFalse(
             (
                 run_root
                 / "trials/A/1/attempt-1/executor-state/sessions/restart-session.json"
-            ).is_file()
+            ).exists()
         )
 
         fresh_controller = EvaluationController(

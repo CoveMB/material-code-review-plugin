@@ -40,6 +40,7 @@ class SessionSpec:
     reasoning_effort: str
     sandbox_mode: str
     timeout_seconds: int
+    state_directory: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +288,19 @@ def _validated_spec(spec: SessionSpec) -> SessionSpec:
             spec.readable_workflow,
             "materialized workflow",
         )
+        if spec.state_directory is None:
+            raise EvaluationError("trial sessions require private executor state")
+        state_directory = _require_directory(
+            spec.state_directory,
+            "private executor state directory",
+        )
+        for writable_directory in (working_directory, output_directory):
+            if state_directory == writable_directory or state_directory.is_relative_to(
+                writable_directory
+            ):
+                raise EvaluationError(
+                    "private executor state must be outside reviewer-writable directories"
+                )
         if spec.output_schema is not None:
             raise EvaluationError("trial sessions must not use a judge output schema")
         output_schema = None
@@ -298,6 +312,11 @@ def _validated_spec(spec: SessionSpec) -> SessionSpec:
         if spec.output_schema is None:
             raise EvaluationError("agreement and judge sessions require an output schema")
         readable_workflow = None
+        if spec.state_directory is not None:
+            raise EvaluationError(
+                "agreement and judge sessions cannot persist resumable state"
+            )
+        state_directory = None
         output_schema = _require_regular_file(
             spec.output_schema,
             "session output schema",
@@ -314,6 +333,7 @@ def _validated_spec(spec: SessionSpec) -> SessionSpec:
         reasoning_effort=spec.reasoning_effort,
         sandbox_mode=spec.sandbox_mode,
         timeout_seconds=spec.timeout_seconds,
+        state_directory=state_directory,
     )
 
 
@@ -464,36 +484,42 @@ def _session_spec_payload(spec: SessionSpec) -> dict[str, Any]:
         "reasoning_effort": spec.reasoning_effort,
         "sandbox_mode": spec.sandbox_mode,
         "timeout_seconds": spec.timeout_seconds,
+        "state_directory": (
+            str(spec.state_directory) if spec.state_directory is not None else None
+        ),
     }
 
 
-def _session_spec_path(output_directory: Path, session_id: str) -> Path:
+def _session_spec_path(state_directory: Path, session_id: str) -> Path:
     if _SESSION_ID_PATTERN.fullmatch(session_id) is None:
         raise EvaluationError("Codex session ID is not safe for persisted state")
-    output = Path(output_directory).resolve(strict=True)
-    state_root = output / "executor-state"
+    state_root = Path(state_directory)
+    if state_root.is_symlink() or not state_root.is_dir():
+        raise EvaluationError("executor session state must use a private directory")
+    state_root = state_root.resolve(strict=True)
     sessions_root = state_root / "sessions"
-    for directory in (state_root, sessions_root):
-        if directory.is_symlink():
-            raise EvaluationError("executor session state must not use symlinks")
-        if directory.exists():
-            if not directory.is_dir():
-                raise EvaluationError("executor session state must use directories")
-        else:
-            try:
-                directory.mkdir(mode=0o700)
-            except OSError as error:
-                raise EvaluationError("executor session state could not be created") from error
-        if directory.is_symlink() or not directory.is_dir():
-            raise EvaluationError("executor session state must not use symlinks")
+    if sessions_root.is_symlink():
+        raise EvaluationError("executor session state must not use symlinks")
+    if sessions_root.exists():
+        if not sessions_root.is_dir():
+            raise EvaluationError("executor session state must use directories")
+    else:
+        try:
+            sessions_root.mkdir(mode=0o700)
+        except OSError as error:
+            raise EvaluationError("executor session state could not be created") from error
+    if sessions_root.is_symlink() or not sessions_root.is_dir():
+        raise EvaluationError("executor session state must not use symlinks")
     resolved_sessions = sessions_root.resolve(strict=True)
-    if not resolved_sessions.is_relative_to(output):
-        raise EvaluationError("executor session state escaped its output directory")
+    if not resolved_sessions.is_relative_to(state_root):
+        raise EvaluationError("executor session state escaped its private directory")
     return resolved_sessions / f"{session_id}.json"
 
 
 def _persist_session_spec(session_id: str, spec: SessionSpec) -> None:
-    path = _session_spec_path(spec.output_directory, session_id)
+    if spec.state_directory is None:
+        raise EvaluationError("trial session specification lost its private state directory")
+    path = _session_spec_path(spec.state_directory, session_id)
     if path.exists() or path.is_symlink():
         raise EvaluationError("Codex session specification already exists")
     payload = _session_spec_payload(spec)
@@ -508,8 +534,8 @@ def _persist_session_spec(session_id: str, spec: SessionSpec) -> None:
     )
 
 
-def _load_session_spec(session_id: str, output_directory: Path) -> SessionSpec:
-    path = _session_spec_path(output_directory, session_id)
+def _load_session_spec(session_id: str, state_directory: Path) -> SessionSpec:
+    path = _session_spec_path(state_directory, session_id)
     if path.is_symlink() or not path.is_file():
         raise EvaluationError("cannot resume an unrecorded Codex session")
     try:
@@ -535,6 +561,7 @@ def _load_session_spec(session_id: str, output_directory: Path) -> SessionSpec:
         "reasoning_effort",
         "sandbox_mode",
         "timeout_seconds",
+        "state_directory",
     }
     if (
         record.get("schema") != _SESSION_SPEC_SCHEMA
@@ -552,6 +579,7 @@ def _load_session_spec(session_id: str, output_directory: Path) -> SessionSpec:
         "model",
         "reasoning_effort",
         "sandbox_mode",
+        "state_directory",
     ):
         if not isinstance(payload[key], str):
             raise EvaluationError("persisted Codex session specification is malformed")
@@ -583,6 +611,11 @@ def _load_session_spec(session_id: str, output_directory: Path) -> SessionSpec:
             reasoning_effort=payload["reasoning_effort"],
             sandbox_mode=payload["sandbox_mode"],
             timeout_seconds=payload["timeout_seconds"],
+            state_directory=(
+                Path(payload["state_directory"])
+                if payload["state_directory"] is not None
+                else None
+            ),
         )
     )
 
@@ -960,19 +993,30 @@ class CodexExecutor:
         session_spec: SessionSpec,
     ) -> SessionResult:
         supplied = _validated_spec(session_spec)
-        recorded = _load_session_spec(session_id, supplied.output_directory)
+        if supplied.state_directory is None:
+            raise EvaluationError("trial session specification lost its private state directory")
+        recorded = _load_session_spec(session_id, supplied.state_directory)
         if supplied != recorded:
             raise EvaluationError("resume configuration differs from the recorded session")
         if recorded.role != "trial":
             raise EvaluationError("ephemeral agreement and judge sessions cannot be resumed")
         if not isinstance(statement, str) or not statement.strip():
             raise EvaluationError("resume statement must be a non-empty string")
-        return self._execute(
+        result = self._execute(
             _resume_argv(session_id, recorded),
             statement,
             recorded,
             expected_session_id=session_id,
         )
+        persisted_after_resume = _load_session_spec(
+            session_id,
+            supplied.state_directory,
+        )
+        if persisted_after_resume != recorded:
+            raise EvaluationError(
+                "persisted Codex session specification changed during resume"
+            )
+        return result
 
     def status(self, session_id: str) -> SessionStatus:
         return self._statuses.get(session_id, "failed")

@@ -46,7 +46,6 @@ from .workspace import (
     materialize_variant,
     prepare_target_mirror,
     resolve_variant,
-    resolved_variant_subject,
     run_benchmark_commands,
     verify_benchmark_range,
 )
@@ -156,6 +155,22 @@ def _workspace_from_payload(value: Mapping[str, Any]) -> WorkspaceRecord:
             else None
         ),
         initial_status_sha256=str(value["initial_status_sha256"]),
+    )
+
+
+def _executor_state_directory(
+    run_root: Path,
+    variant: str,
+    trial_number: int,
+    attempt_number: int,
+) -> Path:
+    return (
+        run_root
+        / "private"
+        / "executor-state"
+        / variant
+        / str(trial_number)
+        / f"attempt-{attempt_number}"
     )
 
 
@@ -1033,6 +1048,13 @@ class EvaluationController:
             run_root.name,
             f"{label}-attempt-{attempt_number}",
         )
+        executor_state_directory = _executor_state_directory(
+            run_root,
+            variant,
+            trial_number,
+            attempt_number,
+        )
+        executor_state_directory.mkdir(parents=True, mode=0o700, exist_ok=False)
         output_directory = run_root / "trials" / variant / str(trial_number) / f"attempt-{attempt_number}"
         output_directory.mkdir(parents=True, exist_ok=False)
         dependency_results = run_benchmark_commands(
@@ -1209,6 +1231,12 @@ class EvaluationController:
             reasoning_effort=request.reasoning_effort,
             sandbox_mode=request.permission_profile,
             timeout_seconds=request.benchmark.default_timeout_seconds,
+            state_directory=_executor_state_directory(
+                run_root,
+                variant,
+                trial_number,
+                int(attempt["attempt_number"]),
+            ),
         )
         attest_immutable_workflow(workflow)
         validate_trial_launch(
@@ -2004,18 +2032,15 @@ class EvaluationController:
 
     def _private_tokens(self, run_root: Path) -> tuple[str, ...]:
         resolved = self._resolved_variants(run_root)
-        private_request = self._read_json(
-            run_root / "private/request.json",
-            "private request",
-        )
-        repository_root = Path(str(private_request["repository_root"]))
         tokens: list[str] = []
         for variant in resolved.values():
+            # Raw subjects are not identity tokens: short, ordinary subjects such as
+            # "fix" legitimately overlap the frozen review prompt. Their immutable
+            # hashes remain private and collision-resistant launch boundaries.
             tokens.extend(
                 (
                     variant.supplied_ref,
                     variant.commit_sha,
-                    resolved_variant_subject(repository_root, variant),
                     variant.commit_subject_sha256,
                 )
             )
