@@ -893,11 +893,19 @@ class NativeArtifactTests(unittest.TestCase):
         scope = self.read_json(run_directory / "scope.json")
         scope_hash = scope["scope_hash"]
 
+        candidate_records = []
         kept_groups = []
         ledger_findings = []
         for number, finding_id in enumerate(findings, start=1):
             group_id = f"G{number:03d}"
             candidate_id = f"C{number:03d}"
+            candidate_records.append(
+                {
+                    "candidate_id": candidate_id,
+                    "reviewer_id": "evaluation-reviewer",
+                    "local_id": f"local-{number}",
+                }
+            )
             kept_groups.append(
                 {
                     "group_id": group_id,
@@ -926,9 +934,16 @@ class NativeArtifactTests(unittest.TestCase):
                 "required_pre_fix_verification": [],
             }
             if selected_profile[1] == "material-review/ledger/v3":
-                finding["repair_direction"] = {
+                repair_direction = {
                     "objective": "preserve the expected output",
                     "constraints": ["change only the scoped file"],
+                }
+                finding["repair_direction"] = repair_direction
+                finding["repair_direction_hash"] = canonical_hash(repair_direction)
+                finding["repair_audit"] = {
+                    "mode": "independent",
+                    "verdict": "approved",
+                    "auditor_id": "evaluation-direction-auditor",
                 }
             else:
                 finding["proposed_resolution"] = "preserve the expected output"
@@ -949,8 +964,34 @@ class NativeArtifactTests(unittest.TestCase):
             "discard_reason": "EVIDENCE_MISMATCH",
             "decision_reason": "not supported",
         }
+        candidate_records.append(
+            {
+                "candidate_id": "C999",
+                "reviewer_id": "evaluation-reviewer",
+                "local_id": "local-discarded",
+            }
+        )
+        candidates = {
+            "schema_version": "material-review/candidates-normalized/v1",
+            "scope_hash": scope_hash,
+            "reviewer_sets": [],
+            "candidates": candidate_records,
+            "rejections": [],
+        }
+        candidate_bundle_hash = canonical_hash(candidates)
+        candidates["candidate_bundle_hash"] = candidate_bundle_hash
+        candidates["generated_at"] = "2026-07-27T11:59:00Z"
+        self.write_json(run_directory / "candidates.json", candidates)
+
+        adjudication_versions = {
+            "material-review/ledger/v1": "material-review/adjudication/v1",
+            "material-review/ledger/v2": "material-review/adjudication/v2",
+            "material-review/ledger/v3": "material-review/adjudication/v3",
+        }
         adjudication = {
-            "schema_version": "invented/adjudication-for-evaluation/v1",
+            "schema_version": adjudication_versions[selected_profile[1]],
+            "scope_hash": scope_hash,
+            "candidate_bundle_hash": candidate_bundle_hash,
             "groups": [*kept_groups, discarded_group],
         }
         self.write_json(run_directory / "adjudication.normalized.json", adjudication)
@@ -958,7 +999,7 @@ class NativeArtifactTests(unittest.TestCase):
         ledger = {
             "schema_version": selected_profile[1],
             "scope_hash": scope_hash,
-            "candidate_bundle_hash": "c" * 64,
+            "candidate_bundle_hash": candidate_bundle_hash,
             "adjudicator_id": "evaluation-adjudicator",
             "verdict": "SHOULD FIX BEFORE MERGE" if findings else "READY",
             "summary": "Invented native ledger for evaluator contract tests.",
@@ -972,6 +1013,7 @@ class NativeArtifactTests(unittest.TestCase):
         self.write_json(run_directory / "ledger.json", ledger)
 
         state["phase"] = phase
+        state["hashes"]["candidate_bundle_hash"] = candidate_bundle_hash  # type: ignore[index]
         state["hashes"]["ledger_hash"] = ledger_hash  # type: ignore[index]
         state["approved_findings"] = []
 
@@ -1024,19 +1066,59 @@ class NativeArtifactTests(unittest.TestCase):
                         "finding_id": finding_id,
                         "root_cause": "incorrect tracked content",
                         "objective": "restore the expected content",
+                        **(
+                            {
+                                "repair_direction_assessment": {
+                                    "repair_direction_hash": next(
+                                        finding["repair_direction_hash"]
+                                        for finding in ledger_findings
+                                        if finding["finding_id"] == finding_id
+                                    ),
+                                    "alternatives_considered": ["leave unchanged"],
+                                    "diverges": False,
+                                }
+                            }
+                            if selected_profile[2] == "material-review/fix-plan/v2"
+                            else {}
+                        ),
+                        "depends_on": [],
+                        "steps": ["Edit the scoped tracked content."],
                         "allowed_paths": ["tracked.txt"],
                         "tests": [
                             {
                                 "id": f"test-{finding_id}",
-                                "command": ["python3", "-m", "unittest"],
+                                "command": "python3 -m unittest",
+                                "working_directory": ".",
                                 "required": True,
+                                "timeout_seconds": 120,
+                                "purpose": "Verify the scoped correction.",
                             }
                         ],
+                        "manual_verification": [],
                         "risk_controls": ["exact path boundary"],
                         "rollback_strategy": "restore the checkpoint",
+                        "success_evidence": ["required test passes"],
+                        "max_attempts": 2,
                     }
                     for finding_id in findings
                 ],
+                "global_tests": [
+                    {
+                        "id": "global-tests",
+                        "command": "python3 -m unittest",
+                        "working_directory": ".",
+                        "required": True,
+                        "timeout_seconds": 300,
+                        "purpose": "Verify the complete scoped plan.",
+                    }
+                ],
+                "no_unrelated_cleanup": True,
+                "no_new_improvements_during_fix": True,
+                "post_fix_review_scope": (
+                    "approved_findings_and_fix_introduced_regressions_only"
+                ),
+                "scope_expansion_policy": "restore_and_reapprove",
+                "max_repair_rounds": 1,
             }
             plan_hash = canonical_hash(plan)
             plan["plan_hash"] = plan_hash
@@ -1133,6 +1215,32 @@ class NativeArtifactTests(unittest.TestCase):
         self.write_json(native_run.run_directory / "state.json", state)
         return receipt
 
+    def rehash_plan_and_gate(
+        self,
+        native_run: SimpleNamespace,
+        plan: dict[str, object],
+    ) -> None:
+        payload = dict(plan)
+        payload.pop("plan_hash", None)
+        payload.pop("validated_at", None)
+        plan_hash = canonical_hash(payload)
+        plan["plan_hash"] = plan_hash
+        self.write_json(native_run.run_directory / "fix-plan.json", plan)
+
+        gate_path = native_run.run_directory / "gates" / "plan.json"
+        gate = self.read_json(gate_path)
+        gate["plan_hash"] = plan_hash
+        gate.pop("receipt_hash", None)
+        receipt_hash = canonical_hash(gate)
+        gate["receipt_hash"] = receipt_hash
+        self.write_json(gate_path, gate)
+
+        state = self.read_json(native_run.run_directory / "state.json")
+        state["hashes"]["plan_hash"] = plan_hash  # type: ignore[index]
+        state["hashes"]["plan_gate_hash"] = receipt_hash  # type: ignore[index]
+        state["gates"]["plan"] = receipt_hash  # type: ignore[index]
+        self.write_json(native_run.run_directory / "state.json", state)
+
     def test_all_declared_profiles_use_native_scope_and_status_authority(self) -> None:
         self.assertEqual(set(self.PROFILE_CONTROLLERS), NATIVE_SCHEMA_PROFILES)
 
@@ -1200,13 +1308,9 @@ class NativeArtifactTests(unittest.TestCase):
                 adjudication_path = native_run.run_directory / "adjudication.normalized.json"
                 adjudication = self.read_json(adjudication_path)
                 if mutation == "missing":
-                    adjudication["groups"].append(  # type: ignore[union-attr]
-                        {
-                            "group_id": "G777",
-                            "candidate_ids": ["C777"],
-                            "disposition": "discard",
-                        }
-                    )
+                    ledger = self.read_json(native_run.run_directory / "ledger.json")
+                    ledger["discarded"] = []
+                    self.rehash_ledger(native_run, ledger)
                 else:
                     ledger = self.read_json(native_run.run_directory / "ledger.json")
                     ledger["discarded"].append(  # type: ignore[union-attr]
@@ -1220,6 +1324,71 @@ class NativeArtifactTests(unittest.TestCase):
                 self.write_json(adjudication_path, adjudication)
 
                 with self.assertRaisesRegex(EvaluationError, "candidate group"):
+                    validate_gate_a_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_candidate_bundle_is_required_native_json(self) -> None:
+        native_run = self.native_run()
+        (native_run.run_directory / "candidates.json").unlink()
+
+        with self.assertRaisesRegex(EvaluationError, "candidates.json"):
+            validate_gate_a_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+
+    def test_candidate_bundle_hash_and_native_links_are_checked(self) -> None:
+        for mutation in ("embedded", "state", "ledger", "adjudication"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run()
+                if mutation == "embedded":
+                    candidates_path = native_run.run_directory / "candidates.json"
+                    candidates = self.read_json(candidates_path)
+                    candidates["candidates"][0]["local_id"] = "tampered"  # type: ignore[index]
+                    self.write_json(candidates_path, candidates)
+                elif mutation == "state":
+                    state_path = native_run.run_directory / "state.json"
+                    state = self.read_json(state_path)
+                    state["hashes"]["candidate_bundle_hash"] = "0" * 64  # type: ignore[index]
+                    self.write_json(state_path, state)
+                elif mutation == "ledger":
+                    ledger = self.read_json(native_run.run_directory / "ledger.json")
+                    ledger["candidate_bundle_hash"] = "0" * 64
+                    self.rehash_ledger(native_run, ledger)
+                else:
+                    adjudication_path = native_run.run_directory / "adjudication.normalized.json"
+                    adjudication = self.read_json(adjudication_path)
+                    adjudication["candidate_bundle_hash"] = "0" * 64
+                    self.write_json(adjudication_path, adjudication)
+
+                with self.assertRaisesRegex(EvaluationError, "candidate bundle"):
+                    validate_gate_a_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_candidate_ids_are_partitioned_across_groups_exactly_once(self) -> None:
+        for mutation in ("missing", "duplicate"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run()
+                adjudication_path = native_run.run_directory / "adjudication.normalized.json"
+                adjudication = self.read_json(adjudication_path)
+                ledger = self.read_json(native_run.run_directory / "ledger.json")
+                if mutation == "missing":
+                    adjudication["groups"] = adjudication["groups"][:-1]  # type: ignore[index]
+                    ledger["discarded"] = []
+                else:
+                    adjudication["groups"][0]["candidate_ids"].append("C999")  # type: ignore[index]
+                    ledger["findings"][0]["candidate_ids"].append("C999")  # type: ignore[index]
+                self.write_json(adjudication_path, adjudication)
+                self.rehash_ledger(native_run, ledger)
+
+                with self.assertRaisesRegex(EvaluationError, "candidate ID"):
                     validate_gate_a_artifacts(
                         native_run.run_directory,
                         native_run.controller,
@@ -1348,6 +1517,41 @@ class NativeArtifactTests(unittest.TestCase):
                         native_run.controller,
                         native_run.target,
                     )
+
+    def test_gate_a_receipt_requires_the_exact_evaluation_policy_statement(self) -> None:
+        for findings, phase in (
+            (("F001",), "PLAN_VALIDATED"),
+            ((), "COMPLETE"),
+        ):
+            with self.subTest(findings=findings):
+                native_run = self.native_run(findings=findings, phase=phase)
+                gate_path = native_run.run_directory / "gates" / "findings.json"
+                receipt = self.read_json(gate_path)
+                receipt["user_statement"] = "Ordinary approval authorizes repair."
+                self.write_json(gate_path, receipt)
+                self.rehash_receipt(native_run, "findings", "findings_gate_hash")
+
+                with self.assertRaisesRegex(EvaluationError, "evaluation policy statement"):
+                    validate_gate_a_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_gate_b_receipt_requires_the_exact_evaluation_policy_statement(self) -> None:
+        native_run = self.native_run(phase="PLAN_APPROVED")
+        gate_path = native_run.run_directory / "gates" / "plan.json"
+        receipt = self.read_json(gate_path)
+        receipt["user_statement"] = "Approved for immediate repair execution."
+        self.write_json(gate_path, receipt)
+        self.rehash_receipt(native_run, "plan", "plan_gate_hash")
+
+        with self.assertRaisesRegex(EvaluationError, "evaluation policy statement"):
+            validate_gate_b_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
 
     def test_gate_b_command_approves_only_the_exact_validated_plan(self) -> None:
         artifacts = self.native_artifacts(
@@ -1545,8 +1749,18 @@ class NativeArtifactTests(unittest.TestCase):
             "comparison",
         )
         self.assertEqual(normalized["gate_a"]["decisions"]["approved"], ["F001"])
+        self.assertEqual(
+            normalized["gate_a"]["user_statement"],
+            "Evaluation policy approves every retained finding for planning and no others; "
+            "repair is not authorized.",
+        )
         self.assertEqual(normalized["plan"]["items"][0]["allowed_paths"], ["tracked.txt"])
         self.assertTrue(normalized["gate_b"]["approved"])
+        self.assertEqual(
+            normalized["gate_b"]["user_statement"],
+            "Evaluation policy approves this exact validated plan for comparison evidence "
+            "only; no repair or plan command execution is authorized.",
+        )
         self.assertEqual(normalized["metadata"]["turns"], {"assistant_turns": 3})
         references = normalized["native_artifacts"]
         self.assertEqual(
@@ -1558,6 +1772,102 @@ class NativeArtifactTests(unittest.TestCase):
                 reference["sha256"],
                 hashlib.sha256(before[reference["path"]]).hexdigest(),
             )
+
+    def test_v3_normalization_preserves_repair_audit_and_plan_assessment(self) -> None:
+        profile = (
+            "material-review/state/v1",
+            "material-review/ledger/v3",
+            "material-review/fix-plan/v2",
+        )
+        artifacts = self.native_artifacts(
+            profile=profile,
+            phase="PLAN_APPROVED",
+        )
+
+        normalized = normalize_trial_evidence(artifacts)
+
+        finding = normalized["ledger"]["findings"][0]
+        self.assertEqual(finding["repair_audit"]["verdict"], "approved")
+        self.assertEqual(
+            finding["repair_direction_hash"],
+            artifacts.ledger["findings"][0]["repair_direction_hash"],
+        )
+        self.assertEqual(
+            normalized["plan"]["items"][0]["repair_direction_assessment"][
+                "repair_direction_hash"
+            ],
+            artifacts.plan["items"][0]["repair_direction_assessment"][
+                "repair_direction_hash"
+            ],
+        )
+
+    def test_normalization_preserves_plan_authorization_and_finite_boundaries(self) -> None:
+        artifacts = self.native_artifacts(phase="PLAN_APPROVED")
+
+        normalized = normalize_trial_evidence(artifacts)
+
+        item = normalized["plan"]["items"][0]
+        self.assertEqual(item["depends_on"], [])
+        self.assertEqual(item["steps"], ["Edit the scoped tracked content."])
+        self.assertEqual(item["success_evidence"], ["required test passes"])
+        self.assertEqual(item["max_attempts"], 2)
+        self.assertEqual(item["tests"][0]["timeout_seconds"], 120)
+        self.assertEqual(normalized["plan"]["global_tests"][0]["timeout_seconds"], 300)
+        self.assertEqual(normalized["plan"]["max_repair_rounds"], 1)
+        self.assertEqual(
+            normalized["plan"]["scope_expansion_policy"],
+            "restore_and_reapprove",
+        )
+        self.assertTrue(normalized["plan"]["no_unrelated_cleanup"])
+        self.assertTrue(normalized["plan"]["no_new_improvements_during_fix"])
+        self.assertEqual(
+            normalized["plan"]["post_fix_review_scope"],
+            "approved_findings_and_fix_introduced_regressions_only",
+        )
+
+    def test_distinct_native_plan_boundaries_remain_distinct_after_normalization(
+        self,
+    ) -> None:
+        original = normalize_trial_evidence(
+            self.native_artifacts(phase="PLAN_APPROVED")
+        )
+        native_run = self.native_run(phase="PLAN_APPROVED")
+        plan = self.read_json(native_run.run_directory / "fix-plan.json")
+        plan["items"][0]["max_attempts"] = 3  # type: ignore[index]
+        plan["items"][0]["tests"][0]["timeout_seconds"] = 240  # type: ignore[index]
+        plan["items"][0]["steps"].append("Re-run scoped validation.")  # type: ignore[index]
+        plan["items"][0]["success_evidence"].append("manual evidence retained")  # type: ignore[index]
+        plan["global_tests"][0]["timeout_seconds"] = 600  # type: ignore[index]
+        plan["max_repair_rounds"] = 2
+        self.rehash_plan_and_gate(native_run, plan)
+        changed = normalize_trial_evidence(
+            validate_gate_b_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+        )
+
+        original_item = original["plan"]["items"][0]
+        changed_item = changed["plan"]["items"][0]
+        self.assertNotEqual(original_item["max_attempts"], changed_item["max_attempts"])
+        self.assertNotEqual(
+            original_item["tests"][0]["timeout_seconds"],
+            changed_item["tests"][0]["timeout_seconds"],
+        )
+        self.assertNotEqual(original_item["steps"], changed_item["steps"])
+        self.assertNotEqual(
+            original_item["success_evidence"],
+            changed_item["success_evidence"],
+        )
+        self.assertNotEqual(
+            original["plan"]["global_tests"],
+            changed["plan"]["global_tests"],
+        )
+        self.assertNotEqual(
+            original["plan"]["max_repair_rounds"],
+            changed["plan"]["max_repair_rounds"],
+        )
 
 
 class SchemaContractTests(unittest.TestCase):

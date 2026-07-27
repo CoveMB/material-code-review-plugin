@@ -38,6 +38,7 @@ NATIVE_SCHEMA_PROFILES = {
 }
 
 _PROFILE_BY_LEDGER = {profile[1]: profile for profile in NATIVE_SCHEMA_PROFILES}
+_CANDIDATE_BUNDLE_SCHEMA = "material-review/candidates-normalized/v1"
 _FINDINGS_GATE_SCHEMA = "material-review/findings-gate/v1"
 _PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -70,6 +71,7 @@ class NativeTrialArtifacts:
     schema_profile: tuple[str, str, str]
     state: dict[str, Any]
     scope: dict[str, Any]
+    candidates: dict[str, Any]
     adjudication: dict[str, Any]
     ledger: dict[str, Any]
     findings_gate: dict[str, Any] | None
@@ -253,11 +255,13 @@ def _validate_scope_and_ledger(
 
 
 def _validate_complete_disposition(
+    candidate_ids: tuple[str, ...],
     adjudication: dict[str, Any],
     ledger: dict[str, Any],
 ) -> tuple[str, ...]:
     raw_groups = _require_array(adjudication.get("groups"), "adjudication.groups")
-    adjudicated: dict[str, str] = {}
+    adjudicated: dict[str, tuple[str, frozenset[str]]] = {}
+    grouped_candidate_ids: set[str] = set()
     for raw_group in raw_groups:
         group = _require_object(raw_group, "adjudication group")
         group_id = _require_string(group.get("group_id"), "adjudication group_id")
@@ -269,7 +273,31 @@ def _validate_complete_disposition(
             raise EvaluationError(f"candidate group {group_id} has an invalid disposition")
         if group_id in adjudicated:
             raise EvaluationError(f"candidate group {group_id} is adjudicated more than once")
-        adjudicated[group_id] = disposition
+        raw_candidate_ids = _require_array(
+            group.get("candidate_ids"),
+            f"candidate group {group_id} candidate IDs",
+        )
+        group_candidate_ids = [
+            _require_string(value, f"candidate group {group_id} candidate ID")
+            for value in raw_candidate_ids
+        ]
+        if not group_candidate_ids or len(group_candidate_ids) != len(set(group_candidate_ids)):
+            raise EvaluationError(
+                f"candidate group {group_id} must contain unique candidate IDs"
+            )
+        overlap = grouped_candidate_ids & set(group_candidate_ids)
+        if overlap:
+            raise EvaluationError(
+                "candidate IDs must appear in exactly one adjudicated group: "
+                + ", ".join(sorted(overlap))
+            )
+        grouped_candidate_ids.update(group_candidate_ids)
+        adjudicated[group_id] = (disposition, frozenset(group_candidate_ids))
+
+    if grouped_candidate_ids != set(candidate_ids):
+        raise EvaluationError(
+            "every native candidate ID must appear in exactly one adjudicated group"
+        )
 
     findings = _require_array(ledger.get("findings"), "ledger.findings")
     finding_ids: list[str] = []
@@ -277,29 +305,97 @@ def _validate_complete_disposition(
     for raw_finding in findings:
         finding = _require_object(raw_finding, "ledger finding")
         finding_ids.append(_require_string(finding.get("finding_id"), "finding_id"))
-        kept_groups.append(_require_string(finding.get("group_id"), "finding group_id"))
+        group_id = _require_string(finding.get("group_id"), "finding group_id")
+        kept_groups.append(group_id)
+        finding_candidate_ids = frozenset(
+            _require_string(value, f"finding {group_id} candidate ID")
+            for value in _require_array(
+                finding.get("candidate_ids"),
+                f"finding {group_id} candidate IDs",
+            )
+        )
+        if group_id in adjudicated and finding_candidate_ids != adjudicated[group_id][1]:
+            raise EvaluationError(
+                f"candidate group {group_id} candidate IDs conflict with the ledger"
+            )
     if len(finding_ids) != len(set(finding_ids)):
         raise EvaluationError("retained finding IDs must be unique")
 
-    discarded_groups = [
-        _require_string(
-            _require_object(raw_group, "discarded candidate group").get("group_id"),
-            "discarded candidate group_id",
+    discarded_groups: list[str] = []
+    for raw_group in _require_array(ledger.get("discarded"), "ledger.discarded"):
+        group = _require_object(raw_group, "discarded candidate group")
+        group_id = _require_string(group.get("group_id"), "discarded candidate group_id")
+        discarded_groups.append(group_id)
+        discarded_candidate_ids = frozenset(
+            _require_string(value, f"discarded group {group_id} candidate ID")
+            for value in _require_array(
+                group.get("candidate_ids"),
+                f"discarded group {group_id} candidate IDs",
+            )
         )
-        for raw_group in _require_array(ledger.get("discarded"), "ledger.discarded")
-    ]
+        if group_id in adjudicated and discarded_candidate_ids != adjudicated[group_id][1]:
+            raise EvaluationError(
+                f"candidate group {group_id} candidate IDs conflict with the ledger"
+            )
     disposed_groups = [*kept_groups, *discarded_groups]
     if len(disposed_groups) != len(set(disposed_groups)):
         raise EvaluationError("a candidate group is kept or discarded more than once")
     if set(disposed_groups) != set(adjudicated):
         raise EvaluationError("every candidate group must be kept or discarded exactly once")
     for group_id in kept_groups:
-        if adjudicated[group_id] != "keep":
+        if adjudicated[group_id][0] != "keep":
             raise EvaluationError(f"candidate group {group_id} disposition conflicts with ledger")
     for group_id in discarded_groups:
-        if adjudicated[group_id] != "discard":
+        if adjudicated[group_id][0] != "discard":
             raise EvaluationError(f"candidate group {group_id} disposition conflicts with ledger")
     return tuple(sorted(finding_ids))
+
+
+def _validate_candidate_bundle(
+    state: dict[str, Any],
+    scope: dict[str, Any],
+    candidates: dict[str, Any],
+    adjudication: dict[str, Any],
+    ledger: dict[str, Any],
+) -> tuple[str, ...]:
+    if candidates.get("schema_version") != _CANDIDATE_BUNDLE_SCHEMA:
+        raise EvaluationError("candidate bundle schema is not supported")
+    candidate_bundle_hash = _embedded_hash(
+        candidates,
+        hash_field="candidate_bundle_hash",
+        omitted_fields=("generated_at",),
+        context="candidate bundle",
+    )
+    hashes = _require_object(state.get("hashes"), "state.hashes")
+    if hashes.get("candidate_bundle_hash") != candidate_bundle_hash:
+        raise EvaluationError(
+            "candidate bundle hash does not match state.hashes.candidate_bundle_hash"
+        )
+    scope_hash = scope.get("scope_hash")
+    if candidates.get("scope_hash") != scope_hash:
+        raise EvaluationError("candidate bundle scope hash does not match the frozen scope")
+    if adjudication.get("scope_hash") != scope_hash:
+        raise EvaluationError("adjudication scope hash does not match the frozen scope")
+    if adjudication.get("candidate_bundle_hash") != candidate_bundle_hash:
+        raise EvaluationError("adjudication does not match the native candidate bundle")
+    if ledger.get("candidate_bundle_hash") != candidate_bundle_hash:
+        raise EvaluationError("ledger does not match the native candidate bundle")
+
+    candidate_ids = [
+        _require_string(
+            _require_object(raw_candidate, "candidate bundle candidate").get(
+                "candidate_id"
+            ),
+            "candidate bundle candidate ID",
+        )
+        for raw_candidate in _require_array(
+            candidates.get("candidates"),
+            "candidate bundle candidates",
+        )
+    ]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise EvaluationError("candidate bundle candidate IDs must be unique")
+    return tuple(sorted(candidate_ids))
 
 
 def _native_controller_evidence(
@@ -381,13 +477,25 @@ def _load_core_artifacts(
     state = _load_json_object(run / "state.json", "state")
     phase = _reject_repair_phase(state)
     scope = _load_json_object(run / "scope.json", "scope")
+    candidates = _load_json_object(run / "candidates.json", "candidate bundle")
     ledger = _load_json_object(run / "ledger.json", "ledger")
     adjudication = _load_json_object(
         run / "adjudication.normalized.json",
         "normalized adjudication",
     )
     profile, _, _ = _validate_scope_and_ledger(state, scope, ledger)
-    retained_ids = _validate_complete_disposition(adjudication, ledger)
+    candidate_ids = _validate_candidate_bundle(
+        state,
+        scope,
+        candidates,
+        adjudication,
+        ledger,
+    )
+    retained_ids = _validate_complete_disposition(
+        candidate_ids,
+        adjudication,
+        ledger,
+    )
     status, freshness, cleanliness, native_files = _native_controller_evidence(
         run,
         materialized_controller,
@@ -401,6 +509,7 @@ def _load_core_artifacts(
         schema_profile=profile,
         state=state,
         scope=scope,
+        candidates=candidates,
         adjudication=adjudication,
         ledger=ledger,
         findings_gate=None,
@@ -471,6 +580,11 @@ def _validate_findings_gate(
         or decisions.get("accepted_empty") is not True
     ):
         raise EvaluationError("an empty ledger requires accepted_empty with no finding IDs")
+    expected_statement = _GATE_A_APPROVAL if retained_ids else _EMPTY_LEDGER_APPROVAL
+    if receipt.get("user_statement") != expected_statement:
+        raise EvaluationError(
+            "Gate A receipt does not contain the exact evaluation policy statement"
+        )
     if artifacts.state.get("approved_findings") != list(sorted(approved)):
         raise EvaluationError("Gate A decisions do not match state.approved_findings")
     return receipt
@@ -606,6 +720,10 @@ def _validate_plan_gate(
         raise EvaluationError("Gate B receipt does not approve the exact validated plan hash")
     if receipt.get("approved") is not True:
         raise EvaluationError("Gate B receipt must approve the exact validated plan")
+    if receipt.get("user_statement") != _GATE_B_APPROVAL:
+        raise EvaluationError(
+            "Gate B receipt does not contain the exact evaluation policy statement"
+        )
     return receipt
 
 
@@ -750,6 +868,8 @@ def _normalize_finding(value: Mapping[str, Any]) -> dict[str, Any]:
             "decision_reason",
             "recommended_action",
             "required_pre_fix_verification",
+            "repair_direction_hash",
+            "repair_audit",
         ),
     )
     normalized["disposition"] = "keep"
@@ -772,6 +892,20 @@ def _normalize_finding(value: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_plan_test(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _copy_fields(
+        value,
+        (
+            "id",
+            "purpose",
+            "command",
+            "working_directory",
+            "required",
+            "timeout_seconds",
+        ),
+    )
+
+
 def _normalize_plan_item(value: Mapping[str, Any]) -> dict[str, Any]:
     normalized = _copy_fields(
         value,
@@ -779,16 +913,19 @@ def _normalize_plan_item(value: Mapping[str, Any]) -> dict[str, Any]:
             "finding_id",
             "root_cause",
             "objective",
+            "repair_direction_assessment",
+            "depends_on",
+            "steps",
             "allowed_paths",
+            "manual_verification",
             "risk_controls",
             "rollback_strategy",
+            "success_evidence",
+            "max_attempts",
         ),
     )
     normalized["tests"] = [
-        _copy_fields(
-            _require_object(raw_test, "plan test"),
-            ("id", "purpose", "command", "working_directory", "required"),
-        )
+        _normalize_plan_test(_require_object(raw_test, "plan test"))
         for raw_test in _require_array(value.get("tests", []), "plan tests")
     ]
     return normalized
@@ -887,13 +1024,34 @@ def normalize_trial_evidence(
             "decisions": copy.deepcopy(findings_gate.get("decisions")),
             "ledger_hash": findings_gate.get("ledger_hash"),
             "receipt_hash": findings_gate.get("receipt_hash"),
+            "user_statement": findings_gate.get("user_statement"),
         },
         "plan": (
             {
-                **_copy_fields(plan, ("plan_summary", "plan_hash")),
+                **_copy_fields(
+                    plan,
+                    (
+                        "plan_summary",
+                        "plan_hash",
+                        "no_unrelated_cleanup",
+                        "no_new_improvements_during_fix",
+                        "post_fix_review_scope",
+                        "scope_expansion_policy",
+                        "max_repair_rounds",
+                    ),
+                ),
                 "items": [
                     _normalize_plan_item(_require_object(raw_item, "fix plan item"))
                     for raw_item in _require_array(plan.get("items"), "fix plan.items")
+                ],
+                "global_tests": [
+                    _normalize_plan_test(
+                        _require_object(raw_test, "global plan test")
+                    )
+                    for raw_test in _require_array(
+                        plan.get("global_tests", []),
+                        "fix plan.global_tests",
+                    )
                 ],
             }
             if plan is not None
@@ -907,6 +1065,7 @@ def normalize_trial_evidence(
                     "findings_gate_hash",
                     "plan_hash",
                     "receipt_hash",
+                    "user_statement",
                 ),
             )
             if plan_gate is not None
