@@ -510,6 +510,14 @@ class WorkspaceManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(EvaluationError, "symlink"):
             materialize_variant(repository, variant, self.workspace_root, "run-two")
 
+    def test_materialization_rejects_windows_drive_relative_tar_member(self) -> None:
+        repository = self.create_skill_repository()
+        self.commit_file(repository, "C:escape.txt", "outside\n", "unsafe TAR path")
+        variant = resolve_variant(repository, "HEAD")
+
+        with self.assertRaisesRegex(EvaluationError, "Windows drive"):
+            materialize_variant(repository, variant, self.workspace_root, "run-tar")
+
     def test_materialization_rejects_evaluator_content_from_standalone_archive(self) -> None:
         repository = self.create_skill_repository()
         package_script = repository / "scripts/package_plugin.py"
@@ -529,6 +537,25 @@ class WorkspaceManagerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(EvaluationError, "evaluator or oracle"):
             materialize_variant(repository, variant, self.workspace_root, "run-three")
+
+    def test_materialization_rejects_windows_drive_relative_zip_member(self) -> None:
+        repository = self.create_skill_repository()
+        package_script = repository / "scripts/package_plugin.py"
+        contents = package_script.read_text(encoding="utf-8")
+        package_script.write_text(
+            contents.replace(
+                'archive.writestr("materialized-commit.txt", root.name + "\\n")',
+                'archive.writestr("materialized-commit.txt", root.name + "\\n")\n'
+                '    archive.writestr("C:escape.txt", "outside")',
+            ),
+            encoding="utf-8",
+        )
+        self.run_git(repository, "add", "scripts/package_plugin.py")
+        self.run_git(repository, "commit", "--quiet", "-m", "unsafe ZIP path")
+        variant = resolve_variant(repository, "HEAD")
+
+        with self.assertRaisesRegex(EvaluationError, "Windows drive"):
+            materialize_variant(repository, variant, self.workspace_root, "run-zip")
 
     def test_trial_clone_is_detached_at_comparison_and_uses_owned_mirror(self) -> None:
         target, shas = self.create_target_repository()
@@ -576,6 +603,15 @@ class WorkspaceManagerTests(unittest.TestCase):
                 mutate(record.path)
                 with self.assertRaisesRegex(EvaluationError, expected_message):
                     attest_clean_target(record)
+
+    def test_cleanliness_attestation_detects_assume_unchanged_mutation(self) -> None:
+        record = self.make_owned_workspace("trial-assume-unchanged")
+        self.run_git(record.path, "update-index", "--assume-unchanged", "tracked.txt")
+        (record.path / "tracked.txt").write_text("hidden change\n", encoding="utf-8")
+        self.assertEqual(self.git(record.path, "status", "--porcelain=v1"), "")
+
+        with self.assertRaisesRegex(EvaluationError, "index"):
+            attest_clean_target(record)
 
     def test_benchmark_commands_record_separate_logs_hashes_and_timeout(self) -> None:
         target = self.root / "command-target"
@@ -654,6 +690,20 @@ class WorkspaceManagerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(EvaluationError, "symlink"):
             clean_owned_workspaces(self.repository_root, (record,))
+
+    def test_cleanup_refuses_symlinked_run_root(self) -> None:
+        target, _ = self.create_target_repository()
+        outside = self.root / "outside-run"
+        outside.mkdir()
+        run_root = self.workspace_root / "run-symlink"
+        run_root.symlink_to(outside, target_is_directory=True)
+        record = prepare_target_mirror(target, self.workspace_root, "run-symlink")
+        outside_mirror = outside / "mirrors" / "target.git"
+        self.assertTrue(outside_mirror.is_dir())
+
+        with self.assertRaisesRegex(EvaluationError, "symlink"):
+            clean_owned_workspaces(self.repository_root, (record,))
+        self.assertTrue(outside_mirror.is_dir())
 
     def test_cleanup_removes_only_exact_clean_recorded_directories(self) -> None:
         first = self.make_owned_workspace("trial-first")

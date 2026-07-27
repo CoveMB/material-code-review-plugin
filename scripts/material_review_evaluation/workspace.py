@@ -195,7 +195,10 @@ def _validate_archive_name(name: str, context: str) -> PurePosixPath:
     if not name or "\\" in name or any(character in name for character in "\x00\n\r"):
         raise EvaluationError(f"{context} contains an unsafe path")
     path = PurePosixPath(name)
-    if path.is_absolute() or PureWindowsPath(name).is_absolute() or ".." in path.parts:
+    windows_path = PureWindowsPath(name)
+    if windows_path.drive:
+        raise EvaluationError(f"{context} contains a Windows drive")
+    if path.is_absolute() or windows_path.is_absolute() or ".." in path.parts:
         raise EvaluationError(f"{context} escapes the extraction root")
     normalized = PurePosixPath(*[part for part in path.parts if part not in {"", "."}])
     if not normalized.parts:
@@ -661,6 +664,11 @@ def _target_attestation(target: Path) -> dict[str, str]:
         ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
         "target status lookup",
     )
+    index_flags = _git_output(
+        target,
+        ["ls-files", "-v", "-z"],
+        "target index flags lookup",
+    )
     refs = _git_output(
         target,
         ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)"],
@@ -682,6 +690,7 @@ def _target_attestation(target: Path) -> dict[str, str]:
         "head": head,
         "branch": branch,
         "status_sha256": _sha256_text(status),
+        "index_flags_sha256": _sha256_text(index_flags),
         "refs_sha256": _sha256_text(refs),
         "object_range_sha256": _sha256_text(objects),
         "remote_url": remote_process.stdout.rstrip("\n"),
@@ -780,6 +789,8 @@ def attest_clean_target(record: WorkspaceRecord) -> dict[str, object]:
         raise EvaluationError("target branch changed after trial creation")
     if current["remote_url"] != initial.get("remote_url"):
         raise EvaluationError("target remote URL changed after trial creation")
+    if current["index_flags_sha256"] != initial.get("index_flags_sha256"):
+        raise EvaluationError("target index flags changed after trial creation")
     if current["status_sha256"] != record.initial_status_sha256:
         if _git_differs(record.path, ["diff", "--cached", "--quiet"]):
             raise EvaluationError("target index changed after trial creation")
@@ -932,11 +943,12 @@ def _reject_active_repository_alias(protected_repository: Path, candidate: Path)
         raise EvaluationError("cleanup refuses an active repository worktree alias")
 
 
-def _reject_symlink_components(run_root: Path, candidate: Path) -> None:
-    relative = candidate.absolute().relative_to(run_root.absolute())
-    current = run_root.absolute()
-    for part in relative.parts:
-        current = current / part
+def _reject_symlink_components(workspace_root: Path, candidate: Path) -> None:
+    relative = candidate.absolute().relative_to(workspace_root.absolute())
+    current = workspace_root.absolute()
+    for part in (None, *relative.parts):
+        if part is not None:
+            current = current / part
         try:
             mode = os.lstat(current).st_mode
         except FileNotFoundError as error:
@@ -963,14 +975,14 @@ def clean_owned_workspaces(
         if not path.exists() or not path.is_dir():
             raise EvaluationError(f"recorded workspace is missing: {path}")
         _reject_active_repository_alias(protected, path)
-        _, run_root = _derive_run_root(record)
+        workspace_root, run_root = _derive_run_root(record)
         try:
             relative = path.relative_to(run_root)
         except ValueError as error:
             raise EvaluationError("workspace is not a descendant of its run root") from error
         if len(relative.parts) < 2:
             raise EvaluationError("workspace cleanup target is too broad")
-        _reject_symlink_components(run_root, path)
+        _reject_symlink_components(workspace_root, path)
         if path in seen:
             raise EvaluationError("duplicate workspace cleanup target")
         seen.add(path)
