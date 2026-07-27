@@ -13,6 +13,15 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 from scripts.material_review_evaluation.benchmark import CommandSpec, load_benchmark
+from scripts.material_review_evaluation.artifacts import (
+    NATIVE_SCHEMA_PROFILES,
+    find_native_run,
+    gate_a_command,
+    gate_b_command,
+    normalize_trial_evidence,
+    validate_gate_a_artifacts,
+    validate_gate_b_artifacts,
+)
 from scripts.material_review_evaluation.model import (
     EvaluationError,
     canonical_hash,
@@ -717,6 +726,838 @@ class WorkspaceManagerTests(unittest.TestCase):
         self.assertFalse(first.path.exists())
         self.assertFalse(second.path.exists())
         self.assertTrue(unrelated.is_dir())
+
+
+class NativeArtifactTests(unittest.TestCase):
+    PROFILE_CONTROLLERS = {
+        (
+            "material-review/state/v1",
+            "material-review/ledger/v1",
+            "material-review/fix-plan/v1",
+        ): "4a94e9ef0c0cdf811517ece3051e6d0df6161e64",
+        (
+            "material-review/state/v1",
+            "material-review/ledger/v2",
+            "material-review/fix-plan/v1",
+        ): "2da06282630a0d93062a0a67dc92066055644ff1",
+        (
+            "material-review/state/v1",
+            "material-review/ledger/v3",
+            "material-review/fix-plan/v2",
+        ): "0ca2ee9980fa20646c041c26fa5dfe03c8f22c8b",
+    }
+
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.workspace_root = self.root / "owned-workspaces"
+        self.workspace_root.mkdir()
+        self.source_repository = self.root / "source-repository"
+        self.run_git(self.source_repository, "init", "--quiet")
+        self.run_git(
+            self.source_repository,
+            "config",
+            "user.name",
+            "Artifact Evaluator Tests",
+        )
+        self.run_git(
+            self.source_repository,
+            "config",
+            "user.email",
+            "artifact-evaluator@example.invalid",
+        )
+        self.baseline_sha = self.commit_file("tracked.txt", "baseline\n", "baseline")
+        self.comparison_sha = self.commit_file(
+            "tracked.txt",
+            "comparison\n",
+            "comparison",
+        )
+        mirror = prepare_target_mirror(
+            self.source_repository,
+            self.workspace_root,
+            "artifact-evaluation",
+        )
+        benchmark = SimpleNamespace(
+            baseline_sha=self.baseline_sha,
+            comparison_sha=self.comparison_sha,
+        )
+        self.target = create_trial_target(
+            mirror.path,
+            benchmark,  # type: ignore[arg-type]
+            self.workspace_root,
+            "artifact-evaluation",
+            "trial-target",
+        )
+        self.fixture_number = 0
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def run_git(
+        self,
+        repository: Path,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[str]:
+        repository.mkdir(parents=True, exist_ok=True)
+        return subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    def commit_file(self, relative_path: str, contents: str, subject: str) -> str:
+        path = self.source_repository / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
+        self.run_git(self.source_repository, "add", relative_path)
+        self.run_git(self.source_repository, "commit", "--quiet", "-m", subject)
+        return self.run_git(
+            self.source_repository,
+            "rev-parse",
+            "HEAD",
+        ).stdout.strip()
+
+    def write_json(self, path: Path, value: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def read_json(self, path: Path) -> dict[str, object]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def materialize_controller(self, profile: tuple[str, str, str], root: Path) -> Path:
+        commit = self.PROFILE_CONTROLLERS[profile]
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPOSITORY_ROOT),
+                "show",
+                f"{commit}:skills/material-code-review/scripts/reviewctl.py",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        controller = root / "materialized-workflow" / "scripts" / "reviewctl.py"
+        controller.parent.mkdir(parents=True)
+        controller.write_text(completed.stdout, encoding="utf-8")
+        return controller
+
+    def native_run(
+        self,
+        *,
+        profile: tuple[str, str, str] | None = None,
+        findings: tuple[str, ...] = ("F001",),
+        phase: str = "ADJUDICATED",
+    ) -> SimpleNamespace:
+        selected_profile = profile or next(iter(self.PROFILE_CONTROLLERS))
+        self.fixture_number += 1
+        trial_root = self.root / f"native-trial-{self.fixture_number}"
+        trial_root.mkdir()
+        controller = self.materialize_controller(selected_profile, trial_root)
+        artifact_root = trial_root / "native-artifacts"
+        run_id = f"native-run-{self.fixture_number}"
+        completed = subprocess.run(
+            [
+                "python3",
+                str(controller),
+                "init",
+                "--repo-root",
+                str(self.target.path),
+                "--artifact-root",
+                str(artifact_root),
+                "--run-id",
+                run_id,
+                "--scope",
+                "range",
+                "--base",
+                self.baseline_sha,
+                "--head",
+                self.comparison_sha,
+                "--exclude-untracked",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        run_directory = artifact_root / "runs" / run_id
+        state = self.read_json(run_directory / "state.json")
+        scope = self.read_json(run_directory / "scope.json")
+        scope_hash = scope["scope_hash"]
+
+        kept_groups = []
+        ledger_findings = []
+        for number, finding_id in enumerate(findings, start=1):
+            group_id = f"G{number:03d}"
+            candidate_id = f"C{number:03d}"
+            kept_groups.append(
+                {
+                    "group_id": group_id,
+                    "candidate_ids": [candidate_id],
+                    "disposition": "keep",
+                }
+            )
+            finding = {
+                "finding_id": finding_id,
+                "group_id": group_id,
+                "candidate_ids": [candidate_id],
+                "title": f"Finding {finding_id}",
+                "severity": "high",
+                "confidence": "high",
+                "file": "tracked.txt",
+                "line_start": 1,
+                "line_end": 1,
+                "evidence_side": "comparison",
+                "evidence_quote": "comparison",
+                "observable_consequence": "observable failure",
+                "trigger_conditions": ["comparison checkout"],
+                "validation": {"verdict": "confirmed"},
+                "materiality": {"material": True},
+                "decision_reason": "material defect",
+                "recommended_action": "fix_now",
+                "required_pre_fix_verification": [],
+            }
+            if selected_profile[1] == "material-review/ledger/v3":
+                finding["repair_direction"] = {
+                    "objective": "preserve the expected output",
+                    "constraints": ["change only the scoped file"],
+                }
+            else:
+                finding["proposed_resolution"] = "preserve the expected output"
+            ledger_findings.append(finding)
+
+        discarded_group = {
+            "group_id": "G999",
+            "candidate_ids": ["C999"],
+            "canonical_title": "Unsupported candidate",
+            "file": "tracked.txt",
+            "line_start": 1,
+            "line_end": 1,
+            "evidence_side": "comparison",
+            "evidence_quote": "comparison",
+            "validation": {"verdict": "rejected"},
+            "materiality": {"material": False},
+            "disposition": "discard",
+            "discard_reason": "EVIDENCE_MISMATCH",
+            "decision_reason": "not supported",
+        }
+        adjudication = {
+            "schema_version": "invented/adjudication-for-evaluation/v1",
+            "groups": [*kept_groups, discarded_group],
+        }
+        self.write_json(run_directory / "adjudication.normalized.json", adjudication)
+
+        ledger = {
+            "schema_version": selected_profile[1],
+            "scope_hash": scope_hash,
+            "candidate_bundle_hash": "c" * 64,
+            "adjudicator_id": "evaluation-adjudicator",
+            "verdict": "SHOULD FIX BEFORE MERGE" if findings else "READY",
+            "summary": "Invented native ledger for evaluator contract tests.",
+            "findings": ledger_findings,
+            "discarded": [discarded_group],
+            "limitations": ["invented fixture"],
+        }
+        ledger_hash = canonical_hash(ledger)
+        ledger["ledger_hash"] = ledger_hash
+        ledger["generated_at"] = "2026-07-27T12:00:00Z"
+        self.write_json(run_directory / "ledger.json", ledger)
+
+        state["phase"] = phase
+        state["hashes"]["ledger_hash"] = ledger_hash  # type: ignore[index]
+        state["approved_findings"] = []
+
+        findings_gate = None
+        if phase != "ADJUDICATED":
+            findings_gate = {
+                "schema_version": "material-review/findings-gate/v1",
+                "run_id": run_id,
+                "scope_hash": scope_hash,
+                "ledger_hash": ledger_hash,
+                "decisions": {
+                    "approved": list(findings),
+                    "rejected": [],
+                    "deferred": [],
+                    "accepted_empty": not findings,
+                },
+                "user_statement": (
+                    "Evaluation policy approves every retained finding for planning and no "
+                    "others; repair is not authorized."
+                    if findings
+                    else "Evaluation policy accepts the empty material ledger; repair is not "
+                    "authorized."
+                ),
+                "recorded_at": "2026-07-27T12:01:00Z",
+            }
+            receipt_hash = canonical_hash(findings_gate)
+            findings_gate["receipt_hash"] = receipt_hash
+            self.write_json(run_directory / "gates" / "findings.json", findings_gate)
+            state["gates"]["findings"] = receipt_hash  # type: ignore[index]
+            state["hashes"]["findings_gate_hash"] = receipt_hash  # type: ignore[index]
+            state["approved_findings"] = sorted(findings)
+
+        plan = None
+        if phase in {
+            "PLAN_VALIDATED",
+            "PLAN_APPROVED",
+            "FIXING",
+            "VERIFYING",
+            "REPAIR_REQUIRED",
+            "PLAN_AMENDMENT_REQUIRED",
+            "BLOCKED",
+        }:
+            plan = {
+                "schema_version": selected_profile[2],
+                "scope_hash": scope_hash,
+                "findings_gate_hash": findings_gate["receipt_hash"],  # type: ignore[index]
+                "plan_summary": "Invented exact evaluation plan.",
+                "items": [
+                    {
+                        "finding_id": finding_id,
+                        "root_cause": "incorrect tracked content",
+                        "objective": "restore the expected content",
+                        "allowed_paths": ["tracked.txt"],
+                        "tests": [
+                            {
+                                "id": f"test-{finding_id}",
+                                "command": ["python3", "-m", "unittest"],
+                                "required": True,
+                            }
+                        ],
+                        "risk_controls": ["exact path boundary"],
+                        "rollback_strategy": "restore the checkpoint",
+                    }
+                    for finding_id in findings
+                ],
+            }
+            plan_hash = canonical_hash(plan)
+            plan["plan_hash"] = plan_hash
+            plan["validated_at"] = "2026-07-27T12:02:00Z"
+            self.write_json(run_directory / "fix-plan.json", plan)
+            state["hashes"]["plan_hash"] = plan_hash  # type: ignore[index]
+
+        if phase in {
+            "PLAN_APPROVED",
+            "FIXING",
+            "VERIFYING",
+            "REPAIR_REQUIRED",
+            "PLAN_AMENDMENT_REQUIRED",
+            "BLOCKED",
+        }:
+            plan_gate = {
+                "schema_version": "material-review/plan-gate/v1",
+                "run_id": run_id,
+                "scope_hash": scope_hash,
+                "findings_gate_hash": findings_gate["receipt_hash"],  # type: ignore[index]
+                "plan_hash": plan["plan_hash"],  # type: ignore[index]
+                "approved": True,
+                "user_statement": (
+                    "Evaluation policy approves this exact validated plan for comparison "
+                    "evidence only; no repair or plan command execution is authorized."
+                ),
+                "recorded_at": "2026-07-27T12:03:00Z",
+            }
+            plan_receipt_hash = canonical_hash(plan_gate)
+            plan_gate["receipt_hash"] = plan_receipt_hash
+            self.write_json(run_directory / "gates" / "plan.json", plan_gate)
+            state["gates"]["plan"] = plan_receipt_hash  # type: ignore[index]
+            state["hashes"]["plan_gate_hash"] = plan_receipt_hash  # type: ignore[index]
+
+        self.write_json(run_directory / "state.json", state)
+        return SimpleNamespace(
+            trial_root=trial_root,
+            run_directory=run_directory,
+            controller=controller,
+            target=self.target,
+            profile=selected_profile,
+        )
+
+    def native_artifacts(
+        self,
+        *,
+        findings: tuple[str, ...] = ("F001",),
+        phase: str = "ADJUDICATED",
+        profile: tuple[str, str, str] | None = None,
+    ) -> object:
+        native_run = self.native_run(
+            findings=findings,
+            phase=phase,
+            profile=profile,
+        )
+        if phase == "ADJUDICATED" or phase == "COMPLETE":
+            return validate_gate_a_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+        return validate_gate_b_artifacts(
+            native_run.run_directory,
+            native_run.controller,
+            native_run.target,
+        )
+
+    def rehash_ledger(self, native_run: SimpleNamespace, ledger: dict[str, object]) -> None:
+        payload = dict(ledger)
+        payload.pop("ledger_hash", None)
+        payload.pop("generated_at", None)
+        ledger_hash = canonical_hash(payload)
+        ledger["ledger_hash"] = ledger_hash
+        self.write_json(native_run.run_directory / "ledger.json", ledger)
+        state = self.read_json(native_run.run_directory / "state.json")
+        state["hashes"]["ledger_hash"] = ledger_hash  # type: ignore[index]
+        self.write_json(native_run.run_directory / "state.json", state)
+
+    def rehash_receipt(
+        self,
+        native_run: SimpleNamespace,
+        gate_name: str,
+        state_hash_name: str,
+    ) -> dict[str, object]:
+        path = native_run.run_directory / "gates" / f"{gate_name}.json"
+        receipt = self.read_json(path)
+        receipt.pop("receipt_hash", None)
+        receipt_hash = canonical_hash(receipt)
+        receipt["receipt_hash"] = receipt_hash
+        self.write_json(path, receipt)
+        state = self.read_json(native_run.run_directory / "state.json")
+        state["gates"][gate_name] = receipt_hash  # type: ignore[index]
+        state["hashes"][state_hash_name] = receipt_hash  # type: ignore[index]
+        self.write_json(native_run.run_directory / "state.json", state)
+        return receipt
+
+    def test_all_declared_profiles_use_native_scope_and_status_authority(self) -> None:
+        self.assertEqual(set(self.PROFILE_CONTROLLERS), NATIVE_SCHEMA_PROFILES)
+
+        for profile in self.PROFILE_CONTROLLERS:
+            with self.subTest(profile=profile):
+                artifacts = self.native_artifacts(
+                    profile=profile,
+                    phase="PLAN_APPROVED",
+                )
+                self.assertEqual(artifacts.schema_profile, profile)
+                self.assertTrue(artifacts.scope_freshness["fresh"])
+                self.assertEqual(artifacts.controller_status["phase"], "PLAN_APPROVED")
+
+    def test_gate_a_command_approves_every_retained_id_and_no_other_id(self) -> None:
+        artifacts = self.native_artifacts(findings=("F002", "F001"))
+
+        command = gate_a_command(artifacts)
+
+        self.assertEqual(command.approved_ids, ("F001", "F002"))
+        self.assertIn("F001,F002", command.argv)
+        self.assertNotIn("--reject", command.argv)
+        self.assertNotIn("--defer", command.argv)
+        self.assertEqual(
+            command.argv[-2:],
+            (
+                "--user-statement",
+                "Evaluation policy approves every retained finding for planning and no others; "
+                "repair is not authorized.",
+            ),
+        )
+
+    def test_gate_a_command_accepts_an_empty_ledger_explicitly(self) -> None:
+        artifacts = self.native_artifacts(findings=())
+
+        command = gate_a_command(artifacts)
+
+        self.assertEqual(command.approved_ids, ())
+        self.assertIn("--accept-empty", command.argv)
+        self.assertNotIn("--approve", command.argv)
+        self.assertEqual(
+            command.argv[-1],
+            "Evaluation policy accepts the empty material ledger; repair is not authorized.",
+        )
+
+    def test_gate_a_command_is_accepted_by_the_materialized_controller(self) -> None:
+        artifacts = self.native_artifacts(findings=("F001", "F002"))
+
+        completed = subprocess.run(
+            command := gate_a_command(artifacts).argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        self.assertEqual(completed.returncode, 0, (command, completed.stderr))
+        state = self.read_json(artifacts.run_directory / "state.json")
+        self.assertEqual(state["phase"], "FINDINGS_APPROVED")
+        self.assertEqual(state["approved_findings"], ["F001", "F002"])
+
+    def test_candidate_groups_require_one_complete_disposition(self) -> None:
+        for mutation in ("missing", "duplicate"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run()
+                adjudication_path = native_run.run_directory / "adjudication.normalized.json"
+                adjudication = self.read_json(adjudication_path)
+                if mutation == "missing":
+                    adjudication["groups"].append(  # type: ignore[union-attr]
+                        {
+                            "group_id": "G777",
+                            "candidate_ids": ["C777"],
+                            "disposition": "discard",
+                        }
+                    )
+                else:
+                    ledger = self.read_json(native_run.run_directory / "ledger.json")
+                    ledger["discarded"].append(  # type: ignore[union-attr]
+                        {
+                            "group_id": "G001",
+                            "candidate_ids": ["C001"],
+                            "disposition": "discard",
+                        }
+                    )
+                    self.rehash_ledger(native_run, ledger)
+                self.write_json(adjudication_path, adjudication)
+
+                with self.assertRaisesRegex(EvaluationError, "candidate group"):
+                    validate_gate_a_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_embedded_ledger_and_state_hashes_are_independently_checked(self) -> None:
+        for mutation in ("embedded", "state"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run()
+                if mutation == "embedded":
+                    ledger_path = native_run.run_directory / "ledger.json"
+                    ledger = self.read_json(ledger_path)
+                    ledger["summary"] = "tampered after hashing"
+                    self.write_json(ledger_path, ledger)
+                else:
+                    state_path = native_run.run_directory / "state.json"
+                    state = self.read_json(state_path)
+                    state["hashes"]["ledger_hash"] = "0" * 64  # type: ignore[index]
+                    self.write_json(state_path, state)
+
+                with self.assertRaisesRegex(EvaluationError, "ledger hash"):
+                    validate_gate_a_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_scope_hash_must_match_embedded_identity_and_state(self) -> None:
+        for mutation in ("embedded", "state"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run()
+                if mutation == "embedded":
+                    scope_path = native_run.run_directory / "scope.json"
+                    scope = self.read_json(scope_path)
+                    scope["identity"]["comparison_reference"] = "tampered"  # type: ignore[index]
+                    self.write_json(scope_path, scope)
+                else:
+                    state_path = native_run.run_directory / "state.json"
+                    state = self.read_json(state_path)
+                    state["scope_hash"] = "0" * 64
+                    self.write_json(state_path, state)
+
+                with self.assertRaisesRegex(EvaluationError, "scope"):
+                    validate_gate_a_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_gate_a_receipt_approves_all_and_only_retained_ids(self) -> None:
+        native_run = self.native_run(
+            findings=("F001", "F002"),
+            phase="PLAN_VALIDATED",
+        )
+        gate_path = native_run.run_directory / "gates" / "findings.json"
+        receipt = self.read_json(gate_path)
+        receipt["decisions"]["approved"] = ["F001"]  # type: ignore[index]
+        self.write_json(gate_path, receipt)
+        self.rehash_receipt(native_run, "findings", "findings_gate_hash")
+
+        with self.assertRaisesRegex(EvaluationError, "all and only retained"):
+            validate_gate_b_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+
+    def test_empty_ledger_receipt_requires_accepted_empty(self) -> None:
+        native_run = self.native_run(findings=(), phase="COMPLETE")
+        gate_path = native_run.run_directory / "gates" / "findings.json"
+        receipt = self.read_json(gate_path)
+        receipt["decisions"]["accepted_empty"] = False  # type: ignore[index]
+        self.write_json(gate_path, receipt)
+        self.rehash_receipt(native_run, "findings", "findings_gate_hash")
+
+        with self.assertRaisesRegex(EvaluationError, "accepted_empty"):
+            validate_gate_a_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+
+    def test_gate_receipt_embedded_and_state_hashes_are_checked(self) -> None:
+        for gate_name, state_hash_name in (
+            ("findings", "findings_gate_hash"),
+            ("plan", "plan_gate_hash"),
+        ):
+            for mutation in ("embedded", "state"):
+                with self.subTest(gate=gate_name, mutation=mutation):
+                    native_run = self.native_run(phase="PLAN_APPROVED")
+                    if mutation == "embedded":
+                        gate_path = native_run.run_directory / "gates" / f"{gate_name}.json"
+                        receipt = self.read_json(gate_path)
+                        receipt["recorded_at"] = "tampered"
+                        self.write_json(gate_path, receipt)
+                    else:
+                        state_path = native_run.run_directory / "state.json"
+                        state = self.read_json(state_path)
+                        state["hashes"][state_hash_name] = "0" * 64  # type: ignore[index]
+                        self.write_json(state_path, state)
+
+                    with self.assertRaisesRegex(EvaluationError, "receipt hash"):
+                        validate_gate_b_artifacts(
+                            native_run.run_directory,
+                            native_run.controller,
+                            native_run.target,
+                        )
+
+    def test_gate_receipts_require_the_native_v1_schemas(self) -> None:
+        for gate_name, state_hash_name in (
+            ("findings", "findings_gate_hash"),
+            ("plan", "plan_gate_hash"),
+        ):
+            with self.subTest(gate=gate_name):
+                native_run = self.native_run(phase="PLAN_APPROVED")
+                gate_path = native_run.run_directory / "gates" / f"{gate_name}.json"
+                receipt = self.read_json(gate_path)
+                receipt["schema_version"] = f"material-review/{gate_name}-gate/v2"
+                self.write_json(gate_path, receipt)
+                self.rehash_receipt(native_run, gate_name, state_hash_name)
+
+                with self.assertRaisesRegex(EvaluationError, "receipt schema"):
+                    validate_gate_b_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_gate_b_command_approves_only_the_exact_validated_plan(self) -> None:
+        artifacts = self.native_artifacts(
+            findings=("F002", "F001"),
+            phase="PLAN_VALIDATED",
+        )
+
+        command = gate_b_command(artifacts)
+
+        self.assertEqual(command.approved_ids, ("F001", "F002"))
+        self.assertIn("--approve", command.argv)
+        self.assertNotIn("--reject", command.argv)
+        self.assertEqual(command.plan_hash, artifacts.plan["plan_hash"])
+        self.assertEqual(
+            command.argv[-1],
+            "Evaluation policy approves this exact validated plan for comparison evidence "
+            "only; no repair or plan command execution is authorized.",
+        )
+
+    def test_gate_b_command_is_accepted_and_stops_at_plan_approved(self) -> None:
+        artifacts = self.native_artifacts(phase="PLAN_VALIDATED")
+
+        completed = subprocess.run(
+            gate_b_command(artifacts).argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        state = self.read_json(artifacts.run_directory / "state.json")
+        self.assertEqual(state["phase"], "PLAN_APPROVED")
+
+    def test_plan_hash_and_state_hash_are_independently_checked(self) -> None:
+        for mutation in ("embedded", "state"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run(phase="PLAN_VALIDATED")
+                if mutation == "embedded":
+                    plan_path = native_run.run_directory / "fix-plan.json"
+                    plan = self.read_json(plan_path)
+                    plan["plan_summary"] = "tampered after hashing"
+                    self.write_json(plan_path, plan)
+                else:
+                    state_path = native_run.run_directory / "state.json"
+                    state = self.read_json(state_path)
+                    state["hashes"]["plan_hash"] = "0" * 64  # type: ignore[index]
+                    self.write_json(state_path, state)
+
+                with self.assertRaisesRegex(EvaluationError, "plan hash"):
+                    validate_gate_b_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_gate_b_receipt_must_bind_the_exact_plan_hash(self) -> None:
+        native_run = self.native_run(phase="PLAN_APPROVED")
+        gate_path = native_run.run_directory / "gates" / "plan.json"
+        receipt = self.read_json(gate_path)
+        receipt["plan_hash"] = "0" * 64
+        self.write_json(gate_path, receipt)
+        self.rehash_receipt(native_run, "plan", "plan_gate_hash")
+
+        with self.assertRaisesRegex(EvaluationError, "exact validated plan hash"):
+            validate_gate_b_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+
+    def test_every_approved_id_appears_exactly_once_in_plan(self) -> None:
+        for mutation in ("missing", "duplicate"):
+            with self.subTest(mutation=mutation):
+                native_run = self.native_run(
+                    findings=("F001", "F002"),
+                    phase="PLAN_VALIDATED",
+                )
+                plan_path = native_run.run_directory / "fix-plan.json"
+                plan = self.read_json(plan_path)
+                if mutation == "missing":
+                    plan["items"] = plan["items"][:1]  # type: ignore[index]
+                else:
+                    plan["items"].append(plan["items"][0])  # type: ignore[index]
+                payload = dict(plan)
+                payload.pop("plan_hash")
+                payload.pop("validated_at")
+                plan_hash = canonical_hash(payload)
+                plan["plan_hash"] = plan_hash
+                self.write_json(plan_path, plan)
+                state = self.read_json(native_run.run_directory / "state.json")
+                state["hashes"]["plan_hash"] = plan_hash  # type: ignore[index]
+                self.write_json(native_run.run_directory / "state.json", state)
+
+                with self.assertRaisesRegex(EvaluationError, "exactly once"):
+                    validate_gate_b_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_plan_paths_must_remain_inside_the_frozen_scope(self) -> None:
+        native_run = self.native_run(phase="PLAN_VALIDATED")
+        plan_path = native_run.run_directory / "fix-plan.json"
+        plan = self.read_json(plan_path)
+        plan["items"][0]["allowed_paths"] = ["unrelated.txt"]  # type: ignore[index]
+        payload = dict(plan)
+        payload.pop("plan_hash")
+        payload.pop("validated_at")
+        plan_hash = canonical_hash(payload)
+        plan["plan_hash"] = plan_hash
+        self.write_json(plan_path, plan)
+        state = self.read_json(native_run.run_directory / "state.json")
+        state["hashes"]["plan_hash"] = plan_hash  # type: ignore[index]
+        self.write_json(native_run.run_directory / "state.json", state)
+
+        with self.assertRaisesRegex(EvaluationError, "frozen scope"):
+            validate_gate_b_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+
+    def test_mutation_phase_is_unconditionally_rejected(self) -> None:
+        for phase in (
+            "FIXING",
+            "VERIFYING",
+            "REPAIR_REQUIRED",
+            "PLAN_AMENDMENT_REQUIRED",
+            "BLOCKED",
+        ):
+            with self.subTest(phase=phase):
+                native_run = self.native_run(phase=phase)
+                with self.assertRaisesRegex(EvaluationError, "repair phase"):
+                    validate_gate_b_artifacts(
+                        native_run.run_directory,
+                        native_run.controller,
+                        native_run.target,
+                    )
+
+    def test_find_native_run_rejects_an_ambiguous_second_run(self) -> None:
+        first = self.native_run()
+        second_run = first.run_directory.parent / "second-run"
+        shutil.copytree(first.run_directory, second_run)
+
+        with self.assertRaisesRegex(EvaluationError, "multiple native review runs"):
+            find_native_run(first.trial_root)
+
+    def test_missing_native_json_is_rejected_without_markdown_reconstruction(self) -> None:
+        native_run = self.native_run()
+        (native_run.run_directory / "ledger.json").unlink()
+        (native_run.run_directory / "ledger.md").write_text(
+            "# Material ledger\n\nF001 is retained.\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(EvaluationError, "ledger.json"):
+            validate_gate_a_artifacts(
+                native_run.run_directory,
+                native_run.controller,
+                native_run.target,
+            )
+
+    def test_normalization_copies_only_comparison_evidence_and_never_mutates_native_files(
+        self,
+    ) -> None:
+        artifacts = self.native_artifacts(phase="PLAN_APPROVED")
+        before = {
+            path.relative_to(artifacts.run_directory).as_posix(): path.read_bytes()
+            for path in artifacts.run_directory.rglob("*")
+            if path.is_file()
+        }
+
+        normalized = normalize_trial_evidence(
+            artifacts,
+            timing_metadata={"elapsed_seconds": 12.5},
+            turn_metadata={"assistant_turns": 3},
+            tool_metadata={"tool_calls": 7},
+        )
+
+        after = {
+            path.relative_to(artifacts.run_directory).as_posix(): path.read_bytes()
+            for path in artifacts.run_directory.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        self.assertEqual(normalized["native_schema_versions"]["ledger"], artifacts.ledger["schema_version"])
+        self.assertEqual(normalized["ledger"]["findings"][0]["disposition"], "keep")
+        self.assertEqual(
+            normalized["ledger"]["discarded"][0]["canonical_title"],
+            "Unsupported candidate",
+        )
+        self.assertEqual(
+            normalized["ledger"]["discarded"][0]["evidence_quote"],
+            "comparison",
+        )
+        self.assertEqual(normalized["gate_a"]["decisions"]["approved"], ["F001"])
+        self.assertEqual(normalized["plan"]["items"][0]["allowed_paths"], ["tracked.txt"])
+        self.assertTrue(normalized["gate_b"]["approved"])
+        self.assertEqual(normalized["metadata"]["turns"], {"assistant_turns": 3})
+        references = normalized["native_artifacts"]
+        self.assertEqual(
+            {reference["path"] for reference in references},
+            set(before),
+        )
+        for reference in references:
+            self.assertEqual(
+                reference["sha256"],
+                hashlib.sha256(before[reference["path"]]).hexdigest(),
+            )
 
 
 class SchemaContractTests(unittest.TestCase):
