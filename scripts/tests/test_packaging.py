@@ -100,6 +100,15 @@ class StandalonePackagingTests(unittest.TestCase):
             check=False,
         )
 
+    def extract_archive_with_modes(self, archive_path: Path, destination: Path) -> None:
+        destination.mkdir()
+        with zipfile.ZipFile(archive_path) as archive:
+            for member in archive.infolist():
+                extracted = Path(archive.extract(member, destination))
+                mode = (member.external_attr >> 16) & 0o777
+                if mode and extracted.is_file():
+                    extracted.chmod(mode)
+
     def run_review_validator(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
         validator = fixture_root / REVIEW_VALIDATOR.relative_to(REPOSITORY_ROOT)
         return subprocess.run(
@@ -306,6 +315,22 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stderr,
             )
 
+    def test_source_validator_requires_evaluator_test_module(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            evaluator_tests = (
+                fixture_root / "scripts/tests/test_evaluate_material_review.py"
+            )
+            evaluator_tests.unlink()
+
+            validation_result = self.run_package_validator(fixture_root)
+
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "missing required file: scripts/tests/test_evaluate_material_review.py",
+                validation_result.stderr,
+            )
+
     def test_archive_validator_rejects_maintainer_only_evaluator_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
@@ -336,6 +361,44 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertIn(
                 "forbidden maintainer-only archive entry evaluations/private-scratch.json",
                 validation_result.stderr,
+            )
+
+    def test_extracted_full_archive_runs_retained_validation_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            archive_path = temp_root / "full-plugin.zip"
+            package_result = self.run_full_packager(fixture_root, archive_path)
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            extracted_root = temp_root / "extracted"
+            self.extract_archive_with_modes(archive_path, extracted_root)
+
+            for relative in (
+                "bin/material-review-evaluate",
+                "scripts/evaluate_material_review.py",
+                "scripts/material_review_evaluation",
+                "scripts/tests/test_evaluate_material_review.py",
+                "evaluations",
+            ):
+                self.assertFalse((extracted_root / relative).exists(), relative)
+
+            validation_result = subprocess.run(
+                ["make", "validate"],
+                cwd=extracted_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=300,
+            )
+
+            self.assertEqual(
+                validation_result.returncode,
+                0,
+                validation_result.stdout + validation_result.stderr,
+            )
+            self.assertIn(
+                "material-code-review package 1.2.0 is structurally valid",
+                validation_result.stdout,
             )
 
     def test_make_evaluator_requires_explicit_configuration_and_is_not_in_validation(

@@ -5,12 +5,14 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .bundles import redact_machine_paths
-from .model import EvaluationError, atomic_write_json, safe_relative_path, sha256_file
+from .controller import EvaluationController
+from .executor import AgentExecutor
+from .model import EvaluationError, safe_relative_path, sha256_file
 
 
 _DIMENSION_ORDER = (
@@ -57,7 +59,7 @@ _CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
     r")[\"']?\s*[:=]\s*(?:"
     r'"[^"\r\n]*"|'
     r"'[^'\r\n]*'|"
-    r"[^\s\"',;}]+)"
+    r"[^\r\n]*)"
 )
 _CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
@@ -65,8 +67,9 @@ _CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
 _UNIX_ABSOLUTE_PATH_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9._<>/-])/(?!/)(?:[A-Za-z0-9._~+-]+/)*[A-Za-z0-9._~+-]+"
+    r"(?<![\w.<>/\\`-])/(?!/)[^\s<>]*"
 )
+_NON_PATH_TRAILING_PUNCTUATION = ",;:!?)}]>'\""
 _WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\[A-Za-z0-9._-]+[\\/])"
 )
@@ -117,14 +120,6 @@ def _parse_timestamp(value: object, context: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _utc_after(value: object) -> str:
-    predecessor = _parse_timestamp(value, "run updated_at")
-    now = datetime.now(timezone.utc)
-    if now <= predecessor:
-        now = predecessor + timedelta(microseconds=1)
-    return now.isoformat().replace("+00:00", "Z")
-
-
 def _atomic_write_text(path: Path, text: str) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +157,14 @@ def _render_list(values: Sequence[str]) -> list[str]:
     return [f"- {_markdown_text(value)}" for value in values]
 
 
+def _contains_unix_absolute_path(text: str) -> bool:
+    for match in _UNIX_ABSOLUTE_PATH_PATTERN.finditer(text):
+        path_suffix = match.group()[1:]
+        if path_suffix.rstrip(_NON_PATH_TRAILING_PUNCTUATION):
+            return True
+    return False
+
+
 def _sanitize_report(
     text: str,
     path_prefixes: Mapping[str | Path, str],
@@ -173,7 +176,7 @@ def _sanitize_report(
     )
     for pattern in _CREDENTIAL_VALUE_PATTERNS:
         sanitized = pattern.sub("<redacted-credential>", sanitized)
-    if _UNIX_ABSOLUTE_PATH_PATTERN.search(sanitized) is not None:
+    if _contains_unix_absolute_path(sanitized):
         raise EvaluationError("sanitized report still contains an absolute machine path")
     if _WINDOWS_ABSOLUTE_PATH_PATTERN.search(sanitized) is not None:
         raise EvaluationError("sanitized report still contains an absolute machine path")
@@ -210,6 +213,14 @@ def _resolved_run_root(run_root: Path) -> Path:
     return supplied.resolve(strict=True)
 
 
+def _integrity_controller(run_root: Path) -> EvaluationController:
+    unused_executor = cast(AgentExecutor, object())
+    return EvaluationController(
+        runs_root=run_root.parent,
+        executor=unused_executor,
+    )
+
+
 def select_run_root(runs_root: Path, run_id: str | None = None) -> Path:
     """Select one exact run, or the newest durable run by its updated timestamp."""
 
@@ -243,10 +254,7 @@ def select_run_root(runs_root: Path, run_id: str | None = None) -> Path:
 
 def load_run_state(run_root: Path) -> dict[str, Any]:
     root = _resolved_run_root(run_root)
-    state = _load_json_object(root / "run.json", "evaluation run")
-    if state.get("run_id") != root.name:
-        raise EvaluationError("run ID does not match its directory")
-    return state
+    return _integrity_controller(root)._load_run(root)
 
 
 def _locked_inputs(
@@ -468,16 +476,15 @@ def render_comparison_report(
     _atomic_write_text(report_path, report_text)
     report_hash = sha256_file(report_path)
 
-    current = load_run_state(root)
-    if (
-        current.get("phase") != "COMPLETE"
-        or current.get("judgment_sha256") != state.get("judgment_sha256")
-    ):
-        raise EvaluationError("evaluation state changed while rendering the report")
-    current["report_sha256"] = report_hash
-    if "updated_at" in current:
-        current["updated_at"] = _utc_after(current["updated_at"])
-    atomic_write_json(root / "run.json", current)
+    def bind_report_hash(current: dict[str, Any]) -> None:
+        if (
+            current.get("phase") != "COMPLETE"
+            or current.get("judgment_sha256") != state.get("judgment_sha256")
+        ):
+            raise EvaluationError("evaluation state changed while rendering the report")
+        current["report_sha256"] = report_hash
+
+    _integrity_controller(root)._update_run(root, bind_report_hash)
     return report_path
 
 

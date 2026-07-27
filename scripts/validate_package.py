@@ -35,7 +35,7 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 
-REQUIRED = {
+DISTRIBUTABLE_REQUIRED = {
     ".codex-plugin/plugin.json",
     ".agents/plugins/marketplace.json",
     ".claude-plugin/plugin.json",
@@ -51,17 +51,8 @@ REQUIRED = {
     "bin/material-reviewctl",
     "bin/material-reviewctl.cmd",
     "bin/material-reviewctl.ps1",
-    "bin/material-review-evaluate",
-    "scripts/evaluate_material_review.py",
-    "scripts/material_review_evaluation/cli.py",
-    "scripts/material_review_evaluation/reporting.py",
     "scripts/package_plugin.py",
     "scripts/validate_package.py",
-    "evaluations/material-code-review/benchmarks/discogs-album-recovery/manifest.json",
-    "evaluations/material-code-review/benchmarks/discogs-album-recovery/judge-oracle.json",
-    "evaluations/material-code-review/schemas/agreement.schema.json",
-    "evaluations/material-code-review/schemas/evaluation-run.schema.json",
-    "evaluations/material-code-review/schemas/judgment.schema.json",
     "skills/material-code-review/SKILL.md",
     "skills/material-code-review/agents/openai.yaml",
     "skills/material-code-review/scripts/reviewctl.py",
@@ -78,6 +69,30 @@ REQUIRED = {
     "examples/codex-project-config/.codex/agents/material_validator.toml",
     "examples/codex-project-config/.codex/agents/material_adjudicator.toml",
     "examples/codex-project-config/.codex/agents/material_postfix.toml",
+}
+MAINTAINER_SOURCE_REQUIRED = {
+    "bin/material-review-evaluate",
+    "scripts/evaluate_material_review.py",
+    "scripts/material_review_evaluation/__init__.py",
+    "scripts/material_review_evaluation/artifacts.py",
+    "scripts/material_review_evaluation/benchmark.py",
+    "scripts/material_review_evaluation/bundles.py",
+    "scripts/material_review_evaluation/cli.py",
+    "scripts/material_review_evaluation/controller.py",
+    "scripts/material_review_evaluation/executor.py",
+    "scripts/material_review_evaluation/model.py",
+    "scripts/material_review_evaluation/reporting.py",
+    "scripts/material_review_evaluation/workspace.py",
+    "scripts/tests/test_evaluate_material_review.py",
+    "evaluations/material-code-review/benchmarks/discogs-album-recovery/manifest.json",
+    "evaluations/material-code-review/benchmarks/discogs-album-recovery/judge-oracle.json",
+    "evaluations/material-code-review/benchmarks/discogs-album-recovery/review-request.md",
+    "evaluations/material-code-review/judge-rubric.md",
+    "evaluations/material-code-review/prompts/comparison-judge.md",
+    "evaluations/material-code-review/prompts/trial-agreement.md",
+    "evaluations/material-code-review/schemas/agreement.schema.json",
+    "evaluations/material-code-review/schemas/evaluation-run.schema.json",
+    "evaluations/material-code-review/schemas/judgment.schema.json",
 }
 
 FORBIDDEN_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
@@ -219,7 +234,14 @@ def check_source_package(root: Path) -> list[str]:
         return [f"package root is not a directory: {root}"]
 
     actual = {path.relative_to(root).as_posix() for path in iter_files(root)}
-    for rel in sorted(REQUIRED - actual):
+    maintainer_source_checkout = any(
+        is_maintainer_only_archive_entry(relative)
+        for relative in actual
+    )
+    required = DISTRIBUTABLE_REQUIRED
+    if maintainer_source_checkout:
+        required = required | MAINTAINER_SOURCE_REQUIRED
+    for rel in sorted(required - actual):
         fail(errors, f"missing required file: {rel}")
 
     for rel in sorted(actual):

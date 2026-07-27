@@ -4180,6 +4180,18 @@ class EvaluationCliTests(unittest.TestCase):
         (run_root / "private").mkdir()
         (run_root / "variant-a").mkdir()
         (run_root / "variant-b").mkdir()
+        shutil.copy2(
+            EVALUATION_ROOT / "schemas/evaluation-run.schema.json",
+            run_root / "private/run-schema.json",
+        )
+        atomic_write_json(
+            run_root / "private/variant-map.json",
+            {
+                "schema": "material-review-evaluation/private-variant-map/v1",
+                "variants": {"A": "baseline", "B": "candidate"},
+                "created_at": "2026-07-27T11:59:59Z",
+            },
+        )
         judgment = self._judgment()
         atomic_write_json(run_root / "judge/judgment.json", judgment)
         judgment_hash = sha256_file(run_root / "judge/judgment.json")
@@ -4228,12 +4240,49 @@ class EvaluationCliTests(unittest.TestCase):
                     "confidence": "high",
                 },
             )
+        predecessor_artifacts = (
+            "private/request.json",
+            "private/resolved-variants.json",
+            "private/variant-map.json",
+            "judge/judgment.json",
+            "judge/reveal.json",
+        )
         atomic_write_json(
             run_root / "run.json",
             {
                 "schema": "material-review-evaluation/run/v1",
                 "run_id": run_id,
+                "request_fingerprint": "f" * 64,
+                "benchmark_id": "discogs-album-recovery",
+                "benchmark_hashes": {
+                    "manifest_sha256": "3" * 64,
+                    "review_request_sha256": "4" * 64,
+                    "judge_oracle_sha256": "5" * 64,
+                    "judge_rubric_sha256": "6" * 64,
+                },
+                "executor_configuration": {
+                    "adapter": "fake",
+                    "adapter_version": "1",
+                    "model": "gpt-5.6-sol",
+                    "reasoning_effort": "high",
+                    "permission_profile": "workspace-write",
+                    "isolation_mode": "logical_blinding",
+                },
+                "resolved_skill_shas": {
+                    "baseline": "1" * 40,
+                    "candidate": "2" * 40,
+                },
+                "private_variant_map_sha256": sha256_file(
+                    run_root / "private/variant-map.json"
+                ),
                 "phase": "COMPLETE",
+                "validated_predecessor_hashes": [
+                    {
+                        "artifact": relative,
+                        "sha256": sha256_file(run_root / relative),
+                    }
+                    for relative in predecessor_artifacts
+                ],
                 "trials": [
                     {
                         "anonymous_variant": variant,
@@ -4245,6 +4294,9 @@ class EvaluationCliTests(unittest.TestCase):
                     for variant in ("A", "B")
                     for trial_number in (1, 2)
                 ],
+                "infrastructure_attempts": [],
+                "workspaces": [],
+                "created_at": "2026-07-27T11:59:59Z",
                 "updated_at": "2026-07-27T12:00:02Z",
                 "terminal_reason": None,
                 "judgment_sha256": judgment_hash,
@@ -4252,6 +4304,62 @@ class EvaluationCliTests(unittest.TestCase):
             },
         )
         return run_root
+
+    def _refresh_predecessor_hashes(self, *relative_paths: str) -> None:
+        state_path = self.run_root / "run.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        records = {
+            record["artifact"]: record
+            for record in state["validated_predecessor_hashes"]
+        }
+        for relative in relative_paths:
+            records[relative]["sha256"] = sha256_file(self.run_root / relative)
+        atomic_write_json(state_path, state)
+
+    def _mutate_locked_judgment(self, mutate: object) -> None:
+        judgment_path = self.run_root / "judge/judgment.json"
+        judgment = json.loads(judgment_path.read_text(encoding="utf-8"))
+        mutate(judgment)  # type: ignore[operator]
+        atomic_write_json(judgment_path, judgment)
+        judgment_hash = sha256_file(judgment_path)
+
+        reveal_path = self.run_root / "judge/reveal.json"
+        reveal = json.loads(reveal_path.read_text(encoding="utf-8"))
+        reveal["judgment_sha256"] = judgment_hash
+        atomic_write_json(reveal_path, reveal)
+
+        state_path = self.run_root / "run.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["judgment_sha256"] = judgment_hash
+        atomic_write_json(state_path, state)
+        self._refresh_predecessor_hashes(
+            "judge/judgment.json",
+            "judge/reveal.json",
+        )
+
+    def _assert_predecessor_tamper_is_nonmutating(
+        self,
+        relative_path: str,
+        mutate: object,
+    ) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        report_path = render_comparison_report(self.run_root)
+        run_before = (self.run_root / "run.json").read_bytes()
+        report_before = report_path.read_bytes()
+        artifact_path = self.run_root / relative_path
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        mutate(artifact)  # type: ignore[operator]
+        atomic_write_json(artifact_path, artifact)
+
+        with self.assertRaisesRegex(
+            EvaluationError,
+            "validated predecessor artifact changed",
+        ):
+            render_comparison_report(self.run_root)
+
+        self.assertEqual((self.run_root / "run.json").read_bytes(), run_before)
+        self.assertEqual(report_path.read_bytes(), report_before)
 
     def _run_cli(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -4424,32 +4532,134 @@ class EvaluationCliTests(unittest.TestCase):
         self.assertNotRegex(report, r"(?m)(?:^|\s)/(?:Users|private|tmp)/")
         state = json.loads((self.run_root / "run.json").read_text(encoding="utf-8"))
         self.assertEqual(state["report_sha256"], sha256_file(report_path))
+        controller = EvaluationController(
+            runs_root=self.runs_root,
+            executor=FakeExecutor(),
+        )
+        self.assertEqual(controller.status(self.run_root.name).phase, "COMPLETE")
+
+    def test_report_refuses_swapped_reveal_without_mutating_outputs(self) -> None:
+        self._assert_predecessor_tamper_is_nonmutating(
+            "judge/reveal.json",
+            lambda value: value.__setitem__(
+                "variant_map",
+                {"A": "candidate", "B": "baseline"},
+            ),
+        )
+
+    def test_report_refuses_changed_resolved_variant_without_mutating_outputs(
+        self,
+    ) -> None:
+        def change_subject_hash(value: dict[str, object]) -> None:
+            baseline = value["baseline"]
+            assert isinstance(baseline, dict)
+            baseline["commit_subject_sha256"] = "c" * 64
+
+        self._assert_predecessor_tamper_is_nonmutating(
+            "private/resolved-variants.json",
+            change_subject_hash,
+        )
 
     def test_report_rejects_unconfigured_absolute_path_after_colon(self) -> None:
         from scripts.material_review_evaluation.reporting import render_comparison_report
 
-        judgment_path = self.run_root / "judge/judgment.json"
-        judgment = json.loads(judgment_path.read_text(encoding="utf-8"))
-        judgment["limitations"] = [
-            "Unexpected machine path:/opt/material-review/private.json"
-        ]
-        atomic_write_json(judgment_path, judgment)
-        judgment_hash = sha256_file(judgment_path)
-
-        reveal_path = self.run_root / "judge/reveal.json"
-        reveal = json.loads(reveal_path.read_text(encoding="utf-8"))
-        reveal["judgment_sha256"] = judgment_hash
-        atomic_write_json(reveal_path, reveal)
-
-        state_path = self.run_root / "run.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["judgment_sha256"] = judgment_hash
-        atomic_write_json(state_path, state)
+        self._mutate_locked_judgment(
+            lambda value: value.__setitem__(
+                "limitations",
+                ["Unexpected machine path:/opt/material-review/private.json"],
+            )
+        )
 
         with self.assertRaisesRegex(EvaluationError, "absolute machine path"):
             render_comparison_report(self.run_root)
 
         self.assertFalse((self.run_root / "comparison-report.md").exists())
+
+    def test_report_redacts_complete_unquoted_multiword_credentials(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        self._mutate_locked_judgment(
+            lambda value: value.__setitem__(
+                "workflow_failures",
+                [
+                    "PASSWORD: correct horse battery staple",
+                    "API_KEY = alpha beta gamma",
+                ],
+            )
+        )
+
+        report = render_comparison_report(self.run_root).read_text(encoding="utf-8")
+
+        for leaked_fragment in (
+            "correct horse battery staple",
+            "horse battery staple",
+            "alpha beta gamma",
+            "beta gamma",
+        ):
+            self.assertNotIn(leaked_fragment, report)
+        self.assertIn("## Cost observations", report)
+        self.assertIn("Variant B used fewer output tokens.", report)
+        self.assertIn("## Post-lock identity reveal", report)
+
+    def test_report_rejects_punctuation_leading_absolute_paths(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        for path in (
+            "/@host/secrets.json",
+            "/:host/secrets.json",
+            "/;host/secrets.json",
+            "/,host/secrets.json",
+            "/!host/secrets.json",
+            "/?host/secrets.json",
+        ):
+            with self.subTest(path=path):
+                self._mutate_locked_judgment(
+                    lambda value: value.__setitem__(
+                        "limitations",
+                        [f"Unexpected host path {path}"],
+                    )
+                )
+
+                with self.assertRaisesRegex(
+                    EvaluationError,
+                    "absolute machine path",
+                ):
+                    render_comparison_report(self.run_root)
+
+    def test_report_rejects_unicode_absolute_path(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        self._mutate_locked_judgment(
+            lambda value: value.__setitem__(
+                "limitations",
+                ["Unexpected host path /秘密.json"],
+            )
+        )
+
+        with self.assertRaisesRegex(EvaluationError, "absolute machine path"):
+            render_comparison_report(self.run_root)
+
+    def test_report_allows_non_path_slash_boundaries(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        self._mutate_locked_judgment(
+            lambda value: value.__setitem__(
+                "limitations",
+                [
+                    "A/B, 1/2, read/write, namespace/@host, "
+                    "https://example.invalid/a/b, slash punctuation /, /; (/), "
+                    "a literal `/`, and a standalone / mark are safe."
+                ],
+            )
+        )
+
+        report = render_comparison_report(self.run_root).read_text(encoding="utf-8")
+
+        self.assertIn("A/B, 1/2, read/write, namespace/@host", report)
+        self.assertIn("https://example.invalid/a/b", report)
+        self.assertIn("slash punctuation /, /; (/)", report)
+        self.assertIn("literal \\`/\\`", report)
+        self.assertIn("standalone / mark", report)
 
     def test_report_command_prints_and_atomically_copies_only_sanitized_report(
         self,
