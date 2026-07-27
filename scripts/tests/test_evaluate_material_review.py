@@ -4664,6 +4664,7 @@ class EvaluationCliTests(unittest.TestCase):
             "Angle path </opt/private.json> must not publish.",
             r"Escaped angle path \</opt/private.json\> must not publish.",
             r"Backslash-adjacent path \/opt/private.json must not publish.",
+            "Unowned placeholder <workspace>/private.json must not publish.",
             r"Windows path C:\Users\review\private.json must not publish.",
         ):
             with self.subTest(value=value):
@@ -4676,6 +4677,39 @@ class EvaluationCliTests(unittest.TestCase):
                     "absolute machine path",
                 ):
                     render_comparison_report(self.run_root)
+
+    def test_report_allows_reporter_owned_path_placeholders(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        target_root = self.root / "target-checkout"
+        paths = (
+            (self.run_root / "artifact.json", "<run>/artifact.json"),
+            (self.runs_root / "other-run", "<runs>/other-run"),
+            (self.repository_root / "src", "<repository>/src"),
+            (Path.home() / "other", "<home>/other"),
+            (target_root / "checkout", "<target>/checkout"),
+        )
+        self._mutate_locked_judgment(
+            lambda value: value.__setitem__(
+                "limitations",
+                ["Controlled paths: " + ", ".join(str(path) for path, _ in paths)],
+            )
+        )
+
+        report = render_comparison_report(
+            self.run_root,
+            path_prefixes={
+                self.run_root: "<run>",
+                self.runs_root: "<runs>",
+                self.repository_root: "<repository>",
+                Path.home(): "<home>",
+                target_root: "<target>",
+            },
+        ).read_text(encoding="utf-8")
+
+        for raw_path, placeholder_path in paths:
+            self.assertNotIn(str(raw_path), report)
+            self.assertIn(placeholder_path, report)
 
     def test_report_allows_non_path_slash_boundaries(self) -> None:
         from scripts.material_review_evaluation.reporting import render_comparison_report

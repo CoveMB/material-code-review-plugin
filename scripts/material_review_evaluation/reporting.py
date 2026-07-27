@@ -68,6 +68,13 @@ _CREDENTIAL_VALUE_PATTERNS = (
 )
 _UNIX_SLASH_CANDIDATE_PATTERN = re.compile(r"(?=(/[^\s]*))")
 _WEB_URL_PATTERN = re.compile(r"(?i)https?://[^\s<>]*")
+_REPORTER_OWNED_PATH_PLACEHOLDERS = (
+    "<home>",
+    "<repository>",
+    "<run>",
+    "<runs>",
+    "<target>",
+)
 _NON_PATH_TRAILING_PUNCTUATION = ",;:!?)}]>'\""
 _ESCAPED_INLINE_CODE_END_PATTERN = re.compile(r"\\`[,;:.!?)}\]>'\"]*$")
 _WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
@@ -164,6 +171,12 @@ def _contains_unix_absolute_path(text: str) -> bool:
     for match in _UNIX_SLASH_CANDIDATE_PATTERN.finditer(text):
         slash_index = match.start()
         if any(start <= slash_index < end for start, end in web_url_ranges):
+            continue
+        if any(
+            text[max(0, slash_index - len(placeholder)) : slash_index]
+            == placeholder
+            for placeholder in _REPORTER_OWNED_PATH_PLACEHOLDERS
+        ):
             continue
         if slash_index > 0:
             predecessor = text[slash_index - 1]

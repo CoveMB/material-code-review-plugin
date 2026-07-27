@@ -28,7 +28,7 @@ validate:
 	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py $(EVALUATOR_PYTHON)
 	$(MAKE) clean
 	$(PYTHON) -c 'import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json")]; print("JSON OK")'
-	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper"; done
+	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
@@ -49,6 +49,7 @@ package-simplification: validate
 package-check:
 	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
+	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 
 compile:
 	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py $(EVALUATOR_PYTHON)
@@ -57,7 +58,7 @@ json:
 	$(PYTHON) -c 'import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json")]; print("JSON OK")'
 
 shell:
-	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper"; done
+	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 
 evaluate-review:
 	@test -n "$(BASE_REF)" -a -n "$(CANDIDATE_REF)" -a -n "$(BENCHMARK)" -a -n "$(MODEL)" -a -n "$(REASONING_EFFORT)" || { echo "BASE_REF, CANDIDATE_REF, BENCHMARK, MODEL, and REASONING_EFFORT are required" >&2; exit 2; }

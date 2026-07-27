@@ -614,6 +614,62 @@ class StandalonePackagingTests(unittest.TestCase):
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
+        "source wrapper ordering regression requires a source checkout",
+    )
+    def test_make_targets_reject_invalid_first_shell_wrapper(self) -> None:
+        for target in ("shell", "package-check"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                (fixture_root / ".git").mkdir()
+                review_wrapper = fixture_root / "bin/material-reviewctl"
+                review_wrapper.write_text(
+                    "#!/usr/bin/env bash\nif then\n",
+                    encoding="utf-8",
+                )
+
+                result = subprocess.run(
+                    ["make", target],
+                    cwd=fixture_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("material-reviewctl", result.stdout + result.stderr)
+
+    def test_extracted_full_archive_shell_targets_check_only_shipped_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            archive_path = temp_root / "full-plugin.zip"
+            package_result = self.run_full_packager(fixture_root, archive_path)
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            extracted_root = temp_root / "extracted"
+            self.extract_archive_with_modes(archive_path, extracted_root)
+
+            self.assertTrue((extracted_root / "bin/material-reviewctl").is_file())
+            self.assertFalse((extracted_root / "bin/material-review-evaluate").exists())
+            for target in ("shell", "package-check"):
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        ["make", target],
+                        cwd=extracted_root,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=60,
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        result.stdout + result.stderr,
+                    )
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
         "ambient-layout spoofing regression requires a source checkout",
     )
     def test_ambient_distribution_environment_cannot_skip_source_checks(self) -> None:
