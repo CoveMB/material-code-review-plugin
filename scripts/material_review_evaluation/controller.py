@@ -1743,7 +1743,6 @@ class EvaluationController:
         ) or (
             classification == "materially_different"
             and reason_category == "trial_variability"
-            and bool(outlier_trials)
         ) or (
             classification == "insufficient_evidence"
             and reason_category in {"trial_variability", "infrastructure_failure"}

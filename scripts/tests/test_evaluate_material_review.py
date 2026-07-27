@@ -2791,6 +2791,7 @@ class FakeExecutor:
         self,
         *,
         agreement: dict[str, object] | None = None,
+        agreement_outliers: dict[str, list[list[int]]] | None = None,
         invalid_agreement: dict[str, str] | None = None,
         findings: dict[str, int] | None = None,
         infrastructure_failures: dict[str, int] | None = None,
@@ -2798,6 +2799,7 @@ class FakeExecutor:
         repair_label: str | None = None,
     ) -> None:
         self.agreement = dict(agreement or {})
+        self.agreement_outliers = dict(agreement_outliers or {})
         self.invalid_agreement = dict(invalid_agreement or {})
         self.findings = dict(findings or {})
         self.infrastructure_failures = dict(infrastructure_failures or {})
@@ -2948,6 +2950,15 @@ class FakeExecutor:
             artifact_citations = artifact_citations[:2]
         elif invalid_mode == "incoherent":
             reason_category = "trial_variability"
+        configured_outliers = self.agreement_outliers.get(variant)
+        if configured_outliers is not None:
+            index = min(
+                self.agreement_starts[variant] - 1,
+                len(configured_outliers) - 1,
+            )
+            outlier_trials = list(configured_outliers[index])
+        else:
+            outlier_trials = [1] if classification == "materially_different" else []
         output = {
             "schema": "material-review-evaluation/agreement/v1",
             "anonymous_variant": variant,
@@ -2955,7 +2966,7 @@ class FakeExecutor:
             "reason_category": reason_category,
             "summary": "Fake agreement result derived from the supplied native evidence.",
             "artifact_citations": artifact_citations,
-            "outlier_trials": [1] if classification == "materially_different" else [],
+            "outlier_trials": outlier_trials,
             "confidence": "high",
             "limitations": [],
         }
@@ -3414,6 +3425,25 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertEqual(summary.semantic_trial_counts, {"A": 3, "B": 2})
         self.assertEqual(executor.agreement_starts, {"A": 2, "B": 1})
 
+    def test_two_trial_disagreement_can_have_no_identifiable_outlier(self) -> None:
+        executor = FakeExecutor(
+            agreement={
+                "A": ["materially_different", "materially_similar"],
+                "B": "materially_similar",
+            },
+            agreement_outliers={"A": [[], []]},
+        )
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        initial_agreement = self.read_json(
+            summary.run_root / "variant-a/agreements/after-2.json"
+        )
+        self.assertEqual(summary.semantic_trial_counts["A"], 3)
+        self.assertEqual(initial_agreement["classification"], "materially_different")
+        self.assertEqual(initial_agreement["outlier_trials"], [])
+
     def test_old_and_current_native_schema_profiles_are_preserved(self) -> None:
         summary = self.controller(FakeExecutor()).compare(self.request())
 
@@ -3710,6 +3740,25 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertTrue(stability["unstable"])
         self.assertEqual(agreement["outlier_trials"], [1])
         self.assertEqual(summary.semantic_trial_counts["A"], 3)
+
+    def test_three_way_no_consensus_can_have_no_identifiable_outlier(self) -> None:
+        executor = FakeExecutor(
+            agreement={
+                "A": ["materially_different", "materially_different"],
+                "B": "materially_similar",
+            },
+            agreement_outliers={"A": [[1], []]},
+        )
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        agreement = self.read_json(summary.run_root / "variant-a/agreement.json")
+        stability = self.read_json(summary.run_root / "variant-a/stability.json")
+        self.assertEqual(summary.semantic_trial_counts["A"], 3)
+        self.assertEqual(agreement["classification"], "materially_different")
+        self.assertEqual(agreement["outlier_trials"], [])
+        self.assertTrue(stability["unstable"])
 
     def test_agreement_rejects_duplicate_and_missing_trial_citations(self) -> None:
         expectations = {
