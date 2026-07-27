@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ REVIEW_VALIDATOR = REPOSITORY_ROOT / "skills" / "material-code-review" / "script
 SIMPLIFICATION_VALIDATOR = (
     REPOSITORY_ROOT / "skills" / "material-code-simplification" / "scripts" / "validate_package.py"
 )
+DISTRIBUTION_LAYOUT = os.environ.get("MATERIAL_REVIEW_DISTRIBUTION_LAYOUT") == "1"
 
 
 class StandalonePackagingTests(unittest.TestCase):
@@ -92,9 +94,28 @@ class StandalonePackagingTests(unittest.TestCase):
             timeout=60,
         )
 
-    def run_package_validator(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
+    def run_package_validator(
+        self,
+        fixture_root: Path,
+        *,
+        distribution_layout: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        use_distribution_layout = (
+            DISTRIBUTION_LAYOUT
+            if distribution_layout is None
+            else distribution_layout
+        )
+        arguments = [
+            sys.executable,
+            "-B",
+            str(PACKAGE_VALIDATOR),
+            "--package-root",
+            str(fixture_root),
+        ]
+        if use_distribution_layout:
+            arguments.append("--distribution-layout")
         return subprocess.run(
-            [sys.executable, "-B", str(PACKAGE_VALIDATOR), "--package-root", str(fixture_root)],
+            arguments,
             capture_output=True,
             text=True,
             check=False,
@@ -277,6 +298,10 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
 
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_source_validator_requires_executable_evaluator_wrapper(self) -> None:
         for mutation in ("missing", "not executable"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_directory:
@@ -297,6 +322,10 @@ class StandalonePackagingTests(unittest.TestCase):
                 self.assertNotEqual(validation_result.returncode, 0)
                 self.assertIn("bin/material-review-evaluate", validation_result.stderr)
 
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_source_validator_still_validates_committed_evaluation_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
@@ -306,7 +335,10 @@ class StandalonePackagingTests(unittest.TestCase):
             )
             manifest.write_text("{ invalid evaluation JSON\n", encoding="utf-8")
 
-            validation_result = self.run_package_validator(fixture_root)
+            validation_result = self.run_package_validator(
+                fixture_root,
+                distribution_layout=False,
+            )
 
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn(
@@ -315,6 +347,10 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stderr,
             )
 
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_source_validator_requires_evaluator_test_module(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
@@ -323,11 +359,51 @@ class StandalonePackagingTests(unittest.TestCase):
             )
             evaluator_tests.unlink()
 
-            validation_result = self.run_package_validator(fixture_root)
+            validation_result = self.run_package_validator(
+                fixture_root,
+                distribution_layout=False,
+            )
 
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn(
                 "missing required file: scripts/tests/test_evaluate_material_review.py",
+                validation_result.stderr,
+            )
+
+    def test_git_checkout_requires_maintainer_surface_when_all_files_are_missing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            (fixture_root / ".git").mkdir()
+            for relative in (
+                ".evaluation-runs",
+                ".superpowers",
+                "docs/superpowers",
+                "evaluations",
+                "bin/material-review-evaluate",
+                "scripts/evaluate_material_review.py",
+                "scripts/material_review_evaluation",
+                "scripts/tests/test_evaluate_material_review.py",
+            ):
+                path = fixture_root / relative
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
+
+            validation_result = subprocess.run(
+                ["make", "package-check"],
+                cwd=fixture_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "missing required file: bin/material-review-evaluate",
                 validation_result.stderr,
             )
 
@@ -348,6 +424,7 @@ class StandalonePackagingTests(unittest.TestCase):
                     str(PACKAGE_VALIDATOR),
                     "--package-root",
                     str(fixture_root),
+                    *(["--distribution-layout"] if DISTRIBUTION_LAYOUT else []),
                     "--full-archive",
                     str(output),
                 ],
@@ -364,6 +441,26 @@ class StandalonePackagingTests(unittest.TestCase):
             )
 
     def test_extracted_full_archive_runs_retained_validation_surface(self) -> None:
+        if DISTRIBUTION_LAYOUT:
+            for relative in (
+                "bin/material-review-evaluate",
+                "scripts/evaluate_material_review.py",
+                "scripts/material_review_evaluation",
+                "scripts/tests/test_evaluate_material_review.py",
+                "evaluations",
+            ):
+                self.assertFalse((REPOSITORY_ROOT / relative).exists(), relative)
+            validation_result = self.run_package_validator(
+                REPOSITORY_ROOT,
+                distribution_layout=True,
+            )
+            self.assertEqual(
+                validation_result.returncode,
+                0,
+                validation_result.stderr,
+            )
+            return
+
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
             fixture_root = self.create_full_plugin_fixture(temp_root)
@@ -400,7 +497,20 @@ class StandalonePackagingTests(unittest.TestCase):
                 "material-code-review package 1.2.0 is structurally valid",
                 validation_result.stdout,
             )
+            combined_output = validation_result.stdout + validation_result.stderr
+            self.assertIn(
+                "test_archive_validator_rejects_unsafe_and_incomplete_archives",
+                combined_output,
+            )
+            self.assertRegex(
+                combined_output,
+                r"test_source_validator_requires_evaluator_test_module .* skipped ",
+            )
 
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_make_evaluator_requires_explicit_configuration_and_is_not_in_validation(
         self,
     ) -> None:
@@ -595,6 +705,10 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(incomplete_result.returncode, 0)
             self.assertIn("missing archive entry: core/reviewctl.py", incomplete_result.stderr)
 
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "case-only collision is a source-checkout packaging fixture",
+    )
     @unittest.skipIf(sys.platform.startswith("win"), "fixture requires POSIX filename semantics")
     def test_packager_rejects_case_only_collision(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:

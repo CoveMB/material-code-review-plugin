@@ -67,9 +67,10 @@ _CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
 _UNIX_ABSOLUTE_PATH_PATTERN = re.compile(
-    r"(?<![\w.<>/\\`-])/(?!/)[^\s<>]*"
+    r"(?<![\w.<>/\\])/(?!/)[^\s<>]*"
 )
 _NON_PATH_TRAILING_PUNCTUATION = ",;:!?)}]>'\""
+_ESCAPED_INLINE_CODE_END_PATTERN = re.compile(r"\\`[,;:.!?)}\]>'\"]*$")
 _WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\[A-Za-z0-9._-]+[\\/])"
 )
@@ -159,7 +160,7 @@ def _render_list(values: Sequence[str]) -> list[str]:
 
 def _contains_unix_absolute_path(text: str) -> bool:
     for match in _UNIX_ABSOLUTE_PATH_PATTERN.finditer(text):
-        path_suffix = match.group()[1:]
+        path_suffix = _ESCAPED_INLINE_CODE_END_PATTERN.sub("", match.group()[1:])
         if path_suffix.rstrip(_NON_PATH_TRAILING_PUNCTUATION):
             return True
     return False

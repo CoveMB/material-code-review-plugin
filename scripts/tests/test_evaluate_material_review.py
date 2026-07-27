@@ -4639,6 +4639,24 @@ class EvaluationCliTests(unittest.TestCase):
         with self.assertRaisesRegex(EvaluationError, "absolute machine path"):
             render_comparison_report(self.run_root)
 
+    def test_report_rejects_inline_code_and_punctuation_adjacent_paths(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        for value in (
+            "Inline path `/opt/private.json` must not publish.",
+            "Adjacent path [-/opt/private.json] must not publish.",
+        ):
+            with self.subTest(value=value):
+                self._mutate_locked_judgment(
+                    lambda judgment: judgment.__setitem__("limitations", [value])
+                )
+
+                with self.assertRaisesRegex(
+                    EvaluationError,
+                    "absolute machine path",
+                ):
+                    render_comparison_report(self.run_root)
+
     def test_report_allows_non_path_slash_boundaries(self) -> None:
         from scripts.material_review_evaluation.reporting import render_comparison_report
 

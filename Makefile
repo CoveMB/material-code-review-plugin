@@ -8,21 +8,27 @@ FULL_ZIP := $(DIST_DIR)/material-code-review-plugin-$(VERSION).zip
 STANDALONE_ZIP := $(DIST_DIR)/material-code-review-codex-skill-$(VERSION).zip
 SIMPLIFY_STANDALONE_ZIP := $(DIST_DIR)/material-code-simplification-codex-skill-$(SIMPLIFY_VERSION).zip
 
+ifneq ($(wildcard .git),)
+PACKAGE_LAYOUT_ARGUMENT :=
+DISTRIBUTION_TEST_ENV :=
+else
+PACKAGE_LAYOUT_ARGUMENT := --distribution-layout
+DISTRIBUTION_TEST_ENV := MATERIAL_REVIEW_DISTRIBUTION_LAYOUT=1
+endif
+
 ifneq ($(wildcard scripts/evaluate_material_review.py),)
 EVALUATOR_PYTHON := scripts/evaluate_material_review.py scripts/material_review_evaluation/*.py
 EVALUATOR_WRAPPER := bin/material-review-evaluate
-SCRIPTS_TEST_COMMAND := $(PYTHON) -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
 else
 EVALUATOR_PYTHON :=
 EVALUATOR_WRAPPER :=
-SCRIPTS_TEST_COMMAND := @:
 endif
 
 .PHONY: validate package package-simplification package-check test compile json shell clean evaluate-review
 
 validate:
 	$(MAKE) clean
-	$(PYTHON) scripts/validate_package.py --package-root .
+	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
 	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py $(EVALUATOR_PYTHON)
 	$(MAKE) clean
@@ -30,9 +36,9 @@ validate:
 	bash -n bin/material-reviewctl $(EVALUATOR_WRAPPER)
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
-	$(SCRIPTS_TEST_COMMAND)
+	$(DISTRIBUTION_TEST_ENV) $(PYTHON) -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
 	$(MAKE) clean
-	$(PYTHON) scripts/validate_package.py --package-root .
+	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
 
 package: validate
@@ -46,7 +52,7 @@ package-simplification: validate
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py --archive $(SIMPLIFY_STANDALONE_ZIP)
 
 package-check:
-	$(PYTHON) scripts/validate_package.py --package-root .
+	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
 
 compile:
@@ -65,7 +71,7 @@ evaluate-review:
 test:
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
-	$(SCRIPTS_TEST_COMMAND)
+	$(DISTRIBUTION_TEST_ENV) $(PYTHON) -B -m unittest discover -s scripts/tests -p 'test_*.py' -v
 
 clean:
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

@@ -226,7 +226,11 @@ def iter_files(root: Path) -> Iterable[Path]:
                 yield path
 
 
-def check_source_package(root: Path) -> list[str]:
+def check_source_package(
+    root: Path,
+    *,
+    distribution_layout: bool = False,
+) -> list[str]:
     errors: list[str] = []
     if sys.version_info < (3, 10):
         return ["package validation requires Python 3.10+"]
@@ -234,12 +238,8 @@ def check_source_package(root: Path) -> list[str]:
         return [f"package root is not a directory: {root}"]
 
     actual = {path.relative_to(root).as_posix() for path in iter_files(root)}
-    maintainer_source_checkout = any(
-        is_maintainer_only_archive_entry(relative)
-        for relative in actual
-    )
     required = DISTRIBUTABLE_REQUIRED
-    if maintainer_source_checkout:
+    if not distribution_layout:
         required = required | MAINTAINER_SOURCE_REQUIRED
     for rel in sorted(required - actual):
         fail(errors, f"missing required file: {rel}")
@@ -479,6 +479,11 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package-root", default=str(ROOT), help="Source package root")
+    parser.add_argument(
+        "--distribution-layout",
+        action="store_true",
+        help="Validate an extracted distributable that intentionally omits maintainer-only files",
+    )
     parser.add_argument("--full-archive", action="append", default=[], help="Full package ZIP to validate")
     parser.add_argument("--standalone-archive", action="append", default=[], help="Standalone Codex skill ZIP to validate")
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
@@ -487,7 +492,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    errors = check_source_package(Path(args.package_root).resolve())
+    errors = check_source_package(
+        Path(args.package_root).resolve(),
+        distribution_layout=args.distribution_layout,
+    )
     for raw in args.full_archive:
         errors.extend(check_zip(Path(raw).resolve(), standalone=False))
     for raw in args.standalone_archive:
