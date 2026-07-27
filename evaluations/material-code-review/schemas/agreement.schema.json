@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "material-review-evaluation/agreement/v1",
+  "title": "Material review trial agreement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "anonymous_variant",
+    "classification",
+    "reason_category",
+    "summary",
+    "artifact_citations",
+    "outlier_trials",
+    "confidence",
+    "limitations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "material-review-evaluation/agreement/v1"
+    },
+    "anonymous_variant": {
+      "enum": [
+        "A",
+        "B"
+      ]
+    },
+    "classification": {
+      "enum": [
+        "materially_similar",
+        "materially_different",
+        "insufficient_evidence"
+      ]
+    },
+    "reason_category": {
+      "enum": [
+        "trial_agreement",
+        "trial_variability",
+        "infrastructure_failure"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_citations": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/artifact_citation"
+      }
+    },
+    "outlier_trials": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3
+      }
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "artifact_citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trial",
+        "artifact",
+        "evidence"
+      ],
+      "properties": {
+        "trial": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

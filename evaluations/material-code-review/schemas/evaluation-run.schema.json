@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "material-review-evaluation/run/v1",
+  "title": "Material review evaluation run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "request_fingerprint",
+    "benchmark_id",
+    "benchmark_hashes",
+    "executor_configuration",
+    "resolved_skill_shas",
+    "private_variant_map_sha256",
+    "phase",
+    "validated_predecessor_hashes",
+    "trials",
+    "infrastructure_attempts",
+    "workspaces",
+    "created_at",
+    "updated_at",
+    "terminal_reason",
+    "judgment_sha256",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "material-review-evaluation/run/v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_fingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "benchmark_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "benchmark_hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_sha256",
+        "review_request_sha256",
+        "judge_oracle_sha256",
+        "judge_rubric_sha256"
+      ],
+      "properties": {
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "review_request_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "judge_oracle_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "judge_rubric_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "executor_configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "adapter_version",
+        "model",
+        "reasoning_effort",
+        "permission_profile",
+        "isolation_mode"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reasoning_effort": {
+          "type": "string",
+          "minLength": 1
+        },
+        "permission_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "isolation_mode": {
+          "enum": [
+            "filesystem_blinding",
+            "logical_blinding"
+          ]
+        }
+      }
+    },
+    "resolved_skill_shas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "candidate"
+      ],
+      "properties": {
+        "baseline": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "candidate": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "private_variant_map_sha256": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "phase": {
+      "enum": [
+        "PREFLIGHT",
+        "PREPARED",
+        "INITIAL_TRIALS",
+        "CONSISTENCY_CHECK",
+        "OPTIONAL_THIRD_TRIAL",
+        "BLINDED_JUDGMENT",
+        "IDENTITY_REVEAL",
+        "COMPLETE",
+        "INCOMPLETE",
+        "ABORTED"
+      ]
+    },
+    "validated_predecessor_hashes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact_hash"
+      }
+    },
+    "trials": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trial_record"
+      }
+    },
+    "infrastructure_attempts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/attempt_record"
+      }
+    },
+    "workspaces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workspace_record"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "terminal_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "judgment_sha256": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "report_sha256": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact_hash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "sha256"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "trial_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anonymous_variant",
+        "trial_number",
+        "status",
+        "artifact_sha256",
+        "session_id"
+      ],
+      "properties": {
+        "anonymous_variant": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "trial_number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "running",
+            "waiting_gate_a",
+            "waiting_gate_b",
+            "complete",
+            "failed"
+          ]
+        },
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "attempt_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semantic_label",
+        "attempt_number",
+        "status",
+        "started_at",
+        "ended_at",
+        "error"
+      ],
+      "properties": {
+        "semantic_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "complete",
+            "infrastructure_failure"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "workspace_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "kind",
+        "path",
+        "owned",
+        "cleaned"
+      ],
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "workflow",
+            "target",
+            "trial_output"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owned": {
+          "type": "boolean"
+        },
+        "cleaned": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

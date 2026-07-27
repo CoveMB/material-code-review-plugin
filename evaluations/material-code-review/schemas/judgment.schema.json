@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "material-review-evaluation/judgment/v1",
+  "title": "Blinded material review judgment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "dimensions",
+    "overall_decision",
+    "overall_rationale",
+    "trial_stability",
+    "known_failures",
+    "unsupported_findings",
+    "plan_boundary_comparison",
+    "workflow_failures",
+    "cost_observations",
+    "confidence",
+    "limitations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "material-review-evaluation/judgment/v1"
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding_validity_and_coverage",
+        "validation_quality",
+        "repair_safety",
+        "scope_and_gate_integrity",
+        "traceability",
+        "machine_validation_and_artifact_completeness",
+        "consistency_across_trials",
+        "report_clarity_and_copyability",
+        "efficiency_and_cost"
+      ],
+      "properties": {
+        "finding_validity_and_coverage": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "validation_quality": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "repair_safety": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "scope_and_gate_integrity": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "traceability": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "machine_validation_and_artifact_completeness": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "consistency_across_trials": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "report_clarity_and_copyability": {
+          "$ref": "#/$defs/dimension_judgment"
+        },
+        "efficiency_and_cost": {
+          "$ref": "#/$defs/dimension_judgment"
+        }
+      }
+    },
+    "overall_decision": {
+      "enum": [
+        "VARIANT_A_STRONGER",
+        "VARIANT_B_STRONGER",
+        "MATERIAL_TIE",
+        "INSUFFICIENT_EVIDENCE"
+      ]
+    },
+    "overall_rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trial_stability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "known_failures": {
+      "$ref": "#/$defs/string_list"
+    },
+    "unsupported_findings": {
+      "$ref": "#/$defs/string_list"
+    },
+    "plan_boundary_comparison": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow_failures": {
+      "$ref": "#/$defs/string_list"
+    },
+    "cost_observations": {
+      "$ref": "#/$defs/string_list"
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "limitations": {
+      "$ref": "#/$defs/string_list"
+    }
+  },
+  "$defs": {
+    "dimension_judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "rationale",
+        "artifact_citations"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "A_STRONGER",
+            "B_STRONGER",
+            "TIE",
+            "UNKNOWN"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_citations": {
+          "$ref": "#/$defs/string_list"
+        }
+      }
+    },
+    "string_list": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
