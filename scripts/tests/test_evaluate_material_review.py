@@ -10,6 +10,7 @@ import textwrap
 import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path, PurePosixPath
+from subprocess import CompletedProcess, TimeoutExpired
 from types import SimpleNamespace
 
 from scripts.material_review_evaluation.benchmark import CommandSpec, load_benchmark
@@ -27,6 +28,18 @@ from scripts.material_review_evaluation.model import (
     canonical_hash,
     safe_relative_path,
     sha256_file,
+)
+from scripts.material_review_evaluation.bundles import (
+    build_agreement_bundle,
+    build_comparison_bundle,
+    build_trial_request,
+    redact_machine_paths,
+    scan_blinded_bundle,
+)
+from scripts.material_review_evaluation.executor import (
+    CodexExecutor,
+    InfrastructureFailure,
+    SessionSpec,
 )
 from scripts.material_review_evaluation.workspace import (
     WorkspaceRecord,
@@ -1890,6 +1903,499 @@ class SchemaContractTests(unittest.TestCase):
                         pending.extend(value.values())
                     elif isinstance(value, list):
                         pending.extend(value)
+
+
+class RecordingRunner:
+    def __init__(
+        self,
+        *,
+        stdout: str,
+        stderr: str = "",
+        returncode: int = 0,
+        error: BaseException | None = None,
+    ) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+        self.error = error
+        self.calls: list[tuple[list[str], dict[str, object]]] = []
+
+    @property
+    def argv(self) -> list[str]:
+        return self.calls[-1][0]
+
+    @property
+    def options(self) -> dict[str, object]:
+        return self.calls[-1][1]
+
+    def __call__(self, argv: list[str], **options: object) -> CompletedProcess[str]:
+        self.calls.append((list(argv), dict(options)))
+        if self.error is not None:
+            raise self.error
+        return CompletedProcess(
+            argv,
+            self.returncode,
+            stdout=self.stdout,
+            stderr=self.stderr,
+        )
+
+
+class ExecutorAndBlindingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.target_path = self.root / "target"
+        self.workflow_path = self.root / "workflow"
+        self.trial_output = self.root / "trial-output"
+        self.bundle_output = self.root / "bundle-output"
+        for path in (
+            self.target_path,
+            self.workflow_path,
+            self.trial_output,
+            self.bundle_output,
+        ):
+            path.mkdir()
+        self.skill_path = self.workflow_path / "SKILL.md"
+        self.skill_path.write_text("# Material review\n", encoding="utf-8")
+        self.prompt_path = self.root / "prompt.md"
+        self.prompt_path.write_text("Perform the anonymous task.\n", encoding="utf-8")
+        self.schema_path = self.root / "output.schema.json"
+        self.schema_path.write_text(
+            json.dumps(
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["decision"],
+                    "properties": {"decision": {"const": "ok"}},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.environment = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(self.root / "home"),
+            "CODEX_HOME": str(self.root / "codex-home"),
+            "LANG": "en_US.UTF-8",
+            "TMPDIR": str(self.root / "tmp"),
+            "LC_SECRET": "locale-shaped-secret",
+            "OPENAI_API_KEY": "configured-openai-key",
+            "SSH_AUTH_SOCK": str(self.root / "agent.sock"),
+            "GITHUB_TOKEN": "github-secret",
+            "AWS_SECRET_ACCESS_KEY": "cloud-secret",
+            "UNRELATED": "do-not-inherit",
+        }
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def session_spec(
+        self,
+        *,
+        role: str = "trial",
+        output_schema: Path | None = None,
+        sandbox_mode: str = "workspace-write",
+    ) -> SessionSpec:
+        return SessionSpec(
+            role=role,
+            working_directory=(
+                self.target_path if role == "trial" else self.bundle_output
+            ),
+            readable_workflow=self.workflow_path if role == "trial" else None,
+            output_directory=self.trial_output,
+            prompt_path=self.prompt_path,
+            output_schema=output_schema,
+            model="gpt-5.6",
+            reasoning_effort="high",
+            sandbox_mode=sandbox_mode,
+            timeout_seconds=123,
+        )
+
+    @staticmethod
+    def successful_jsonl(
+        *,
+        thread_id: str = "trial-session",
+        final_output: str = "review paused at Gate A",
+    ) -> str:
+        events = (
+            {"type": "thread.started", "thread_id": thread_id},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "tool-1",
+                    "type": "command_execution",
+                    "command": "python3 reviewctl.py status",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {"id": "message-1", "type": "agent_message", "text": final_output},
+            },
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 50,
+                    "cached_input_tokens": 10,
+                    "output_tokens": 20,
+                },
+            },
+        )
+        return "".join(json.dumps(event) + "\n" for event in events)
+
+    def test_codex_start_records_thread_id_exact_configuration_and_narrow_environment(
+        self,
+    ) -> None:
+        runner = RecordingRunner(stdout=self.successful_jsonl())
+
+        result = CodexExecutor(runner=runner, environment=self.environment).start(
+            self.session_spec()
+        )
+
+        self.assertEqual(result.session_id, "trial-session")
+        self.assertEqual(result.status, "complete")
+        self.assertIsNone(result.failure)
+        self.assertEqual(
+            runner.argv,
+            [
+                "codex",
+                "exec",
+                "--json",
+                "--ignore-user-config",
+                "--model",
+                "gpt-5.6",
+                "-c",
+                "model_reasoning_effort=high",
+                "--sandbox",
+                "workspace-write",
+                "--cd",
+                str(self.target_path),
+                "--add-dir",
+                str(self.workflow_path),
+                "--add-dir",
+                str(self.trial_output),
+                "-",
+            ],
+        )
+        self.assertEqual(runner.options["timeout"], 123)
+        self.assertIs(runner.options["shell"], False)
+        self.assertEqual(
+            set(runner.options["env"]),  # type: ignore[arg-type]
+            {"PATH", "HOME", "CODEX_HOME", "LANG", "TMPDIR", "OPENAI_API_KEY"},
+        )
+        self.assertEqual(result.usage["input_tokens"], 50)
+        self.assertEqual(len(result.tool_events), 1)
+        self.assertTrue(result.stdout_path.is_file())
+        self.assertTrue(result.stderr_path.is_file())
+        self.assertNotIn("configured-openai-key", result.stdout_path.read_text())
+        self.assertEqual(CodexExecutor(runner=runner).status("unknown"), "failed")
+
+    def test_codex_resume_uses_recorded_session_and_configuration(self) -> None:
+        runner = RecordingRunner(stdout=self.successful_jsonl())
+        executor = CodexExecutor(runner=runner, environment=self.environment)
+        spec = self.session_spec()
+        executor.start(spec)
+        runner.stdout = self.successful_jsonl(final_output="review paused at Gate B")
+
+        result = executor.resume("trial-session", "Approve Gate A.", spec)
+
+        self.assertEqual(result.session_id, "trial-session")
+        self.assertEqual(
+            runner.argv,
+            [
+                "codex",
+                "exec",
+                "resume",
+                "--json",
+                "--ignore-user-config",
+                "--model",
+                "gpt-5.6",
+                "-c",
+                "model_reasoning_effort=high",
+                "trial-session",
+                "-",
+            ],
+        )
+        self.assertEqual(runner.options["cwd"], self.target_path)
+        self.assertEqual(runner.options["input"], "Approve Gate A.")
+        self.assertEqual(executor.status("trial-session"), "complete")
+
+    def test_explicitly_empty_child_environment_does_not_inherit_parent_values(
+        self,
+    ) -> None:
+        runner = RecordingRunner(stdout=self.successful_jsonl())
+
+        CodexExecutor(runner=runner, environment={}).start(self.session_spec())
+
+        self.assertEqual(runner.options["env"], {})
+
+    def test_agreement_start_is_fresh_ephemeral_read_only_and_schema_validated(
+        self,
+    ) -> None:
+        runner = RecordingRunner(
+            stdout=self.successful_jsonl(final_output='{"decision":"ok"}')
+        )
+
+        result = CodexExecutor(runner=runner, environment=self.environment).start(
+            self.session_spec(
+                role="agreement",
+                output_schema=self.schema_path,
+                sandbox_mode="read-only",
+            )
+        )
+
+        self.assertIsNone(result.failure)
+        self.assertIn("--ephemeral", runner.argv)
+        self.assertIn("--skip-git-repo-check", runner.argv)
+        self.assertIn("--output-schema", runner.argv)
+        self.assertIn(str(self.schema_path), runner.argv)
+        self.assertEqual(runner.argv[runner.argv.index("--sandbox") + 1], "read-only")
+        self.assertNotIn("--add-dir", runner.argv)
+
+    def test_codex_returns_typed_infrastructure_failures(self) -> None:
+        cases = (
+            (
+                "nonzero_exit",
+                RecordingRunner(stdout=self.successful_jsonl(), returncode=7),
+                self.session_spec(),
+            ),
+            (
+                "missing_thread_id",
+                RecordingRunner(stdout='{"type":"turn.completed"}\n'),
+                self.session_spec(),
+            ),
+            (
+                "malformed_jsonl",
+                RecordingRunner(stdout="not-json\n"),
+                self.session_spec(),
+            ),
+            (
+                "malformed_jsonl",
+                RecordingRunner(stdout=self.successful_jsonl(thread_id="--last")),
+                self.session_spec(),
+            ),
+            (
+                "timeout",
+                RecordingRunner(
+                    stdout="",
+                    error=TimeoutExpired(["codex", "exec"], timeout=123),
+                ),
+                self.session_spec(),
+            ),
+            (
+                "schema_invalid_output",
+                RecordingRunner(
+                    stdout=self.successful_jsonl(final_output='{"decision":"wrong"}')
+                ),
+                self.session_spec(
+                    role="judge",
+                    output_schema=self.schema_path,
+                    sandbox_mode="read-only",
+                ),
+            ),
+        )
+        for expected_kind, runner, spec in cases:
+            with self.subTest(kind=expected_kind):
+                result = CodexExecutor(
+                    runner=runner,
+                    environment=self.environment,
+                ).start(spec)
+                self.assertEqual(result.status, "failed")
+                self.assertIsInstance(result.failure, InfrastructureFailure)
+                self.assertEqual(result.failure.kind, expected_kind)  # type: ignore[union-attr]
+
+    def test_trial_request_contains_only_anonymous_operational_inputs_and_hashes(
+        self,
+    ) -> None:
+        review_request = self.root / "review-request.md"
+        review_request.write_text("Review the frozen range.\n", encoding="utf-8")
+        request_path = self.trial_output / "trial-request.md"
+        record_path = self.trial_output / "trial-request.record.json"
+        configuration = {
+            "model": "gpt-5.6",
+            "reasoning_effort": "high",
+            "sandbox_mode": "workspace-write",
+            "timeout_seconds": 123,
+        }
+
+        record = build_trial_request(
+            request_path,
+            record_path,
+            review_request_path=review_request,
+            materialized_skill_path=self.skill_path,
+            target_path=self.target_path,
+            artifact_root=self.trial_output,
+            anonymous_trial_label="A-1",
+            isolation_mode="filesystem_blinding",
+            executor_configuration=configuration,
+        )
+
+        text = request_path.read_text(encoding="utf-8")
+        self.assertIn("Review the frozen range.", text)
+        self.assertIn(str(self.skill_path), text)
+        self.assertIn(str(self.target_path), text)
+        self.assertIn(str(self.trial_output), text)
+        self.assertIn("read that exact skill and no other copy", text.lower())
+        self.assertIn("filesystem_blinding", text)
+        self.assertNotIn("feature/evaluator", text)
+        expected_request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
+        expected_configuration_hash = hashlib.sha256(
+            json.dumps(
+                configuration,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(record["request_sha256"], expected_request_hash)
+        self.assertEqual(
+            record["executor_configuration_sha256"],
+            expected_configuration_hash,
+        )
+        self.assertEqual(json.loads(record_path.read_text()), record)
+        self.assertNotIn("model", record)
+
+    def test_agreement_and_comparison_bundles_copy_only_allowlisted_inputs(self) -> None:
+        normalized_a = self.root / "normalized-a.json"
+        normalized_b = self.root / "normalized-b.json"
+        normalized_a.write_text(
+            json.dumps({"variant": "A", "artifact_path": str(self.target_path / "a")})
+            + "\n",
+            encoding="utf-8",
+        )
+        normalized_b.write_text(json.dumps({"variant": "B"}) + "\n", encoding="utf-8")
+        agreement_a = self.root / "agreement-a.json"
+        agreement_b = self.root / "agreement-b.json"
+        agreement_a.write_text(json.dumps({"anonymous_variant": "A"}) + "\n")
+        agreement_b.write_text(json.dumps({"anonymous_variant": "B"}) + "\n")
+        rubric = self.root / "judge-rubric.md"
+        oracle = self.root / "judge-oracle.json"
+        rubric.write_text("Judge material quality.\n", encoding="utf-8")
+        oracle.write_text(json.dumps({"non_exhaustive": True}) + "\n", encoding="utf-8")
+        agreement_prompt = self.root / "agreement-prompt.md"
+        comparison_prompt = self.root / "comparison-prompt.md"
+        agreement_prompt.write_text("Compare one variant.\n", encoding="utf-8")
+        comparison_prompt.write_text("Compare A and B.\n", encoding="utf-8")
+        prefixes = {self.target_path: "<target>", self.root: "<run>"}
+
+        agreement_bundle = build_agreement_bundle(
+            self.root / "agreement-bundle",
+            anonymous_variant="A",
+            normalized_trials=(normalized_a,),
+            prompt_path=agreement_prompt,
+            schema_path=self.schema_path,
+            path_prefixes=prefixes,
+        )
+        comparison_bundle = build_comparison_bundle(
+            self.root / "comparison-bundle",
+            variant_a_trials=(normalized_a,),
+            variant_b_trials=(normalized_b,),
+            agreement_a=agreement_a,
+            agreement_b=agreement_b,
+            rubric_path=rubric,
+            oracle_path=oracle,
+            prompt_path=comparison_prompt,
+            schema_path=self.schema_path,
+            path_prefixes=prefixes,
+        )
+
+        agreement_files = {
+            path.relative_to(agreement_bundle).as_posix()
+            for path in agreement_bundle.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(
+            agreement_files,
+            {"bundle.json", "prompt.md", "output.schema.json", "trials/trial-1.json"},
+        )
+        agreement_manifest = json.loads(
+            (agreement_bundle / "bundle.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(agreement_manifest["anonymous_variant"], "A")
+        self.assertNotIn("B", json.dumps(agreement_manifest))
+        self.assertIn(
+            "<target>/a",
+            (agreement_bundle / "trials/trial-1.json").read_text(encoding="utf-8"),
+        )
+        comparison_files = {
+            path.relative_to(comparison_bundle).as_posix()
+            for path in comparison_bundle.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(
+            comparison_files,
+            {
+                "bundle.json",
+                "prompt.md",
+                "output.schema.json",
+                "judge-rubric.md",
+                "judge-oracle.json",
+                "variants/A/trial-1.json",
+                "variants/B/trial-1.json",
+                "agreements/A.json",
+                "agreements/B.json",
+            },
+        )
+        comparison_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in comparison_bundle.rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn("private_map", comparison_text)
+        self.assertNotIn("feature/evaluator", comparison_text)
+
+    def test_redaction_uses_longest_configured_machine_prefix_first(self) -> None:
+        redacted = redact_machine_paths(
+            f"{self.root}/run/file {self.root}/other",
+            {self.root: "<home>", self.root / "run": "<run>"},
+        )
+
+        self.assertEqual(redacted, "<run>/file <home>/other")
+
+    def test_blinded_bundle_scan_rejects_identity_credentials_paths_and_symlinks(
+        self,
+    ) -> None:
+        private_tokens = (
+            "feature/evaluator",
+            "9" * 40,
+            "Secret evaluator commit subject",
+        )
+        leaks = (
+            ("candidate ref feature/evaluator", "identity leak"),
+            ("skill SHA " + "9" * 40, "identity leak"),
+            ("Secret evaluator commit subject", "identity leak"),
+            ("new variant performed better", "identity leak"),
+            ("OPENAI_API_KEY=secret-value", "credential leak"),
+            ('{"API_KEY":"secret-value"}', "credential leak"),
+            ('{"MY_API_KEY":"secret-value"}', "credential leak"),
+            (str(self.root / "machine"), "absolute path"),
+        )
+        for index, (text, message) in enumerate(leaks):
+            bundle = self.root / f"leak-{index}"
+            bundle.mkdir()
+            (bundle / "artifact.txt").write_text(text, encoding="utf-8")
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(EvaluationError, message):
+                    scan_blinded_bundle(bundle, private_tokens)
+
+        bundle = self.root / "symlink-bundle"
+        bundle.mkdir()
+        outside = self.root / "outside.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+        os.symlink(outside, bundle / "escape")
+        with self.assertRaisesRegex(EvaluationError, "symlink escape"):
+            scan_blinded_bundle(bundle, private_tokens)
+
+        bundle = self.root / "filename-bundle"
+        bundle.mkdir()
+        (bundle / ("9" * 40 + ".json")).write_text("{}\n", encoding="utf-8")
+        with self.assertRaisesRegex(EvaluationError, "identity leak"):
+            scan_blinded_bundle(bundle, private_tokens)
+
+        bundle = self.root / "non-regular-bundle"
+        bundle.mkdir()
+        os.mkfifo(bundle / "pipe")
+        with self.assertRaisesRegex(EvaluationError, "non-regular file"):
+            scan_blinded_bundle(bundle, private_tokens)
 
 
 if __name__ == "__main__":
