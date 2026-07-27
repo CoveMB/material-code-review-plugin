@@ -2318,6 +2318,33 @@ class ExecutorAndBlindingTests(unittest.TestCase):
                 self.assertEqual(result.status, "failed")
                 self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
 
+    def test_output_schema_date_time_accepts_actual_leap_second_instants(
+        self,
+    ) -> None:
+        schema = {"type": "string", "format": "date-time"}
+
+        for valid in (
+            "2016-12-31T23:59:60Z",
+            "2016-12-31T15:59:60-08:00",
+            "2017-01-01T00:59:60+01:00",
+        ):
+            with self.subTest(valid=valid):
+                self.assertIsNone(self.execute_with_schema(schema, valid).failure)
+
+    def test_output_schema_date_time_rejects_unannounced_leap_seconds(
+        self,
+    ) -> None:
+        schema = {"type": "string", "format": "date-time"}
+
+        for invalid in (
+            "2026-07-27T12:30:60Z",
+            "2016-12-31T23:59:60+01:00",
+        ):
+            with self.subTest(invalid=invalid):
+                result = self.execute_with_schema(schema, invalid)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
+
     def test_output_schema_with_unknown_keyword_fails_closed(self) -> None:
         result = self.execute_with_schema(
             {"type": "object", "unsupportedConstraint": True},

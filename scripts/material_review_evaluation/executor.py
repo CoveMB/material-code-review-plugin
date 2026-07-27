@@ -7,7 +7,7 @@ import re
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
@@ -117,8 +117,42 @@ _SUPPORTED_SCHEMA_TYPES = frozenset(
 )
 _RFC3339_DATE_TIME_PATTERN = re.compile(
     r"^(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]"
-    r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:(?:[0-5][0-9]|60)"
-    r"(?:\.[0-9]+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
+    r"(?P<hour>[01][0-9]|2[0-3]):(?P<minute>[0-5][0-9]):"
+    r"(?P<second>[0-5][0-9]|60)(?:\.[0-9]+)?"
+    r"(?P<offset>[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
+)
+# Explicit freshness boundary: this is the complete IERS-published set through
+# Bulletin C 72 (2026-07-06). Update only when IERS announces another insertion.
+_RFC3339_LEAP_SECOND_UTC_INSTANTS = frozenset(
+    {
+        "1972-06-30T23:59:60Z",
+        "1972-12-31T23:59:60Z",
+        "1973-12-31T23:59:60Z",
+        "1974-12-31T23:59:60Z",
+        "1975-12-31T23:59:60Z",
+        "1976-12-31T23:59:60Z",
+        "1977-12-31T23:59:60Z",
+        "1978-12-31T23:59:60Z",
+        "1979-12-31T23:59:60Z",
+        "1981-06-30T23:59:60Z",
+        "1982-06-30T23:59:60Z",
+        "1983-06-30T23:59:60Z",
+        "1985-06-30T23:59:60Z",
+        "1987-12-31T23:59:60Z",
+        "1989-12-31T23:59:60Z",
+        "1990-12-31T23:59:60Z",
+        "1992-06-30T23:59:60Z",
+        "1993-06-30T23:59:60Z",
+        "1994-06-30T23:59:60Z",
+        "1995-12-31T23:59:60Z",
+        "1997-06-30T23:59:60Z",
+        "1998-12-31T23:59:60Z",
+        "2005-12-31T23:59:60Z",
+        "2008-12-31T23:59:60Z",
+        "2012-06-30T23:59:60Z",
+        "2015-06-30T23:59:60Z",
+        "2016-12-31T23:59:60Z",
+    }
 )
 
 
@@ -574,10 +608,39 @@ def _is_valid_datetime(value: str) -> bool:
     if match is None:
         return False
     try:
-        date.fromisoformat(match.group("date"))
+        parsed_date = date.fromisoformat(match.group("date"))
     except ValueError:
         return False
+    if match.group("second") == "60":
+        return _is_known_leap_second(parsed_date, match)
     return True
+
+
+def _is_known_leap_second(parsed_date: date, match: re.Match[str]) -> bool:
+    offset_text = match.group("offset")
+    if offset_text.casefold() == "z":
+        utc_offset = timedelta()
+    else:
+        direction = 1 if offset_text[0] == "+" else -1
+        utc_offset = direction * timedelta(
+            hours=int(offset_text[1:3]),
+            minutes=int(offset_text[4:6]),
+        )
+    try:
+        local_anchor = datetime(
+            parsed_date.year,
+            parsed_date.month,
+            parsed_date.day,
+            int(match.group("hour")),
+            int(match.group("minute")),
+            59,
+            tzinfo=timezone(utc_offset),
+        )
+        utc_anchor = local_anchor.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return False
+    utc_instant = utc_anchor.strftime("%Y-%m-%dT%H:%M:60Z")
+    return utc_instant in _RFC3339_LEAP_SECOND_UTC_INSTANTS
 
 
 def _validate_json_value(
