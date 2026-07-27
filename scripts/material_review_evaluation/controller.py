@@ -501,6 +501,7 @@ class EvaluationController:
         preparation_path = run_root / "state/preparation.json"
         if preparation_path.is_file():
             preparation = self._read_json(preparation_path, "preparation")
+            self._reconcile_preparation_state(run_root, preparation)
             if preparation.get("shared_materialization_failure") is True:
                 return self._terminal(
                     run_root,
@@ -523,7 +524,6 @@ class EvaluationController:
 
         private_map = self._private_map(run_root)
         resolved = self._resolved_variants(run_root)
-        records: list[WorkspaceRecord] = []
         variants: dict[str, dict[str, Any]] = {}
         for anonymous_variant in ("A", "B"):
             identity = str(private_map[anonymous_variant])
@@ -571,7 +571,6 @@ class EvaluationController:
                     "failure_artifact_sha256": sha256_file(blinded_failure),
                 }
             else:
-                records.append(record)
                 variants[anonymous_variant] = {
                     "status": "ready",
                     "workspace": _workspace_payload(record),
@@ -586,7 +585,6 @@ class EvaluationController:
             source = request.target_repository or request.benchmark
             mirror = prepare_target_mirror(source, self.runs_root, run_root.name)
             verify_benchmark_range(mirror.path, request.benchmark)
-            records.append(mirror)
 
         wave_one = self.random_source.sample(["A1", "B1"], 2)
         wave_two = self.random_source.sample(["A2", "B2"], 2)
@@ -609,35 +607,7 @@ class EvaluationController:
             "completed_at": _utc_now(),
         }
         atomic_write_json(preparation_path, preparation)
-        self._save_workspace_records(run_root, records)
-
-        scheduled_trials = []
-        for anonymous_variant in ("A", "B"):
-            for trial_number in (1, 2):
-                failure = variants[anonymous_variant]["status"] != "ready"
-                scheduled_trials.append(
-                    {
-                        "anonymous_variant": anonymous_variant,
-                        "trial_number": trial_number,
-                        "status": "failed" if failure else "pending",
-                        "artifact_sha256": (
-                            variants[anonymous_variant].get("failure_artifact_sha256")
-                            if failure
-                            else None
-                        ),
-                        "session_id": None,
-                    }
-                )
-
-        def record_preparation(state: dict[str, Any]) -> None:
-            state["trials"] = scheduled_trials
-            for record in records:
-                if record.kind == "variant-workflow":
-                    self._add_public_workspace(state, record, "workflow")
-                elif record.kind == "target-mirror":
-                    self._add_public_workspace(state, record, "target")
-
-        self._update_run(run_root, record_preparation)
+        self._reconcile_preparation_state(run_root, preparation)
         if shared_failure:
             return self._terminal(
                 run_root,
@@ -657,6 +627,61 @@ class EvaluationController:
                 "state/preparation.json",
             ),
         )
+
+    def _reconcile_preparation_state(
+        self,
+        run_root: Path,
+        preparation: Mapping[str, Any],
+    ) -> None:
+        records = self._load_workspace_records(run_root)
+        for anonymous_variant in ("A", "B"):
+            variant = preparation["variants"][anonymous_variant]
+            if variant["status"] == "ready":
+                records.append(_workspace_from_payload(variant["workspace"]))
+        if preparation["mirror"] is not None:
+            records.append(_workspace_from_payload(preparation["mirror"]))
+        self._save_workspace_records(run_root, records)
+
+        scheduled_trials = []
+        for anonymous_variant in ("A", "B"):
+            variant = preparation["variants"][anonymous_variant]
+            for trial_number in (1, 2):
+                failure = variant["status"] != "ready"
+                scheduled_trials.append(
+                    {
+                        "anonymous_variant": anonymous_variant,
+                        "trial_number": trial_number,
+                        "status": "failed" if failure else "pending",
+                        "artifact_sha256": (
+                            variant.get("failure_artifact_sha256") if failure else None
+                        ),
+                        "session_id": None,
+                    }
+                )
+
+        def reconcile(state: dict[str, Any]) -> None:
+            if state["trials"]:
+                existing = {
+                    (trial["anonymous_variant"], trial["trial_number"])
+                    for trial in state["trials"]
+                }
+                expected = {
+                    (trial["anonymous_variant"], trial["trial_number"])
+                    for trial in scheduled_trials
+                }
+                if existing != expected:
+                    raise EvaluationError(
+                        "persisted preparation does not match the semantic trial schedule"
+                    )
+            else:
+                state["trials"] = scheduled_trials
+            for record in records:
+                if record.kind == "variant-workflow":
+                    self._add_public_workspace(state, record, "workflow")
+                elif record.kind == "target-mirror":
+                    self._add_public_workspace(state, record, "target")
+
+        self._update_run(run_root, reconcile)
 
     def _initial_trials(
         self,
@@ -695,8 +720,26 @@ class EvaluationController:
     ) -> dict[str, Any] | None:
         if not labels:
             return None
+        exhausted_label = self._reconcile_attempt_state(
+            run_root,
+            labels,
+            request.benchmark.infrastructure_retry_limit + 1,
+        )
+        if exhausted_label is not None:
+            return self._terminal(
+                run_root,
+                str(self._load_run(run_root)["phase"]),
+                "INCOMPLETE",
+                f"repeated infrastructure failure exhausted the retry for {exhausted_label}",
+            )
+        maximum_attempts = request.benchmark.infrastructure_retry_limit + 1
         prepared = {
-            label: self._prepare_attempt(run_root, request, label, self._next_attempt(run_root, label))
+            label: self._prepare_attempt(
+                run_root,
+                request,
+                label,
+                self._next_attempt(run_root, label, maximum_attempts),
+            )
             for label in labels
             if not self._trial_complete(run_root, label)
         }
@@ -745,9 +788,11 @@ class EvaluationController:
             else:
                 attempt = self._read_json(attempt_path, "trial attempt")
                 if attempt["environment_failures"]:
-                    self._append_attempt_limitation(
-                        attempt_path,
-                        "Environmental failures could not be paired because the other workflow failed materialization.",
+                    return self._terminal(
+                        run_root,
+                        str(self._load_run(run_root)["phase"]),
+                        "INCOMPLETE",
+                        "environmental validation failure cannot be paired because the other workflow failed materialization",
                     )
 
         retry_labels: list[str] = []
@@ -771,7 +816,7 @@ class EvaluationController:
                 run_root,
                 request,
                 label,
-                self._next_attempt(run_root, label),
+                self._next_attempt(run_root, label, maximum_attempts),
             )
             counterpart = next(
                 (path for other, path in prepared.items() if other != label),
@@ -798,6 +843,154 @@ class EvaluationController:
                     f"repeated infrastructure failure exhausted the retry for {label}",
                 )
         return None
+
+    def _reconcile_attempt_state(
+        self,
+        run_root: Path,
+        labels: Sequence[str],
+        maximum_attempts: int,
+    ) -> str | None:
+        durable_attempts: dict[str, list[dict[str, Any]]] = {}
+        workspace_records = self._load_workspace_records(run_root)
+        for label in labels:
+            paths = self._attempt_paths(run_root, label)
+            if len(paths) > maximum_attempts:
+                raise EvaluationError(f"persisted attempts exceed the retry limit for {label}")
+            attempts: list[dict[str, Any]] = []
+            for expected_number, path in enumerate(paths, start=1):
+                attempt = self._read_json(path, "trial attempt")
+                variant, trial_number = self._parse_label(label)
+                if (
+                    attempt.get("semantic_label") != label
+                    or attempt.get("anonymous_variant") != variant
+                    or attempt.get("trial_number") != trial_number
+                    or attempt.get("attempt_number") != expected_number
+                ):
+                    raise EvaluationError(
+                        f"persisted attempt identity does not match {label} attempt {expected_number}"
+                    )
+                if expected_number < len(paths) and attempt.get("status") != "infrastructure_failure":
+                    raise EvaluationError(
+                        f"persisted retry for {label} does not follow an infrastructure failure"
+                    )
+                workspace_records.append(_workspace_from_payload(attempt["target"]))
+                attempts.append(attempt)
+            if attempts:
+                latest = attempts[-1]
+                if latest.get("status") == "complete":
+                    relative = safe_relative_path(
+                        latest.get("normalized_artifact"),
+                        "normalized trial artifact",
+                    )
+                    normalized_path = run_root.joinpath(*relative.parts)
+                    if (
+                        normalized_path.is_symlink()
+                        or not normalized_path.is_file()
+                        or sha256_file(normalized_path)
+                        != latest.get("normalized_artifact_sha256")
+                    ):
+                        raise EvaluationError(
+                            f"completed attempt evidence is missing or changed for {label}"
+                        )
+                durable_attempts[label] = attempts
+
+        if not durable_attempts:
+            return None
+        self._save_workspace_records(run_root, workspace_records)
+        exhausted = [
+            label
+            for label, attempts in durable_attempts.items()
+            if len(attempts) == maximum_attempts
+            and attempts[-1].get("status") == "infrastructure_failure"
+        ]
+
+        def reconcile(state: dict[str, Any]) -> None:
+            for label, attempts in durable_attempts.items():
+                variant, trial_number = self._parse_label(label)
+                for attempt in attempts:
+                    attempt_number = int(attempt["attempt_number"])
+                    status = str(attempt["status"])
+                    summary_status = (
+                        status
+                        if status in {"complete", "infrastructure_failure"}
+                        else "running"
+                    )
+                    matches = [
+                        record
+                        for record in state["infrastructure_attempts"]
+                        if record["semantic_label"] == label
+                        and record["attempt_number"] == attempt_number
+                    ]
+                    summary = {
+                        "semantic_label": label,
+                        "attempt_number": attempt_number,
+                        "status": summary_status,
+                        "started_at": attempt["started_at"],
+                        "ended_at": attempt["ended_at"],
+                        "error": attempt["error"],
+                    }
+                    if len(matches) > 1:
+                        raise EvaluationError("run state contains duplicate attempt summaries")
+                    if matches:
+                        matches[0].update(summary)
+                    else:
+                        state["infrastructure_attempts"].append(summary)
+                    target = _workspace_from_payload(attempt["target"])
+                    self._add_public_workspace(state, target, "target")
+                    self._add_output_workspace(
+                        state,
+                        Path(str(attempt["output_directory"])),
+                        label,
+                        attempt_number,
+                    )
+
+                latest = attempts[-1]
+                latest_status = str(latest["status"])
+                session_id = (
+                    str(latest["session_id"])
+                    if latest.get("session_id") is not None
+                    else None
+                )
+                if latest_status == "complete":
+                    self._set_trial(
+                        state,
+                        variant,
+                        trial_number,
+                        status="complete",
+                        session_id=session_id,
+                        artifact_sha256=str(latest["normalized_artifact_sha256"]),
+                    )
+                elif label in exhausted:
+                    self._set_trial(
+                        state,
+                        variant,
+                        trial_number,
+                        status="failed",
+                        session_id=None,
+                    )
+                elif latest_status in {"prepared", "infrastructure_failure"}:
+                    self._set_trial(
+                        state,
+                        variant,
+                        trial_number,
+                        status="running",
+                        session_id=session_id,
+                    )
+                elif latest_status in {"waiting_gate_a", "waiting_gate_b"}:
+                    self._set_trial(
+                        state,
+                        variant,
+                        trial_number,
+                        status=latest_status,
+                        session_id=session_id,
+                    )
+                else:
+                    raise EvaluationError(
+                        f"unsupported persisted trial attempt status: {latest_status}"
+                    )
+
+        self._update_run(run_root, reconcile)
+        return exhausted[0] if exhausted else None
 
     def _prepare_attempt(
         self,
@@ -1460,6 +1653,10 @@ class EvaluationController:
                 output_path,
                 self._evaluation_root(request.benchmark) / "schemas/agreement.schema.json",
             )
+            value = self._read_json(output_path, "agreement")
+            if value.get("anonymous_variant") != variant:
+                raise EvaluationError("agreement output belongs to a different anonymous variant")
+            self._validate_agreement_semantics(value, len(sources))
             return output_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
         bundle = run_root / f"variant-{variant.lower()}" / f"agreement-bundle-{suffix}"
@@ -1496,8 +1693,68 @@ class EvaluationController:
         value = json.loads(result.final_output)
         if value.get("anonymous_variant") != variant:
             raise EvaluationError("agreement output belongs to a different anonymous variant")
+        self._validate_agreement_semantics(value, len(sources))
         atomic_write_json(output_path, value)
         return output_path
+
+    def _validate_agreement_semantics(
+        self,
+        agreement: Mapping[str, Any],
+        supplied_trial_count: int,
+    ) -> None:
+        expected_trials = set(range(1, supplied_trial_count + 1))
+        if not expected_trials:
+            raise EvaluationError("agreement requires at least one supplied trial")
+        citations = agreement["artifact_citations"]
+        citation_keys: set[str] = set()
+        cited_trials: set[int] = set()
+        for citation in citations:
+            citation_key = canonical_hash(citation)
+            if citation_key in citation_keys:
+                raise EvaluationError("agreement contains a duplicate artifact citation")
+            citation_keys.add(citation_key)
+            cited_trials.add(int(citation["trial"]))
+        missing = sorted(expected_trials - cited_trials)
+        unexpected = sorted(cited_trials - expected_trials)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(
+                    "missing " + ", ".join(f"Trial {trial}" for trial in missing)
+                )
+            if unexpected:
+                details.append(
+                    "unexpected " + ", ".join(f"Trial {trial}" for trial in unexpected)
+                )
+            raise EvaluationError(
+                "agreement citations must cover every supplied trial exactly; "
+                + "; ".join(details)
+            )
+
+        classification = str(agreement["classification"])
+        reason_category = str(agreement["reason_category"])
+        outlier_trials = {int(trial) for trial in agreement["outlier_trials"]}
+        if not outlier_trials.issubset(expected_trials):
+            raise EvaluationError("agreement outlier trials must be supplied trials")
+        coherent = (
+            classification == "materially_similar"
+            and reason_category == "trial_agreement"
+            and not outlier_trials
+        ) or (
+            classification == "materially_different"
+            and reason_category == "trial_variability"
+            and bool(outlier_trials)
+        ) or (
+            classification == "insufficient_evidence"
+            and reason_category in {"trial_variability", "infrastructure_failure"}
+            and (
+                reason_category != "infrastructure_failure" or not outlier_trials
+            )
+        )
+        if not coherent:
+            raise EvaluationError(
+                "agreement classification, reason category, and outlier trials are incoherent"
+            )
 
     def _blinded_judgment(
         self,
@@ -2034,11 +2291,21 @@ class EvaluationController:
         )
 
     def _attempt_count(self, run_root: Path, label: str) -> int:
+        return len(self._attempt_paths(run_root, label))
+
+    def _attempt_paths(self, run_root: Path, label: str) -> tuple[Path, ...]:
         directory = run_root / "attempts" / label
-        return len(tuple(directory.glob("attempt-*.json"))) if directory.is_dir() else 0
+        if not directory.is_dir():
+            return ()
+        return tuple(
+            sorted(
+                directory.glob("attempt-*.json"),
+                key=lambda path: int(path.stem.removeprefix("attempt-")),
+            )
+        )
 
     def _latest_attempt_path(self, run_root: Path, label: str) -> Path | None:
-        attempts = sorted((run_root / "attempts" / label).glob("attempt-*.json"))
+        attempts = self._attempt_paths(run_root, label)
         return attempts[-1] if attempts else None
 
     def _latest_variant_attempt_path(
@@ -2051,14 +2318,22 @@ class EvaluationController:
         )
         return attempts[-1] if attempts else None
 
-    def _next_attempt(self, run_root: Path, label: str) -> int:
-        attempts = sorted((run_root / "attempts" / label).glob("attempt-*.json"))
+    def _next_attempt(
+        self,
+        run_root: Path,
+        label: str,
+        maximum_attempts: int,
+    ) -> int:
+        attempts = self._attempt_paths(run_root, label)
         if not attempts:
             return 1
         latest = self._read_json(attempts[-1], "trial attempt")
         if latest["status"] in {"prepared", "waiting_gate_a", "waiting_gate_b"}:
             return int(latest["attempt_number"])
-        return int(latest["attempt_number"]) + 1
+        next_attempt = int(latest["attempt_number"]) + 1
+        if next_attempt > maximum_attempts:
+            raise EvaluationError(f"infrastructure retry is exhausted for {label}")
+        return next_attempt
 
     def _parse_label(self, label: str) -> tuple[str, int]:
         if len(label) != 2 or label[0] not in {"A", "B"} or label[1] not in "123":

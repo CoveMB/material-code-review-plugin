@@ -2791,12 +2791,14 @@ class FakeExecutor:
         self,
         *,
         agreement: dict[str, object] | None = None,
+        invalid_agreement: dict[str, str] | None = None,
         findings: dict[str, int] | None = None,
         infrastructure_failures: dict[str, int] | None = None,
         interrupt_once: set[str] | None = None,
         repair_label: str | None = None,
     ) -> None:
         self.agreement = dict(agreement or {})
+        self.invalid_agreement = dict(invalid_agreement or {})
         self.findings = dict(findings or {})
         self.infrastructure_failures = dict(infrastructure_failures or {})
         self.interrupt_once = set(interrupt_once or ())
@@ -2922,20 +2924,37 @@ class FakeExecutor:
         }[classification]
         if classification == "infrastructure_failure":
             classification = "insufficient_evidence"
+        artifact_citations = [
+            {
+                "trial": trial_number,
+                "artifact": "ledger",
+                "evidence": f"trial {trial_number} citation",
+            }
+            for trial_number in range(1, trial_count + 1)
+        ]
+        if trial_count == 1:
+            artifact_citations.append(
+                {"trial": 1, "artifact": "gate", "evidence": "second citation"}
+            )
+        invalid_mode = self.invalid_agreement.get(variant)
+        if invalid_mode == "duplicate":
+            artifact_citations = [artifact_citations[0], dict(artifact_citations[0])]
+        elif invalid_mode == "missing":
+            artifact_citations = [
+                artifact_citations[0],
+                {"trial": 1, "artifact": "gate", "evidence": "second citation"},
+            ]
+        elif invalid_mode == "omit_third" and trial_count == 3:
+            artifact_citations = artifact_citations[:2]
+        elif invalid_mode == "incoherent":
+            reason_category = "trial_variability"
         output = {
             "schema": "material-review-evaluation/agreement/v1",
             "anonymous_variant": variant,
             "classification": classification,
             "reason_category": reason_category,
             "summary": "Fake agreement result derived from the supplied native evidence.",
-            "artifact_citations": [
-                {"trial": 1, "artifact": "ledger", "evidence": "first citation"},
-                {
-                    "trial": min(2, trial_count),
-                    "artifact": "gate",
-                    "evidence": "second citation",
-                },
-            ],
+            "artifact_citations": artifact_citations,
             "outlier_trials": [1] if classification == "materially_different" else [],
             "confidence": "high",
             "limitations": [],
@@ -3432,6 +3451,81 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertIn("infrastructure", summary.terminal_reason.lower())
         self.assertEqual(executor.trial_start_attempts["A1"], 2)
 
+    def test_resume_reconciles_completed_attempt_before_allocating_another(self) -> None:
+        executor = FakeExecutor()
+        controller = self.controller(executor)
+        original_update_run = controller._update_run
+        interrupted = False
+
+        def interrupt_after_attempt_completion(run_root: Path, mutate: object) -> None:
+            nonlocal interrupted
+            attempt_path = run_root / "attempts/A1/attempt-1.json"
+            if attempt_path.is_file() and not interrupted:
+                attempt = self.read_json(attempt_path)
+                state = self.read_json(run_root / "run.json")
+                trial = next(
+                    value
+                    for value in state["trials"]
+                    if value["anonymous_variant"] == "A" and value["trial_number"] == 1
+                )
+                if attempt["status"] == "complete" and trial["status"] != "complete":
+                    interrupted = True
+                    raise FakeInterruption("after complete attempt artifact")
+            original_update_run(run_root, mutate)  # type: ignore[arg-type]
+
+        controller._update_run = interrupt_after_attempt_completion  # type: ignore[method-assign]
+        with self.assertRaises(FakeInterruption):
+            controller.compare(self.request(new_run=True))
+        controller._update_run = original_update_run  # type: ignore[method-assign]
+
+        summary = controller.compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        self.assertEqual(executor.trial_start_attempts["A1"], 1)
+        self.assertFalse((summary.run_root / "attempts/A1/attempt-2.json").exists())
+
+    def test_resume_does_not_exceed_retry_limit_after_second_durable_failure(self) -> None:
+        executor = FakeExecutor(infrastructure_failures={"A1": 2})
+        controller = self.controller(executor)
+        original_update_run = controller._update_run
+        interrupted = False
+
+        def interrupt_after_second_failure(run_root: Path, mutate: object) -> None:
+            nonlocal interrupted
+            attempt_path = run_root / "attempts/A1/attempt-2.json"
+            if attempt_path.is_file() and not interrupted:
+                attempt = self.read_json(attempt_path)
+                state = self.read_json(run_root / "run.json")
+                attempt_summary = next(
+                    (
+                        value
+                        for value in state["infrastructure_attempts"]
+                        if value["semantic_label"] == "A1"
+                        and value["attempt_number"] == 2
+                    ),
+                    None,
+                )
+                if (
+                    attempt["status"] == "infrastructure_failure"
+                    and attempt_summary is not None
+                    and attempt_summary["status"] != "infrastructure_failure"
+                ):
+                    interrupted = True
+                    raise FakeInterruption("after second failure artifact")
+            original_update_run(run_root, mutate)  # type: ignore[arg-type]
+
+        controller._update_run = interrupt_after_second_failure  # type: ignore[method-assign]
+        with self.assertRaises(FakeInterruption):
+            controller.compare(self.request(new_run=True))
+        controller._update_run = original_update_run  # type: ignore[method-assign]
+
+        summary = controller.compare(self.request())
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(executor.trial_start_attempts["A1"], 2)
+        self.assertFalse((summary.run_root / "attempts/A1/attempt-3.json").exists())
+        self.assertIn("exhausted", summary.terminal_reason.lower())
+
     def test_variant_materialization_failure_is_blinded_and_runnable_side_continues(
         self,
     ) -> None:
@@ -3473,6 +3567,33 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertEqual(summary.phase, "INCOMPLETE")
         self.assertEqual(executor.trial_labels, [])
         self.assertIn("materialization", summary.terminal_reason.lower())
+
+    def test_materialization_failure_cannot_mask_unpaired_environment_failure(
+        self,
+    ) -> None:
+        failing = CommandSpec(
+            ("python3", "-c", "import sys; sys.exit(3)"),
+            PurePosixPath("."),
+            10,
+        )
+        benchmark = replace(
+            self.benchmark,
+            dependency_installation_commands=(failing,),
+        )
+        executor = FakeExecutor()
+
+        summary = self.controller(executor).compare(
+            self.request(
+                base_ref="current",
+                candidate_ref="bad-one",
+                benchmark=benchmark,
+            )
+        )
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(executor.trial_labels, [])
+        self.assertEqual(executor.judge_starts, 0)
+        self.assertIn("environment", summary.terminal_reason.lower())
 
     def test_equivalent_environmental_failures_proceed_with_limitations(self) -> None:
         failing = CommandSpec(
@@ -3533,6 +3654,47 @@ class EvaluationControllerTests(unittest.TestCase):
                 self.assertEqual(summary.phase, "COMPLETE")
                 self.assertEqual(len([path for path in runs_root.iterdir() if path.is_dir()]), 1)
 
+    def test_preflight_marker_resume_reconciles_state_and_cleanup_records(self) -> None:
+        executor = FakeExecutor()
+        controller = self.controller(executor)
+        original_save_workspace_records = controller._save_workspace_records
+        interrupted = False
+
+        def interrupt_after_preparation_marker(
+            run_root: Path,
+            records: object,
+        ) -> None:
+            nonlocal interrupted
+            if (run_root / "state/preparation.json").is_file() and not interrupted:
+                interrupted = True
+                raise FakeInterruption("after preparation marker")
+            original_save_workspace_records(run_root, records)  # type: ignore[arg-type]
+
+        controller._save_workspace_records = interrupt_after_preparation_marker  # type: ignore[method-assign]
+        with self.assertRaises(FakeInterruption):
+            controller.compare(self.request(new_run=True))
+        run_root = next(path for path in self.runs_root.iterdir() if path.is_dir())
+        preparation = self.read_json(run_root / "state/preparation.json")
+        self.assertFalse((run_root / "state/workspaces.json").exists())
+        controller._save_workspace_records = original_save_workspace_records  # type: ignore[method-assign]
+
+        summary = controller.compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        workspace_state = self.read_json(run_root / "state/workspaces.json")
+        durable_paths = {record["path"] for record in workspace_state["records"]}
+        preparation_paths = {
+            preparation["variants"][variant]["workspace"]["path"]
+            for variant in ("A", "B")
+        }
+        preparation_paths.add(preparation["mirror"]["path"])
+        self.assertTrue(preparation_paths.issubset(durable_paths))
+
+        removed = {str(path) for path in controller.clean(summary.run_id)}
+
+        self.assertTrue(preparation_paths.issubset(removed))
+        self.assertTrue(all(not Path(path).exists() for path in preparation_paths))
+
     def test_no_consensus_after_third_trial_marks_variant_unstable(self) -> None:
         executor = FakeExecutor(
             agreement={
@@ -3548,6 +3710,50 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertTrue(stability["unstable"])
         self.assertEqual(agreement["outlier_trials"], [1])
         self.assertEqual(summary.semantic_trial_counts["A"], 3)
+
+    def test_agreement_rejects_duplicate_and_missing_trial_citations(self) -> None:
+        expectations = {
+            "duplicate": "duplicate",
+            "missing": "every supplied trial",
+        }
+        for index, (invalid_mode, expected_reason) in enumerate(expectations.items()):
+            with self.subTest(invalid_mode=invalid_mode):
+                runs_root = self.root / f"invalid-citation-runs-{index}"
+                runs_root.mkdir()
+                executor = FakeExecutor(invalid_agreement={"A": invalid_mode})
+
+                summary = self.controller(executor, runs_root=runs_root).compare(
+                    self.request(new_run=True)
+                )
+
+                self.assertEqual(summary.phase, "INCOMPLETE")
+                self.assertEqual(executor.judge_starts, 0)
+                self.assertIn(expected_reason, summary.terminal_reason.lower())
+
+    def test_post_third_agreement_must_cite_trial_three(self) -> None:
+        executor = FakeExecutor(
+            agreement={"A": "materially_different", "B": "materially_similar"},
+            invalid_agreement={"A": "omit_third"},
+        )
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(summary.semantic_trial_counts["A"], 3)
+        self.assertEqual(executor.agreement_starts["A"], 2)
+        self.assertEqual(executor.judge_starts, 0)
+        self.assertIn("trial 3", summary.terminal_reason.lower())
+
+    def test_agreement_rejects_incoherent_classification_reason_and_outliers(
+        self,
+    ) -> None:
+        executor = FakeExecutor(invalid_agreement={"A": "incoherent"})
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(executor.judge_starts, 0)
+        self.assertIn("classification", summary.terminal_reason.lower())
 
     def test_infrastructure_insufficient_agreement_marks_run_incomplete(self) -> None:
         executor = FakeExecutor(
