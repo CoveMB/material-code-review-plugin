@@ -39,6 +39,7 @@ from scripts.material_review_evaluation.bundles import (
 from scripts.material_review_evaluation.executor import (
     CodexExecutor,
     InfrastructureFailure,
+    SessionResult,
     SessionSpec,
 )
 from scripts.material_review_evaluation.workspace import (
@@ -2011,6 +2012,23 @@ class ExecutorAndBlindingTests(unittest.TestCase):
             timeout_seconds=123,
         )
 
+    def execute_with_schema(
+        self,
+        schema: dict[str, object],
+        output: object,
+    ) -> SessionResult:
+        self.schema_path.write_text(json.dumps(schema) + "\n", encoding="utf-8")
+        runner = RecordingRunner(
+            stdout=self.successful_jsonl(final_output=json.dumps(output))
+        )
+        return CodexExecutor(runner=runner, environment=self.environment).start(
+            self.session_spec(
+                role="judge",
+                output_schema=self.schema_path,
+                sandbox_mode="read-only",
+            )
+        )
+
     @staticmethod
     def successful_jsonl(
         *,
@@ -2111,6 +2129,8 @@ class ExecutorAndBlindingTests(unittest.TestCase):
                 "gpt-5.6",
                 "-c",
                 "model_reasoning_effort=high",
+                "-c",
+                'sandbox_mode="workspace-write"',
                 "trial-session",
                 "-",
             ],
@@ -2127,6 +2147,31 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         CodexExecutor(runner=runner, environment={}).start(self.session_spec())
 
         self.assertEqual(runner.options["env"], {})
+
+    def test_codex_logs_redact_every_configured_sensitive_value(self) -> None:
+        runner = RecordingRunner(
+            stdout=self.successful_jsonl(
+                final_output="observed configured-openai-key and github-secret"
+            ),
+            stderr="diagnostic cloud-secret configured-openai-key",
+        )
+
+        result = CodexExecutor(
+            runner=runner,
+            environment=self.environment,
+        ).start(self.session_spec())
+
+        persisted = (
+            result.stdout_path.read_text(encoding="utf-8")
+            + result.stderr_path.read_text(encoding="utf-8")
+        )
+        for secret in (
+            "configured-openai-key",
+            "github-secret",
+            "cloud-secret",
+        ):
+            self.assertNotIn(secret, persisted)
+        self.assertIn("<redacted-credential>", persisted)
 
     def test_agreement_start_is_fresh_ephemeral_read_only_and_schema_validated(
         self,
@@ -2150,6 +2195,108 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         self.assertIn(str(self.schema_path), runner.argv)
         self.assertEqual(runner.argv[runner.argv.index("--sandbox") + 1], "read-only")
         self.assertNotIn("--add-dir", runner.argv)
+
+    def test_output_schema_pattern_accepts_matching_and_rejects_nonmatching_text(
+        self,
+    ) -> None:
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["sha"],
+            "properties": {
+                "sha": {"type": "string", "pattern": "^[0-9a-f]{4}$"}
+            },
+        }
+
+        matching = self.execute_with_schema(schema, {"sha": "1a2b"})
+        nonmatching = self.execute_with_schema(schema, {"sha": "NOPE"})
+
+        self.assertIsNone(matching.failure)
+        self.assertEqual(nonmatching.status, "failed")
+        self.assertEqual(nonmatching.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
+
+    def test_output_schema_composition_conditionals_and_format_are_enforced(
+        self,
+    ) -> None:
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["kind", "value", "choice", "nullable", "timestamp"],
+            "properties": {
+                "kind": {"enum": ["A", "B"]},
+                "value": {
+                    "allOf": [
+                        {"type": "string"},
+                        {"minLength": 2},
+                        {"pattern": "^[AB]"},
+                    ]
+                },
+                "choice": {
+                    "oneOf": [
+                        {"const": "x"},
+                        {"type": "string"},
+                    ]
+                },
+                "nullable": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"},
+                    ]
+                },
+                "timestamp": {
+                    "type": ["string", "null"],
+                    "format": "date-time",
+                },
+            },
+            "if": {
+                "properties": {"kind": {"const": "A"}},
+                "required": ["kind"],
+            },
+            "then": {"properties": {"value": {"pattern": "^A"}}},
+            "else": {"properties": {"value": {"pattern": "^B"}}},
+        }
+        valid = {
+            "kind": "A",
+            "value": "Alpha",
+            "choice": "y",
+            "nullable": None,
+            "timestamp": "2026-07-27T12:30:00Z",
+        }
+        invalid_cases = (
+            {**valid, "value": "A"},
+            {**valid, "value": "Beta"},
+            {**valid, "kind": "B", "value": "Alpha"},
+            {**valid, "choice": "x"},
+            {**valid, "nullable": 5},
+            {**valid, "timestamp": "not-a-date"},
+        )
+
+        self.assertIsNone(self.execute_with_schema(schema, valid).failure)
+        for invalid in invalid_cases:
+            with self.subTest(invalid=invalid):
+                result = self.execute_with_schema(schema, invalid)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
+
+    def test_output_schema_with_unknown_keyword_fails_closed(self) -> None:
+        result = self.execute_with_schema(
+            {"type": "object", "unsupportedConstraint": True},
+            {},
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
+
+    def test_output_schema_with_malformed_supported_constraint_fails_closed(
+        self,
+    ) -> None:
+        result = self.execute_with_schema(
+            {"type": "string", "minLength": "ignored"},
+            "",
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
 
     def test_codex_returns_typed_infrastructure_failures(self) -> None:
         cases = (
@@ -2343,6 +2490,97 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         self.assertNotIn("private_map", comparison_text)
         self.assertNotIn("feature/evaluator", comparison_text)
 
+    def test_agreement_bundle_rejects_trial_from_a_different_variant_slot(self) -> None:
+        normalized_b = self.root / "normalized-b.json"
+        normalized_b.write_text(json.dumps({"variant": "B"}) + "\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(EvaluationError, "slot A"):
+            build_agreement_bundle(
+                self.root / "mismatched-agreement-bundle",
+                anonymous_variant="A",
+                normalized_trials=(normalized_b,),
+                prompt_path=self.prompt_path,
+                schema_path=self.schema_path,
+                path_prefixes={self.root: "<run>"},
+            )
+
+    def test_comparison_bundle_rejects_swapped_trials(self) -> None:
+        normalized_a = self.root / "normalized-slot-a.json"
+        normalized_b = self.root / "normalized-slot-b.json"
+        normalized_a.write_text(
+            json.dumps({"anonymous_variant": "A"}) + "\n",
+            encoding="utf-8",
+        )
+        normalized_b.write_text(
+            json.dumps({"anonymous_variant": "B"}) + "\n",
+            encoding="utf-8",
+        )
+        agreement_a = self.root / "agreement-slot-a.json"
+        agreement_b = self.root / "agreement-slot-b.json"
+        agreement_a.write_text(
+            json.dumps({"anonymous_variant": "A"}) + "\n",
+            encoding="utf-8",
+        )
+        agreement_b.write_text(
+            json.dumps({"anonymous_variant": "B"}) + "\n",
+            encoding="utf-8",
+        )
+        rubric = self.root / "rubric.md"
+        oracle = self.root / "oracle.json"
+        rubric.write_text("Judge material quality.\n", encoding="utf-8")
+        oracle.write_text("{}\n", encoding="utf-8")
+        common = {
+            "rubric_path": rubric,
+            "oracle_path": oracle,
+            "prompt_path": self.prompt_path,
+            "schema_path": self.schema_path,
+            "path_prefixes": {self.root: "<run>"},
+        }
+
+        with self.assertRaisesRegex(EvaluationError, "trial.*slot A"):
+            build_comparison_bundle(
+                self.root / "swapped-trial-comparison",
+                variant_a_trials=(normalized_b,),
+                variant_b_trials=(normalized_a,),
+                agreement_a=agreement_a,
+                agreement_b=agreement_b,
+                **common,
+            )
+
+    def test_comparison_bundle_rejects_swapped_agreements(self) -> None:
+        normalized_a = self.root / "normalized-a-for-agreements.json"
+        normalized_b = self.root / "normalized-b-for-agreements.json"
+        normalized_a.write_text(json.dumps({"variant": "A"}) + "\n", encoding="utf-8")
+        normalized_b.write_text(json.dumps({"variant": "B"}) + "\n", encoding="utf-8")
+        agreement_a = self.root / "agreement-a-for-swap.json"
+        agreement_b = self.root / "agreement-b-for-swap.json"
+        agreement_a.write_text(
+            json.dumps({"anonymous_variant": "A"}) + "\n",
+            encoding="utf-8",
+        )
+        agreement_b.write_text(
+            json.dumps({"anonymous_variant": "B"}) + "\n",
+            encoding="utf-8",
+        )
+        rubric = self.root / "agreement-swap-rubric.md"
+        oracle = self.root / "agreement-swap-oracle.json"
+        rubric.write_text("Judge material quality.\n", encoding="utf-8")
+        oracle.write_text("{}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(EvaluationError, "agreement.*slot A"):
+            build_comparison_bundle(
+                self.root / "swapped-agreement-comparison",
+                variant_a_trials=(normalized_a,),
+                variant_b_trials=(normalized_b,),
+                agreement_a=agreement_b,
+                agreement_b=agreement_a,
+                rubric_path=rubric,
+                oracle_path=oracle,
+                prompt_path=self.prompt_path,
+                schema_path=self.schema_path,
+                path_prefixes={self.root: "<run>"},
+            )
+
     def test_redaction_uses_longest_configured_machine_prefix_first(self) -> None:
         redacted = redact_machine_paths(
             f"{self.root}/run/file {self.root}/other",
@@ -2396,6 +2634,40 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         os.mkfifo(bundle / "pipe")
         with self.assertRaisesRegex(EvaluationError, "non-regular file"):
             scan_blinded_bundle(bundle, private_tokens)
+
+    def test_blinded_bundle_scan_rejects_old_new_json_identity_values(self) -> None:
+        for index, value in enumerate(
+            (
+                {"variant": "old"},
+                {"anonymous_variant": "new"},
+                {"metadata": {"skill_version": "old"}},
+            )
+        ):
+            bundle = self.root / f"json-identity-{index}"
+            bundle.mkdir()
+            (bundle / "artifact.json").write_text(
+                json.dumps(value) + "\n",
+                encoding="utf-8",
+            )
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(EvaluationError, "identity leak"):
+                    scan_blinded_bundle(bundle)
+
+    def test_blinded_bundle_scan_allows_old_new_in_nonidentity_json_fields(self) -> None:
+        bundle = self.root / "json-nonidentity"
+        bundle.mkdir()
+        (bundle / "artifact.json").write_text(
+            json.dumps(
+                {
+                    "status": "new",
+                    "summary": "Old evidence was replaced by new evidence.",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        scan_blinded_bundle(bundle)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,9 @@ _WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
 _SENSITIVE_CONFIGURATION_KEY_PATTERN = re.compile(
     r"(?i)(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|CREDENTIAL)"
 )
+_IDENTITY_JSON_KEY_TERMS = frozenset(
+    {"candidate", "skill", "variant", "version", "workflow"}
+)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -183,13 +186,41 @@ def _contains_absolute_path(text: str) -> bool:
     return False
 
 
+def _contains_json_identity(text: str) -> bool:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+
+    def contains_identity(item: object, identity_context: bool = False) -> bool:
+        if isinstance(item, str):
+            return identity_context and item.casefold() in {"old", "new"}
+        if isinstance(item, list):
+            return any(contains_identity(child, identity_context) for child in item)
+        if isinstance(item, dict):
+            for key, child in item.items():
+                key_terms = set(
+                    part
+                    for part in re.split(r"[^a-z0-9]+", key.casefold())
+                    if part
+                )
+                if contains_identity(
+                    child,
+                    identity_context or bool(key_terms & _IDENTITY_JSON_KEY_TERMS),
+                ):
+                    return True
+        return False
+
+    return contains_identity(value)
+
+
 def _scan_text(text: str, private_tokens: tuple[str, ...], relative_path: str) -> None:
     for token in private_tokens:
         if token in text:
             raise EvaluationError(f"identity leak in blinded bundle file: {relative_path}")
     if _GIT_SHA_PATTERN.search(text) or any(
         pattern.search(text) for pattern in _IDENTITY_LABEL_PATTERNS
-    ):
+    ) or _contains_json_identity(text):
         raise EvaluationError(f"identity leak in blinded bundle file: {relative_path}")
     if _CREDENTIAL_ASSIGNMENT_PATTERN.search(text) or any(
         pattern.search(text) for pattern in _CREDENTIAL_VALUE_PATTERNS
@@ -277,7 +308,28 @@ def _create_bundle_root(destination: Path) -> Path:
     return root.resolve(strict=True)
 
 
-def _validate_trial_sources(paths: Iterable[Path]) -> tuple[Path, ...]:
+def _variant_label(
+    value: Mapping[str, Any],
+    context: str,
+    *,
+    allow_variant_alias: bool,
+) -> str:
+    fields = ("anonymous_variant", "variant") if allow_variant_alias else ("anonymous_variant",)
+    labels = [value[field] for field in fields if field in value]
+    if not labels:
+        raise EvaluationError(f"{context} does not declare an anonymous variant label")
+    if any(label not in {"A", "B"} for label in labels):
+        raise EvaluationError(f"{context} has an invalid anonymous variant label")
+    if len(set(labels)) != 1:
+        raise EvaluationError(f"{context} has conflicting anonymous variant labels")
+    return labels[0]
+
+
+def _validate_trial_sources(
+    paths: Iterable[Path],
+    *,
+    expected_variant: str,
+) -> tuple[Path, ...]:
     trials = tuple(Path(path) for path in paths)
     if not trials:
         raise EvaluationError("a blinded bundle requires at least one normalized trial")
@@ -285,10 +337,26 @@ def _validate_trial_sources(paths: Iterable[Path]) -> tuple[Path, ...]:
         raise EvaluationError("a blinded bundle supports at most three normalized trials")
     resolved: list[Path] = []
     for index, trial in enumerate(trials, start=1):
-        text = _read_utf8_file(trial, f"normalized trial {index}")
-        _require_json_object(text, f"normalized trial {index}")
-        resolved.append(_regular_file(trial, f"normalized trial {index}"))
+        context = f"normalized trial {index}"
+        text = _read_utf8_file(trial, context)
+        value = _require_json_object(text, context)
+        if _variant_label(value, context, allow_variant_alias=True) != expected_variant:
+            raise EvaluationError(
+                f"{context} label does not match slot {expected_variant}"
+            )
+        resolved.append(_regular_file(trial, context))
     return tuple(resolved)
+
+
+def _validate_agreement_source(path: Path, expected_variant: str) -> Path:
+    context = f"Variant {expected_variant} agreement"
+    source = _regular_file(path, context)
+    value = _require_json_object(_read_utf8_file(source, context), context)
+    if _variant_label(value, context, allow_variant_alias=False) != expected_variant:
+        raise EvaluationError(
+            f"{context} label does not match slot {expected_variant}"
+        )
+    return source
 
 
 def build_trial_request(
@@ -368,7 +436,10 @@ def build_agreement_bundle(
 
     if anonymous_variant not in {"A", "B"}:
         raise EvaluationError("agreement variant must be anonymous label A or B")
-    trials = _validate_trial_sources(normalized_trials)
+    trials = _validate_trial_sources(
+        normalized_trials,
+        expected_variant=anonymous_variant,
+    )
     root = _create_bundle_root(destination)
     try:
         _copy_redacted(
@@ -425,8 +496,10 @@ def build_comparison_bundle(
 ) -> Path:
     """Create a fresh A/B judge bundle without copying the evaluator's private map."""
 
-    trials_a = _validate_trial_sources(variant_a_trials)
-    trials_b = _validate_trial_sources(variant_b_trials)
+    trials_a = _validate_trial_sources(variant_a_trials, expected_variant="A")
+    trials_b = _validate_trial_sources(variant_b_trials, expected_variant="B")
+    validated_agreement_a = _validate_agreement_source(agreement_a, "A")
+    validated_agreement_b = _validate_agreement_source(agreement_b, "B")
     root = _create_bundle_root(destination)
     try:
         fixed_inputs = (
@@ -434,8 +507,18 @@ def build_comparison_bundle(
             (schema_path, root / "output.schema.json", "judgment output schema", True),
             (rubric_path, root / "judge-rubric.md", "judge rubric", False),
             (oracle_path, root / "judge-oracle.json", "judge oracle", True),
-            (agreement_a, root / "agreements" / "A.json", "Variant A agreement", True),
-            (agreement_b, root / "agreements" / "B.json", "Variant B agreement", True),
+            (
+                validated_agreement_a,
+                root / "agreements" / "A.json",
+                "Variant A agreement",
+                True,
+            ),
+            (
+                validated_agreement_b,
+                root / "agreements" / "B.json",
+                "Variant B agreement",
+                True,
+            ),
         )
         for source, target, context, require_object in fixed_inputs:
             _copy_redacted(

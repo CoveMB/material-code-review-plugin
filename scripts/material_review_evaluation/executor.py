@@ -6,6 +6,7 @@ import re
 import subprocess
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
@@ -77,6 +78,42 @@ _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SENSITIVE_ENVIRONMENT_NAME = re.compile(
     r"(?i)(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL)"
 )
+_SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$defs",
+        "$id",
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "const",
+        "description",
+        "else",
+        "enum",
+        "format",
+        "if",
+        "items",
+        "maximum",
+        "maxItems",
+        "maxLength",
+        "minimum",
+        "minItems",
+        "minLength",
+        "not",
+        "oneOf",
+        "pattern",
+        "properties",
+        "required",
+        "then",
+        "title",
+        "type",
+        "uniqueItems",
+    }
+)
+_SUPPORTED_SCHEMA_TYPES = frozenset(
+    {"array", "boolean", "integer", "null", "number", "object", "string"}
+)
 
 
 def _popen_runner(
@@ -137,6 +174,27 @@ def _narrow_environment(source: Mapping[str, str]) -> dict[str, str]:
             or _SENSITIVE_ENVIRONMENT_NAME.search(name) is None
         )
     }
+
+
+def _sensitive_environment_values(source: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                value
+                for name, value in source.items()
+                if _SENSITIVE_ENVIRONMENT_NAME.search(name) is not None and value
+            },
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _redact_sensitive_values(text: str, sensitive_values: Sequence[str]) -> str:
+    redacted = text
+    for value in sensitive_values:
+        redacted = redacted.replace(value, "<redacted-credential>")
+    return redacted
 
 
 def _require_regular_file(path: Path, context: str) -> Path:
@@ -274,6 +332,8 @@ def _resume_argv(session_id: str, spec: SessionSpec) -> list[str]:
         spec.model,
         "-c",
         f"model_reasoning_effort={spec.reasoning_effort}",
+        "-c",
+        f'sandbox_mode="{spec.sandbox_mode}"',
         session_id,
         "-",
     ]
@@ -350,6 +410,126 @@ def _resolve_schema_reference(reference: str, root_schema: Mapping[str, Any]) ->
     return value
 
 
+def _validate_schema_definition(
+    schema: Any,
+    root_schema: Mapping[str, Any],
+    *,
+    visited: set[int] | None = None,
+) -> None:
+    if isinstance(schema, bool):
+        return
+    if not isinstance(schema, dict):
+        raise ValueError("output schema contains a non-object subschema")
+    unexpected = set(schema) - _SUPPORTED_SCHEMA_KEYWORDS
+    if unexpected:
+        raise ValueError("output schema contains an unsupported keyword")
+    seen = set() if visited is None else visited
+    identity = id(schema)
+    if identity in seen:
+        return
+    seen.add(identity)
+
+    expected_type = schema.get("type")
+    if expected_type is not None:
+        if isinstance(expected_type, str):
+            types = (expected_type,)
+        elif (
+            isinstance(expected_type, list)
+            and expected_type
+            and all(isinstance(item, str) for item in expected_type)
+            and len(expected_type) == len(set(expected_type))
+        ):
+            types = tuple(expected_type)
+        else:
+            raise ValueError("output schema contains an invalid type declaration")
+        if any(item not in _SUPPORTED_SCHEMA_TYPES for item in types):
+            raise ValueError("output schema contains an unsupported JSON type")
+
+    for keyword in ("$schema", "$id", "title", "description"):
+        if keyword in schema and not isinstance(schema[keyword], str):
+            raise ValueError(f"output schema {keyword} must be a string")
+    for keyword in ("minItems", "maxItems", "minLength", "maxLength"):
+        if keyword in schema and (
+            isinstance(schema[keyword], bool)
+            or not isinstance(schema[keyword], int)
+            or schema[keyword] < 0
+        ):
+            raise ValueError(f"output schema {keyword} must be a non-negative integer")
+    for keyword in ("minimum", "maximum"):
+        if keyword in schema and (
+            isinstance(schema[keyword], bool)
+            or not isinstance(schema[keyword], (int, float))
+        ):
+            raise ValueError(f"output schema {keyword} must be a number")
+    if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
+        raise ValueError("output schema uniqueItems must be a boolean")
+
+    if "$ref" in schema:
+        reference = schema["$ref"]
+        if not isinstance(reference, str):
+            raise ValueError("output schema contains a non-string reference")
+        _resolve_schema_reference(reference, root_schema)
+    if "pattern" in schema:
+        pattern = schema["pattern"]
+        if not isinstance(pattern, str):
+            raise ValueError("output schema pattern must be a string")
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError("output schema contains an invalid pattern") from error
+    if "format" in schema and schema["format"] != "date-time":
+        raise ValueError("output schema contains an unsupported format")
+    if "required" in schema:
+        required = schema["required"]
+        if (
+            not isinstance(required, list)
+            or any(not isinstance(item, str) for item in required)
+            or len(required) != len(set(required))
+        ):
+            raise ValueError("output schema contains an invalid required list")
+    if "enum" in schema and (
+        not isinstance(schema["enum"], list) or not schema["enum"]
+    ):
+        raise ValueError("output schema enum must be a non-empty array")
+    if "additionalProperties" in schema and not isinstance(
+        schema["additionalProperties"],
+        (bool, dict),
+    ):
+        raise ValueError("output schema additionalProperties is invalid")
+    if ("then" in schema or "else" in schema) and "if" not in schema:
+        raise ValueError("output schema then/else requires if")
+    for keyword in ("items", "not", "if", "then", "else"):
+        if keyword in schema and not isinstance(schema[keyword], (bool, dict)):
+            raise ValueError(f"output schema {keyword} must be a schema")
+
+    for container_name in ("properties", "$defs"):
+        container = schema.get(container_name, {})
+        if not isinstance(container, dict):
+            raise ValueError(f"output schema {container_name} must be an object")
+        for name, child in container.items():
+            if not isinstance(name, str):
+                raise ValueError(f"output schema {container_name} has a non-string key")
+            _validate_schema_definition(child, root_schema, visited=seen)
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        children = schema.get(keyword, [])
+        if not isinstance(children, list) or (keyword in schema and not children):
+            raise ValueError(f"output schema {keyword} must be a non-empty array")
+        for child in children:
+            _validate_schema_definition(child, root_schema, visited=seen)
+    for keyword in ("items", "not", "if", "then", "else", "additionalProperties"):
+        child = schema.get(keyword)
+        if isinstance(child, (bool, dict)):
+            _validate_schema_definition(child, root_schema, visited=seen)
+
+
+def _schema_matches(value: Any, schema: Any, root_schema: Mapping[str, Any]) -> bool:
+    try:
+        _validate_json_value(value, schema, root_schema)
+    except ValueError:
+        return False
+    return True
+
+
 def _matches_type(value: Any, expected: str) -> bool:
     if expected == "object":
         return isinstance(value, dict)
@@ -366,6 +546,23 @@ def _matches_type(value: Any, expected: str) -> bool:
     if expected == "null":
         return value is None
     raise ValueError(f"unsupported JSON Schema type: {expected}")
+
+
+def _matches_declared_type(value: Any, expected: object) -> bool:
+    if isinstance(expected, str):
+        return _matches_type(value, expected)
+    if isinstance(expected, list):
+        return any(_matches_type(value, item) for item in expected)
+    raise ValueError("output schema contains an invalid type declaration")
+
+
+def _is_valid_datetime(value: str) -> bool:
+    normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
 
 
 def _validate_json_value(
@@ -390,7 +587,24 @@ def _validate_json_value(
             root_schema,
             context,
         )
-        return
+    for child in schema.get("allOf", []):
+        _validate_json_value(value, child, root_schema, context)
+    if "anyOf" in schema and not any(
+        _schema_matches(value, child, root_schema)
+        for child in schema["anyOf"]
+    ):
+        raise ValueError(f"{context} does not match any allowed schema")
+    if "oneOf" in schema and sum(
+        _schema_matches(value, child, root_schema)
+        for child in schema["oneOf"]
+    ) != 1:
+        raise ValueError(f"{context} does not match exactly one allowed schema")
+    if "not" in schema and _schema_matches(value, schema["not"], root_schema):
+        raise ValueError(f"{context} matches a forbidden schema")
+    if "if" in schema:
+        branch = "then" if _schema_matches(value, schema["if"], root_schema) else "else"
+        if branch in schema:
+            _validate_json_value(value, schema[branch], root_schema, context)
     if "const" in schema and value != schema["const"]:
         raise ValueError(f"{context} does not match its required constant")
     if "enum" in schema:
@@ -398,9 +612,8 @@ def _validate_json_value(
         if not isinstance(options, list) or value not in options:
             raise ValueError(f"{context} is not an allowed value")
     expected_type = schema.get("type")
-    if expected_type is not None:
-        if not isinstance(expected_type, str) or not _matches_type(value, expected_type):
-            raise ValueError(f"{context} has the wrong JSON type")
+    if expected_type is not None and not _matches_declared_type(value, expected_type):
+        raise ValueError(f"{context} has the wrong JSON type")
 
     if isinstance(value, dict):
         required = schema.get("required", [])
@@ -458,6 +671,11 @@ def _validate_json_value(
             raise ValueError(f"{context} is too short")
         if isinstance(maximum, int) and len(value) > maximum:
             raise ValueError(f"{context} is too long")
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and re.search(pattern, value) is None:
+            raise ValueError(f"{context} does not match its required pattern")
+        if schema.get("format") == "date-time" and not _is_valid_datetime(value):
+            raise ValueError(f"{context} is not a valid date-time")
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         minimum = schema.get("minimum")
         maximum = schema.get("maximum")
@@ -475,6 +693,7 @@ def _validate_final_output(output: str, schema_path: Path) -> None:
         raise ValueError("final output or output schema is not valid JSON") from error
     if not isinstance(schema, dict):
         raise ValueError("output schema must be a JSON object")
+    _validate_schema_definition(schema, schema)
     _validate_json_value(value, schema, schema)
 
 
@@ -488,6 +707,7 @@ class CodexExecutor:
         self._runner = runner or _popen_runner
         source_environment = os.environ if environment is None else environment
         self._environment = _narrow_environment(source_environment)
+        self._sensitive_values = _sensitive_environment_values(source_environment)
         self._specs: dict[str, SessionSpec] = {}
         self._statuses: dict[str, SessionStatus] = {}
 
@@ -552,8 +772,14 @@ class CodexExecutor:
         except subprocess.TimeoutExpired as error:
             stdout = _text_output(error.stdout)
             stderr = _text_output(error.stderr)
-            stdout_path.write_text(stdout, encoding="utf-8")
-            stderr_path.write_text(stderr, encoding="utf-8")
+            stdout_path.write_text(
+                _redact_sensitive_values(stdout, self._sensitive_values),
+                encoding="utf-8",
+            )
+            stderr_path.write_text(
+                _redact_sensitive_values(stderr, self._sensitive_values),
+                encoding="utf-8",
+            )
             return self._failed_result(
                 expected_session_id,
                 "timeout",
@@ -572,8 +798,14 @@ class CodexExecutor:
                 stderr_path,
             )
 
-        stdout_path.write_text(stdout, encoding="utf-8")
-        stderr_path.write_text(stderr, encoding="utf-8")
+        stdout_path.write_text(
+            _redact_sensitive_values(stdout, self._sensitive_values),
+            encoding="utf-8",
+        )
+        stderr_path.write_text(
+            _redact_sensitive_values(stderr, self._sensitive_values),
+            encoding="utf-8",
+        )
         if completed.returncode != 0:
             return self._failed_result(
                 expected_session_id,
