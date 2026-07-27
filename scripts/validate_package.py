@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -363,7 +363,7 @@ def check_source_package(root: Path) -> list[str]:
         for token in (
             ".codex-plugin/plugin.json",
             "codex plugin marketplace add",
-            "19 lifecycle",
+            "lifecycle, boundary, restoration, direction-audit, plan-handoff, simplification, and artifact-integrity tests",
             "## Invocation and activation boundary",
             "implicit selection remains model-mediated",
             "no behavioral skill-selection evaluation harness",

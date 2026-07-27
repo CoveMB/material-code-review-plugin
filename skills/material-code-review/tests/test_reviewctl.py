@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -207,6 +208,18 @@ class ReviewCtlTest(unittest.TestCase):
                 },
             }
         ]
+        groups[0]["repair_audit"] = {
+            "scope_hash": scope_hash,
+            "candidate_ids": ["C001"],
+            "repair_direction_hash": reviewctl.canonical_hash(groups[0]["repair_direction"]),
+            "mode": "independent",
+            "auditor_id": "repair-auditor",
+            "independence_group": "model-c",
+            "trigger": "retained_group",
+            "rationale": "A fresh audit confirmed the smallest safe root-cause correction.",
+            "evidence_checked": ["calc.py:2", "test_calc.py:2"],
+            "counterevidence": ["Changing the test would redefine the established contract."],
+        }
         if include_style:
             groups.append(
                 {
@@ -250,10 +263,11 @@ class ReviewCtlTest(unittest.TestCase):
                     "recommended_action": "none",
                     "required_pre_fix_verification": None,
                     "repair_direction": None,
+                    "repair_audit": None,
                 }
             )
         return {
-            "schema_version": "material-review/adjudication/v2",
+            "schema_version": "material-review/adjudication/v3",
             "scope_hash": scope_hash,
             "candidate_bundle_hash": candidate_hash,
             "adjudicator_id": "controller",
@@ -302,8 +316,10 @@ class ReviewCtlTest(unittest.TestCase):
         test_command: str = "grep -Fq 'return a + b' calc.py",
         global_tests: list[dict] | None = None,
     ) -> dict:
+        finding = self.load("ledger.json")["findings"][0]
+        direction = finding["repair_direction"]
         return {
-            "schema_version": "material-review/fix-plan/v1",
+            "schema_version": "material-review/fix-plan/v2",
             "scope_hash": scope_hash,
             "findings_gate_hash": gate_hash,
             "plan_summary": "Restore addition and run the regression command.",
@@ -312,6 +328,25 @@ class ReviewCtlTest(unittest.TestCase):
                     "finding_id": "F001",
                     "root_cause": "The operator was changed from addition to subtraction.",
                     "objective": "add(1, 2) returns 3.",
+                    "repair_direction_assessment": {
+                        "repair_direction_hash": finding["repair_direction_hash"],
+                        "constraint_handling": [
+                            {"source": value, "handling": f"Preserve this constraint: {value}"}
+                            for value in direction["constraints_to_preserve"]
+                        ],
+                        "state_or_exception_handling": [
+                            {"source": value, "handling": f"Exercise and preserve this case: {value}"}
+                            for value in direction["state_or_exception_cases"]
+                        ],
+                        "open_user_decision_handling": [
+                            {"source": value, "handling": f"Resolve this decision before mutation: {value}"}
+                            for value in direction["open_user_decisions"]
+                        ],
+                        "alternatives_considered": direction["alternatives_checked"]
+                        or ["No wider alternative is needed for this local correction."],
+                        "diverges": False,
+                        "divergence_rationale": None,
+                    },
                     "depends_on": [],
                     "steps": ["Replace subtraction with addition."],
                     "allowed_paths": allowed_paths or ["calc.py"],
@@ -486,12 +521,22 @@ class ReviewCtlTest(unittest.TestCase):
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = self.adjudication(scope_hash, candidate_hash, include_style=False)
         adjudication["groups"][0]["repair_direction"]["smallest_safe_change"] = "Restore only the operator."
+        adjudication["groups"][0]["repair_audit"]["repair_direction_hash"] = reviewctl.canonical_hash(
+            adjudication["groups"][0]["repair_direction"]
+        )
         adjudication_path = self.write_json("adjudication-repair.json", adjudication)
         self.run_tool("compile-ledger", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(adjudication_path))
         ledger = self.load("ledger.json")
         self.assertEqual(ledger["findings"][0]["repair_direction"]["smallest_safe_change"], "Restore only the operator.")
+        self.assertEqual(
+            ledger["findings"][0]["repair_direction_hash"],
+            reviewctl.canonical_hash(ledger["findings"][0]["repair_direction"]),
+        )
+        self.assertEqual(ledger["findings"][0]["repair_audit"]["mode"], "independent")
         rendered = (self.run_dir / "ledger.md").read_text(encoding="utf-8")
         self.assertIn("Gate A approves findings for repair planning only", rendered)
+        self.assertIn("Repair-direction audit", rendered)
+        self.assertIn("repair-auditor", rendered)
         self.assertNotIn("Unsafe candidate suggestion", rendered)
         self.assertNotIn("Suggested response", rendered)
 
@@ -510,7 +555,7 @@ class ReviewCtlTest(unittest.TestCase):
         )
         gate_hash = self.load("gates/findings.json")["receipt_hash"]
         invalid_plan = {
-            "schema_version": "material-review/fix-plan/v1",
+            "schema_version": "material-review/fix-plan/v2",
             "scope_hash": scope_hash,
             "findings_gate_hash": gate_hash,
             "plan_summary": "Invalid empty item set.",
@@ -534,6 +579,83 @@ class ReviewCtlTest(unittest.TestCase):
             expected=2,
         )
         self.assertEqual(self.load("state.json")["phase"], "FINDINGS_APPROVED")
+
+    def test_plan_rejects_legacy_or_unbound_direction_assessments(self) -> None:
+        scope_hash = self.reach_adjudicated(include_style=False)
+        self.run_tool(
+            "gate-findings", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--approve", "F001", "--user-statement", "Approve F001.",
+        )
+        gate_hash = self.load("gates/findings.json")["receipt_hash"]
+        valid_plan = self.plan_payload(scope_hash, gate_hash)
+
+        legacy = copy.deepcopy(valid_plan)
+        legacy["schema_version"] = "material-review/fix-plan/v1"
+        wrong_hash = copy.deepcopy(valid_plan)
+        wrong_hash["items"][0]["repair_direction_assessment"]["repair_direction_hash"] = "0" * 64
+        missing_constraint = copy.deepcopy(valid_plan)
+        missing_constraint["items"][0]["repair_direction_assessment"]["constraint_handling"] = []
+        missing_state = copy.deepcopy(valid_plan)
+        missing_state["items"][0]["repair_direction_assessment"]["state_or_exception_handling"] = []
+        unexplained_divergence = copy.deepcopy(valid_plan)
+        unexplained_divergence["items"][0]["repair_direction_assessment"]["diverges"] = True
+
+        for name, payload in (
+            ("legacy", legacy),
+            ("wrong-hash", wrong_hash),
+            ("missing-constraint", missing_constraint),
+            ("missing-state", missing_state),
+            ("unexplained-divergence", unexplained_divergence),
+        ):
+            with self.subTest(name=name):
+                path = self.write_json(f"{name}.json", payload)
+                self.run_tool(
+                    "validate-plan", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                    "--input", str(path), expected=2,
+                )
+                self.assertEqual(self.load("state.json")["phase"], "FINDINGS_APPROVED")
+
+        valid_path = self.write_json("valid-v2-plan.json", valid_plan)
+        self.run_tool(
+            "validate-plan", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(valid_path),
+        )
+        rendered = (self.run_dir / "fix-plan.md").read_text(encoding="utf-8")
+        self.assertIn("Repair-direction assessment", rendered)
+        self.assertIn(valid_plan["items"][0]["repair_direction_assessment"]["repair_direction_hash"], rendered)
+
+    def test_direction_assessment_requires_every_open_user_decision(self) -> None:
+        direction = {
+            **self.adjudication("a" * 64, "b" * 64, include_style=False)["groups"][0]["repair_direction"],
+            "status": "needs_user_decision",
+            "open_user_decisions": ["Choose whether the public contract may change."],
+        }
+        finding = {
+            "finding_id": "F001",
+            "repair_direction": direction,
+            "repair_direction_hash": reviewctl.canonical_hash(direction),
+        }
+        assessment = {
+            "repair_direction_hash": finding["repair_direction_hash"],
+            "constraint_handling": [
+                {"source": value, "handling": "Preserve it."}
+                for value in direction["constraints_to_preserve"]
+            ],
+            "state_or_exception_handling": [
+                {"source": value, "handling": "Exercise it."}
+                for value in direction["state_or_exception_cases"]
+            ],
+            "open_user_decision_handling": [],
+            "alternatives_considered": ["Retain the current public contract."],
+            "diverges": False,
+            "divergence_rationale": None,
+        }
+        with self.assertRaisesRegex(reviewctl.ReviewError, "cover each approved direction entry exactly"):
+            reviewctl.validate_repair_direction_assessment(
+                assessment,
+                "assessment",
+                finding=finding,
+            )
 
     def test_plan_rejects_directory_write_boundaries(self) -> None:
         scope_hash = self.reach_adjudicated()
@@ -851,7 +973,7 @@ class ReviewCtlTest(unittest.TestCase):
         )
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = {
-            "schema_version": "material-review/adjudication/v2",
+            "schema_version": "material-review/adjudication/v3",
             "scope_hash": scope_hash,
             "candidate_bundle_hash": candidate_hash,
             "adjudicator_id": "controller",

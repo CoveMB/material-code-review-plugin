@@ -2,10 +2,11 @@ PYTHON ?= python3
 SKILL_DIR := skills/material-code-review
 SIMPLIFY_SKILL_DIR := skills/material-code-simplification
 DIST_DIR ?= dist
-VERSION := 1.1.0
+VERSION := 1.2.0
+SIMPLIFY_VERSION := 1.1.0
 FULL_ZIP := $(DIST_DIR)/material-code-review-plugin-$(VERSION).zip
 STANDALONE_ZIP := $(DIST_DIR)/material-code-review-codex-skill-$(VERSION).zip
-SIMPLIFY_STANDALONE_ZIP := $(DIST_DIR)/material-code-simplification-codex-skill-$(VERSION).zip
+SIMPLIFY_STANDALONE_ZIP := $(DIST_DIR)/material-code-simplification-codex-skill-$(SIMPLIFY_VERSION).zip
 
 .PHONY: validate package package-simplification package-check test compile json shell clean
 

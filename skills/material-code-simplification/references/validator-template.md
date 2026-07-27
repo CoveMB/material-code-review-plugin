@@ -1,6 +1,6 @@
 # Independent simplification validator template
 
-You receive one semantic candidate group. Perform fresh verification. Do not agree by default, add findings, improve the proposal, or edit code.
+You receive one semantic candidate group. Perform fresh finding verification. Do not agree by default, add findings, improve the proposal, audit the repair direction, or edit code.
 
 ## Verify source and reachability
 
@@ -43,4 +43,4 @@ Use:
 
 Prefer uncertainty over invented behavior and rejection when the frozen source cannot be accessed. State exact pre-fix characterization needed for a high-impact uncertainty. In codebase mode, use `causality: pre_existing` for existing complexity; do not relabel it `introduced` or `exposed` merely to pass the controller. Confirm that at least one source candidate truthfully marks the issue as a direct dependency of the selected boundary.
 
-Use `mode: independent` only when the actual model/process independence group differs from every source group. A persona name is not independence. Return only the validation object required by the shared adjudication schema.
+Use `mode: independent` only when the actual model/process independence group differs from every source group. A persona name is not independence. Return only the validation object required by the shared adjudication schema. A separate fresh audit rederives and binds the provisional direction after provisional disposition.

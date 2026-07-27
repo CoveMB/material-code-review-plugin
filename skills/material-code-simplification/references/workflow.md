@@ -9,9 +9,10 @@ The canonical skill defines simplification judgment. `simplifyctl.py` adds bound
 | new | `init --scope range --base ... --head ...` | delegated immutable review-only range; refreeze before mutation |
 | context | `check-scope` | selected file/ref identity remains fresh |
 | context | `ingest-candidates --input ...` | strict shared candidate validation and normalization |
-| candidates | `compile-ledger --input ...` | complete kept/discarded adjudication and stable `F###` IDs |
+| candidates | provisional grouping + inherited repair audit | complete partition plus behavior-preserving, hash-bound direction for every provisionally kept group |
+| audited provisional groups | `compile-ledger --input ...` | adjudication/v3 validation and stable `F###` IDs |
 | adjudicated | `gate-findings ...` | Gate A dispositions persisted against ledger hash |
-| findings approved | `validate-plan --input ...` | exact approved-ID plan validated; no write permission |
+| findings approved | `validate-plan --input ...` | fix-plan/v2 IDs and complete direction-bound assessment validated; no write permission |
 | plan validated | `gate-plan --approve|--reject` | Gate B receipt persisted against exact plan hash |
 | plan approved | `begin-fix` | pre-fix checkpoint and workspace guard |
 | fixing | `start-finding --finding F###` | per-item checkpoint |
@@ -47,3 +48,7 @@ Always pass `--run-id` or set `MATERIAL_REVIEW_RUN_ID` when more than one review
 - plan repair rounds 0–2, normally 1;
 - post-fix review restricted to approved IDs and fix-caused regressions;
 - unrelated observations never reopen discovery.
+
+## Inherited direction and plan contracts
+
+Resolve the shared remediation auditor, remediation rubric, and causal test-evidence rubric from `$CORE_DIR/references/` in both layouts. Every retained provisional group carries an audit bound to scope, candidate IDs, and direction hash. Gate A approves only the opportunity. Fix-plan/v2 must then handle every approved constraint, state/exception, and open decision exactly, name alternatives, and explain any divergence before Gate B.

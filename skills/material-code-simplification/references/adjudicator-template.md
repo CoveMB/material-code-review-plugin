@@ -1,6 +1,6 @@
 # Simplification adjudicator template
 
-Synthesize normalized candidates, validator results, and any repair-direction audit into one complete adjudication. You may merge semantic duplicates; you may not invent or omit a candidate.
+Synthesize normalized candidates and validator results into one complete provisional partition, route every provisionally kept group through the inherited repair-direction audit, then compile the same audited partition. You may merge semantic duplicates before audit; you may not invent or omit a candidate or change a group after audit.
 
 ## Required process
 
@@ -12,9 +12,10 @@ Synthesize normalized candidates, validator results, and any repair-direction au
 6. Treat AI provenance, smell names, line count, and static metrics as non-evidential.
 7. Test the “leave as is” explanation and smallest local alternative before retaining a boundary restructure.
 8. Apply extra rewrite gates and discard rewrites when local work is adequate or behavior is not characterizable.
-9. Give every group `keep` or `discard`, a specific reason, and a valid controller discard code when discarded.
-10. For each kept group, produce the shared canonical `repair_direction`; use the simplification validator's preserved behavior, smallest safer alternative, net-reduction shape, characterization evidence, and rewrite limits. Set it to null when discarded.
-11. End discovery after the ledger. Do not request another broad pass to improve confidence or find more items.
+9. Give every group a provisional `keep` or `discard`, a specific reason, and a valid controller discard code when discarded.
+10. Route each provisionally kept group through `$CORE_DIR/references/remediation-auditor-template.md`. Attach its normalized shared `repair_direction` and scope-, candidate-, and direction-hash-bound `repair_audit`, using the preserved behavior, smallest safer alternative, net-reduction shape, characterization evidence, and rewrite limits.
+11. If the group, disposition, or direction changes, repeat the affected audit before final compilation. Set both direction and audit to null when discarded.
+12. End discovery after the ledger. Do not request another broad pass to improve confidence or find more items.
 
 ## Materiality mapping
 
@@ -36,6 +37,6 @@ Use the shared verdict contract. In whole-codebase mode, interpret `SHOULD FIX B
 
 ## Output
 
-Return exactly one object conforming to the shared adjudication schema, including one canonical provisional `repair_direction` for every kept group. Every normalized candidate ID appears in exactly one group. Do not assign `F###` IDs; the controller does that.
+Return exactly adjudication/v3 under the shared schema, including one canonical provisional `repair_direction` and bound `repair_audit` for every kept group. Every normalized candidate ID appears in exactly one group. Do not assign `F###` IDs; the controller does that.
 
 A no-findings result is valid and uses `READY`.

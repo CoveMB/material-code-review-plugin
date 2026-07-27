@@ -10,8 +10,13 @@
 | Validator unavailable | Use controller-direct only for mechanically authoritative facts; otherwise record degraded self-audit or uncertainty. |
 | Validator rejects | Discard with `VALIDATOR_REJECTED`. |
 | Validator uncertain | Keep only blocker/high with explicit required pre-fix verification; otherwise discard. |
+| Repair auditor unavailable | Use controller-direct only for a mechanically entailed low-risk local correction; otherwise record `degraded_self_audit`. |
+| Repair audit absent or mis-bound | Reject adjudication; repeat the affected provisional audit without changing candidate coverage. |
+| Group, disposition, or direction changes after audit | Treat the audit as stale and repeat it before final adjudication. |
 | Candidate omitted by adjudicator | Reject adjudication as incomplete. |
 | Gate A absent | Stop before planning. |
+| Plan direction hash is stale or coverage is incomplete | Reject fix-plan/v2; rederive the item from the Gate-A ledger. |
+| Plan diverges without a rationale | Reject the plan; make the difference explicit before Gate B. |
 | Plan differs after Gate B | Invalidate approval and re-present the new hash. |
 | Unapproved path changes | Restore the finding checkpoint and reject the attempt. |
 | Required test fails or mutates workspace | Restore when safe; retry only inside budget. |

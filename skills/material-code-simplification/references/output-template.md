@@ -24,6 +24,7 @@ For every `F###`:
 - behavior/contracts to preserve;
 - proposed reduction class and bounded replacement shape;
 - “leave as is” and smaller alternatives checked;
+- direction hash and repair-audit mode, auditor, independence group, rationale, evidence, and counterevidence;
 - validation result and counterevidence;
 - estimated risk and unresolved assumptions;
 - recommended action.
@@ -42,6 +43,8 @@ For every approved ID show:
 
 - transformation class and why it is the smallest sufficient shape;
 - behavior and contracts to preserve;
+- approved direction hash and exact handling of every constraint, state/exception, and open user decision;
+- alternatives considered, divergence flag, and conditional divergence rationale;
 - ordered steps;
 - exact changed/new/deleted paths;
 - dependency/configuration/migration effects;

@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -46,6 +46,9 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "core/schemas/adjudication.schema.json",
     "core/schemas/fix-plan.schema.json",
     "core/schemas/verification.schema.json",
+    "core/references/remediation-auditor-template.md",
+    "core/references/remediation-rubric.md",
+    "core/references/test-evidence-rubric.md",
 }
 ARCHIVE_EXECUTABLES = {
     "scripts/simplifyctl.py",
@@ -60,7 +63,7 @@ ARCHIVE_FORBIDDEN_PARTS = {
     ".git",
 }
 ARCHIVE_FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
-ARCHIVE_COMMENT = b"material-code-simplification standalone Agent Skill"
+ARCHIVE_COMMENT = f"material-code-simplification standalone Agent Skill {VERSION}".encode("utf-8")
 
 
 def normalize_archive_member(name: str) -> str:
@@ -209,13 +212,13 @@ def validate_archive(archive_path: Path) -> list[str]:
     return errors
 
 
-def resolve_core() -> tuple[str, Path, Path] | None:
+def resolve_core() -> tuple[str, Path, Path, Path] | None:
     full = ROOT.parent / "material-code-review"
     standalone = ROOT / "core"
     if (standalone / "reviewctl.py").is_file():
-        return "standalone", standalone / "reviewctl.py", standalone / "schemas"
+        return "standalone", standalone / "reviewctl.py", standalone / "schemas", standalone / "references"
     if (full / "scripts" / "reviewctl.py").is_file():
-        return "full-plugin", full / "scripts" / "reviewctl.py", full / "schemas"
+        return "full-plugin", full / "scripts" / "reviewctl.py", full / "schemas", full / "references"
     return None
 
 
@@ -251,9 +254,14 @@ def main(argv: list[str] | None = None) -> int:
     core_layout = resolve_core()
     if core_layout is None:
         errors.append("missing shared controller: expected sibling material-code-review or standalone core/")
-        layout, controller, schema_dir = "missing", ROOT / "missing", ROOT / "missing"
+        layout, controller, schema_dir, core_reference_dir = (
+            "missing",
+            ROOT / "missing",
+            ROOT / "missing",
+            ROOT / "missing",
+        )
     else:
-        layout, controller, schema_dir = core_layout
+        layout, controller, schema_dir, core_reference_dir = core_layout
         for name in (
             "candidate-set.schema.json",
             "adjudication.schema.json",
@@ -262,6 +270,13 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if not (schema_dir / name).is_file():
                 errors.append(f"missing shared schema: {schema_dir / name}")
+        for name in (
+            "remediation-auditor-template.md",
+            "remediation-rubric.md",
+            "test-evidence-rubric.md",
+        ):
+            if not (core_reference_dir / name).is_file():
+                errors.append(f"missing shared repair-direction reference: {core_reference_dir / name}")
 
     skill = ROOT / "SKILL.md"
     if skill.is_file():

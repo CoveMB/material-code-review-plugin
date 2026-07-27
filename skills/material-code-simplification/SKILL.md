@@ -31,6 +31,8 @@ Set `SKILL_DIR` to this skill directory. Resolve `CORE_DIR` and `SCHEMA_DIR` in 
    - `CORE_DIR="$SKILL_DIR/../material-code-review"`
    - `SCHEMA_DIR="$CORE_DIR/schemas"`
 
+In both layouts, resolve the inherited repair-direction procedure from `"$CORE_DIR/references/remediation-auditor-template.md"`, `"$CORE_DIR/references/remediation-rubric.md"`, and `"$CORE_DIR/references/test-evidence-rubric.md"`. The standalone archive ships these paths under `core/references/`.
+
 Use the simplification adapter for all controller commands:
 
 ```bash
@@ -283,11 +285,11 @@ The validator checks:
 
 The validator may confirm, reject, or remain uncertain. It may not invent a new candidate. When no independent process/model exists, label the result honestly as controller-direct or degraded self-audit.
 
-#### 3.2 Adjudication
+#### 3.2 Provisional grouping and disposition
 
 Use `references/adjudicator-template.md`, the shared adjudication schema, and `references/simplification-rubric.md`.
 
-The adjudicator must:
+The adjudicator first creates a read-only provisional partition. It must:
 
 1. dispose every candidate exactly once;
 2. merge only semantic duplicates that share the same root cause and transformation boundary;
@@ -296,7 +298,17 @@ The adjudicator must:
 5. apply the complete net-simplification test;
 6. reject aesthetics, metric gaming, speculative future flexibility, harmless duplication, abstraction churn, uncharacterized behavior removal, and rewrites lacking bounded evidence;
 7. keep no new issue that lacks a candidate ID;
-8. end candidate expansion after compiling the ledger.
+8. give every group a provisional `keep` or `discard` disposition without assigning `F###` IDs.
+
+#### 3.3 Repair-direction audit
+
+Every provisionally kept simplification group receives the inherited audit from `"$CORE_DIR/references/remediation-auditor-template.md"`. The audit must rederive the smallest behavior-preserving reduction from the evidence; preserve public contracts, states, exceptions, compatibility, authorization, generated ownership, and rewrite limits; compare leave-as-is, local reduction, and any wider alternative; and name causal characterization/regression evidence.
+
+Attach the normalized shared `repair_direction` and `repair_audit`. The audit record must bind the exact scope hash, ordered candidate IDs, and canonical direction hash and report its actual auditor, independence group, mode, trigger, rationale, evidence, and counterevidence. Use controller-direct only for a mechanically entailed low-risk local correction; otherwise report unavailable independence as degraded. Discarded groups keep both fields null.
+
+#### 3.4 Final adjudication
+
+Compile the same complete provisional candidate-ID partition after every retained direction is audited. Any changed group, disposition, or direction makes the audit stale and must be repeated. End candidate expansion after the ledger; do not add a new simplification during audit or adjudication.
 
 Use the shared controller verdicts as an action posture:
 
@@ -305,7 +317,7 @@ Use the shared controller verdicts as an action posture:
 - `SHOULD FIX BEFORE MERGE` — meaningful current complexity has a favorable, actionable reduction path. In codebase mode, read this as “recommended before further expansion,” not necessarily as a literal pending merge.
 - `NOT READY` — use only when complexity contributes to a blocker-level correctness, safety, data, security, or operability risk.
 
-Compile the complete kept/discarded ledger:
+Compile the complete audited kept/discarded ledger:
 
 ```bash
 python3 "$SKILL_DIR/scripts/simplifyctl.py" compile-ledger \
@@ -315,7 +327,7 @@ python3 "$SKILL_DIR/scripts/simplifyctl.py" compile-ledger \
 
 ### Gate A — User validates opportunities
 
-This is a hard pause. Do not draft the transformation plan before the user responds.
+This is a hard pause. Gate A approves opportunities for planning only; it does not approve the provisional direction or any transformation. Do not draft the transformation plan before the user responds.
 
 Present:
 
@@ -323,7 +335,7 @@ Present:
 - behavior/architecture map summary;
 - reviewer and validator coverage, including degraded independence;
 - action posture;
-- every kept `F###` item with exact evidence, present cost, preserved behavior, proposed reduction shape, alternatives checked, validation result, confidence, and risk;
+- every kept `F###` item with exact evidence, present cost, preserved behavior, the direction hash and provisional reduction shape, alternatives checked, direction-audit provenance, validation result, separate finding/direction confidence, and risk;
 - every discarded group with the specific reason and code;
 - a decision request to approve, reject, or defer each kept ID.
 
@@ -342,13 +354,15 @@ Use `--accept-empty` instead of ID dispositions only when no kept finding surviv
 
 ### Phase 4 — Plan only Gate-A-approved transformations
 
-Use `references/planner-template.md` and the shared fix-plan schema.
+Use `references/planner-template.md` and shared fix-plan/v2.
 
 Create exactly one plan item per Gate-A-approved `F###`. One item may span several exact files. If two IDs require one indivisible transformation, stop for re-adjudication or a plan amendment; do not combine IDs into an unrepresentable plan item.
 
 Each approved item must define:
 
 - supported root cause and observable behavior to preserve;
+- a `repair_direction_assessment` bound to the approved direction hash, with exact handling for every direction constraint, state/exception, and open user decision;
+- alternatives considered, an explicit divergence flag, and a rationale whenever the exact transformation differs from the audited direction;
 - transformation class: `delete`, `consolidate`, `inline`, `reuse-existing`, `dependency-reduce`, `restructure`, or `bounded-rewrite`; the shared fix-plan schema has no class field, so begin `objective` with `Transformation class: <class>.` and add no extra JSON property;
 - why a smaller transformation is insufficient when using `restructure` or `bounded-rewrite`;
 - exact current and replacement ownership boundaries;
@@ -360,6 +374,8 @@ Each approved item must define:
 - exact non-mutating test commands, working directories, purposes, and timeouts;
 - success evidence for behavior preservation and for removal of the old path;
 - risk controls and `max_attempts` from 1 to 3.
+
+The shared controller loads the hash-verified ledger through the Gate A receipt and rejects legacy fix-plan/v1, a stale direction hash, incomplete or reordered handling, an omitted decision, or unexplained divergence.
 
 #### Test strategy
 

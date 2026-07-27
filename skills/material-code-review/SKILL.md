@@ -243,27 +243,33 @@ Validators may reject or mark uncertainty. They may not invent new findings. For
 
 Do not batch unrelated findings into one validator context. Fresh per-finding context is the point. Bound validator concurrency and total attempts; never drop P0/high-impact candidates solely because validator infrastructure failed. Instead mark validation degraded and route the uncertainty visibly to Gate A.
 
-#### 2.2 Repair-direction audit
+#### 2.2 Provisional grouping and disposition
+
+Use `references/adjudicator-template.md` to form read-only provisional groups after validation. Include every candidate ID exactly once, group only semantic duplicates, attach validation and materiality, and give each group a provisional `keep` or `discard` disposition. This pass does not assign stable `F###` IDs or compile the ledger.
+
+Every provisionally kept group must proceed to a repair-direction audit. Every provisionally discarded group keeps both `repair_direction` and `repair_audit` null. Final adjudication must use the same complete candidate-ID partition; changing a group or disposition requires repeating the affected audit before compilation.
+
+#### 2.3 Repair-direction audit
 
 Use `references/remediation-auditor-template.md`, `references/remediation-rubric.md`, and `references/test-evidence-rubric.md`. The audit determines whether the candidate suggestions support one safe provisional repair direction. It does not revalidate the finding, discover a new finding, or produce the exact Gate-B plan.
 
-Require a fresh repair-direction audit whenever a kept candidate group is blocker or high severity; concerns security, privacy, public APIs, configuration, schemas, serialization, migration, concurrency, or authorization; has medium, high, or unknown fix risk; requires a user decision; crosses canonical contract owners; or contains materially different candidate repair suggestions. A mechanically entailed low-risk local correction may use a controller-direct audit, but label the weaker independence accurately.
+Require a fresh repair-direction audit for every provisionally kept group. Use an independent auditor whenever host capability exists for judgment-heavy, high-impact, security, privacy, public-contract, configuration, schema, serialization, migration, concurrency, authorization, cross-owner, or materially divergent suggestions. A mechanically entailed low-risk local correction may use a controller-direct audit; otherwise an unavailable independent route must be recorded as `degraded_self_audit`, never mislabeled as independent.
 
-The audit must compare the literal candidate suggestion with the smallest safe root-cause correction, preserve material states and exceptions, reject guessed authority, keep orthogonal policy dimensions separate, and name causal verification evidence. A real finding remains valid when its direction is `needs_refinement`, `needs_user_decision`, `unsafe_to_apply`, or `insufficient_evidence`.
+The audit must compare the literal candidate suggestion with the smallest safe root-cause correction, preserve material states and exceptions, reject guessed authority, keep orthogonal policy dimensions separate, and name causal verification evidence. It returns a normalized `repair_direction` plus a `repair_audit` record bound to the run `scope_hash`, exact candidate IDs, and canonical direction hash. The record names its actual mode, auditor, independence group, trigger, rationale, evidence, and counterevidence. A real finding remains valid when its direction is `needs_refinement`, `needs_user_decision`, `unsafe_to_apply`, or `insufficient_evidence`.
 
-#### 2.3 Adjudication
+#### 2.4 Final adjudication
 
 Use `references/adjudicator-template.md` and `schemas/adjudication.schema.json`. In Codex, use a fresh read-only `default` subagent or installed project-scoped adjudicator when available. The adjudicator must not have generated or validated the same candidates and may not invent a finding. When no fresh role exists, the controller adjudicates and records the weaker independence accurately.
 
 The adjudicator must:
 
-1. group semantic duplicates without merging distinct failure modes;
-2. include every candidate ID exactly once;
+1. reuse the audited provisional groups without merging distinct failure modes;
+2. include every candidate ID exactly once and reject group or disposition drift after audit;
 3. preserve source reviewers and independence groups;
 4. attach the independent validation result;
 5. apply the nature-specific materiality tests;
 6. choose `keep` or `discard` with a reason code;
-7. attach one canonical provisional `repair_direction` to every kept group and null to every discarded group;
+7. attach the hash-bound `repair_direction` and `repair_audit` to every kept group and null to every discarded group;
 8. keep finding confidence separate from repair-direction status and confidence;
 9. produce no new finding that lacks a candidate ID.
 
@@ -279,7 +285,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" compile-ledger \
 
 The tool writes a stable finding ledger in JSON and Markdown, with `F###` IDs for kept findings and explicit discarded groups/reasons.
 
-#### 2.4 Merge-readiness decision
+#### 2.5 Merge-readiness decision
 
 Use this mapping:
 
@@ -334,7 +340,8 @@ Use `references/planner-template.md` and `schemas/fix-plan.schema.json`. In Code
 The plan must include every Gate-A-approved ID exactly once and no rejected/deferred ID. Each item must define:
 
 - root cause and observable goal;
-- the provisional repair direction, constraints, states and exceptions, and any material reason the exact plan differs from it;
+- a `repair_direction_assessment` bound to the approved direction hash, with one exact handling record for every constraint, state/exception, and open user decision;
+- alternatives considered, an explicit divergence flag, and a rationale whenever the exact plan differs from the approved direction;
 - alternatives considered and why the selected repair is the smallest safe root-cause correction;
 - ordered, concrete repair steps;
 - exact allowed file or final-symlink paths, including any new file anticipated; directory-wide permissions are invalid;
@@ -361,7 +368,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" validate-plan \
   --input /tmp/fix-plan.json
 ```
 
-Validation checks IDs, hashes, paths, test contracts, dependencies, attempt limits, and loop controls. It does not grant write permission.
+Validation loads the hash-verified ledger through the Gate A receipt and checks exact IDs, the approved direction hash, complete constraint/state/decision coverage, explained divergence, paths, test contracts, dependencies, attempt limits, and loop controls. Legacy fix-plan/v1 payloads are rejected. Validation does not grant write permission.
 
 ### Gate B — User validates the repair plan
 

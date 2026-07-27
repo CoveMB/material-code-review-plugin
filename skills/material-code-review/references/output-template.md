@@ -13,7 +13,7 @@ Present this information before asking for any decision:
 Use exactly one: `READY`, `READY WITH OPTIONAL FOLLOW-UPS`, `SHOULD FIX BEFORE MERGE`, `NOT READY`. Explain the load-bearing reason.
 
 ### Kept findings
-For every `F###`: title; nature/category; severity/finding confidence; exact evidence; consequence and trigger; causality; counterevidence checked; validation result; materiality reason; fix risk; required pre-fix verification; and the canonical provisional repair direction with its separate status, confidence, constraints, states/exceptions, alternatives, causal test evidence, user decisions, and known limits.
+For every `F###`: title; nature/category; severity/finding confidence; exact evidence; consequence and trigger; causality; counterevidence checked; validation result; materiality reason; fix risk; required pre-fix verification; the canonical provisional repair direction and direction hash with its separate status, confidence, constraints, states/exceptions, alternatives, causal test evidence, user decisions, and known limits; and the repair audit's actual mode, auditor, independence group, trigger, rationale, evidence, and counterevidence.
 
 ### Discarded candidates
 List every group with candidate IDs, title, discard code, and concrete reason. Do not hide duplicate, style, speculative, or validator-rejected candidates.
@@ -23,7 +23,7 @@ State exactly that Gate A approves findings for repair planning only. It does no
 
 ## Gate B — exact plan approval
 
-For every approved `F###`, show root cause, objective, differences from the provisional direction, constraints and state/exception coverage, alternatives considered, ordered steps, exact paths, exact commands, causal test evidence, manual checks, dependencies, risks, rollback, success evidence, and attempt limit. Show global tests, scope-expansion behavior, and maximum repair rounds. Ask for explicit approval or rejection of this exact plan hash.
+For every approved `F###`, show root cause, objective, the approved direction hash, exact handling for every constraint, state/exception, and open user decision, alternatives considered, the divergence flag and conditional rationale, ordered steps, exact paths, exact commands, causal test evidence, manual checks, dependencies, risks, rollback, success evidence, and attempt limit. Show global tests, scope-expansion behavior, and maximum repair rounds. Ask for explicit approval or rejection of this exact plan hash.
 
 ## Final report
 

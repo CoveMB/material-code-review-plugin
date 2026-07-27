@@ -18,7 +18,8 @@ import zipfile
 from pathlib import Path
 
 SKILL_NAME = "material-code-simplification"
-FIXED_TIMESTAMP = (2026, 7, 17, 0, 0, 0)
+VERSION = "1.1.0"
+FIXED_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
 EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
 WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
@@ -104,6 +105,13 @@ def iter_files(root: Path):
     yield validate_source_file(core / "scripts" / "reviewctl.py", core), "core/reviewctl.py"
     for source in sorted((core / "schemas").glob("*.json")):
         yield validate_source_file(source, core), f"core/schemas/{source.name}"
+    for name in (
+        "remediation-auditor-template.md",
+        "remediation-rubric.md",
+        "test-evidence-rubric.md",
+    ):
+        source = core / "references" / name
+        yield validate_source_file(source, core), f"core/references/{name}"
 
 
 def main() -> int:
@@ -111,9 +119,10 @@ def main() -> int:
     parser.add_argument("--root", default=".", help="Plugin repository root")
     parser.add_argument(
         "--output",
-        default=f"dist/{SKILL_NAME}.zip",
+        default=f"dist/{SKILL_NAME}-codex-skill-{VERSION}.zip",
         help="Output ZIP path",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     args = parser.parse_args()
     root = Path(args.root).expanduser().resolve()
     output = Path(args.output).expanduser()
@@ -133,7 +142,7 @@ def main() -> int:
         seen: set[str] = set()
         seen_windows_keys: set[str] = set()
         with zipfile.ZipFile(temp, "w", allowZip64=True) as archive:
-            archive.comment = b"material-code-simplification standalone Agent Skill"
+            archive.comment = f"material-code-simplification standalone Agent Skill {VERSION}".encode("utf-8")
             for source, archive_path in entries:
                 normalized_archive_path = normalize_archive_path(archive_path)
                 if normalized_archive_path in seen:

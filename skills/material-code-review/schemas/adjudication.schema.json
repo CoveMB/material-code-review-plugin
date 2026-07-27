@@ -16,7 +16,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "material-review/adjudication/v2"
+      "const": "material-review/adjudication/v3"
     },
     "scope_hash": {
       "type": "string",
@@ -57,7 +57,8 @@
           "discard_reason_code",
           "recommended_action",
           "required_pre_fix_verification",
-          "repair_direction"
+          "repair_direction",
+          "repair_audit"
         ],
         "properties": {
           "group_id": {
@@ -452,6 +453,87 @@
                 ]
               }
             ]
+          },
+          "repair_audit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "scope_hash",
+                  "candidate_ids",
+                  "repair_direction_hash",
+                  "mode",
+                  "auditor_id",
+                  "independence_group",
+                  "trigger",
+                  "rationale",
+                  "evidence_checked",
+                  "counterevidence"
+                ],
+                "properties": {
+                  "scope_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "candidate_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                  },
+                  "repair_direction_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "mode": {
+                    "enum": [
+                      "independent",
+                      "controller_direct",
+                      "degraded_self_audit"
+                    ]
+                  },
+                  "auditor_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "independence_group": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trigger": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidence_checked": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "counterevidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            ]
           }
         },
         "allOf": [
@@ -469,6 +551,9 @@
                   "type": "null"
                 },
                 "repair_direction": {
+                  "type": "object"
+                },
+                "repair_audit": {
                   "type": "object"
                 }
               }
@@ -506,6 +591,9 @@
                   ]
                 },
                 "repair_direction": {
+                  "type": "null"
+                },
+                "repair_audit": {
                   "type": "null"
                 }
               }

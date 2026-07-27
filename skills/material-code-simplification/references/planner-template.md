@@ -10,6 +10,9 @@ Specify:
 
 - supported root cause and present cost;
 - observable behavior and contracts to preserve;
+- `repair_direction_assessment.repair_direction_hash` set to the exact approved ledger direction hash;
+- one exact `source`/`handling` record for every direction constraint, state/exception, and open user decision;
+- alternatives considered, an explicit `diverges` flag, and a non-empty `divergence_rationale` when true; use null when false;
 - transformation class: delete, consolidate, inline, reuse-existing, dependency-reduce, restructure, or bounded-rewrite; because the shared schema has no class field, begin `objective` with `Transformation class: <class>.` and add no extra JSON field;
 - why a smaller class is insufficient for restructure/rewrite;
 - ordered steps, including characterization before destructive work when behavior is uncertain;
@@ -46,4 +49,4 @@ Set exactly:
 - `scope_expansion_policy: restore_and_reapprove`;
 - `max_repair_rounds`: normally 1, maximum 2.
 
-Return exactly the shared fix-plan schema. Do not imply validation is write permission; Gate B remains mandatory.
+Return exactly shared fix-plan/v2. The controller loads the ledger through Gate A and rejects stale hashes, incomplete handling, omitted decisions, and unexplained divergence. Do not imply validation is write permission; Gate B remains mandatory.

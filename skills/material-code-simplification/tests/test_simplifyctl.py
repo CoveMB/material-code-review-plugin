@@ -126,13 +126,13 @@ class SimplifyCtlTest(unittest.TestCase):
         simplification_validator.ROOT = skill
         try:
             self.assertEqual(simplifyctl._load_core().MARKER, "bundled")
-            layout, controller, _schemas = simplification_validator.resolve_core()
+            layout, controller, _schemas, _references = simplification_validator.resolve_core()
             self.assertEqual(layout, "standalone")
             self.assertEqual(controller, bundled_controller)
 
             bundled_controller.unlink()
             self.assertEqual(simplifyctl._load_core().MARKER, "sibling")
-            layout, controller, _schemas = simplification_validator.resolve_core()
+            layout, controller, _schemas, _references = simplification_validator.resolve_core()
             self.assertEqual(layout, "full-plugin")
             self.assertEqual(controller, sibling_controller)
         finally:
@@ -555,7 +555,7 @@ class SimplifyCtlTest(unittest.TestCase):
         )
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = {
-            "schema_version": "material-review/adjudication/v2",
+            "schema_version": "material-review/adjudication/v3",
             "scope_hash": scope_hash,
             "candidate_bundle_hash": candidate_hash,
             "adjudicator_id": "fixture-adjudicator",
@@ -619,6 +619,20 @@ class SimplifyCtlTest(unittest.TestCase):
             "summary": "The selected codebase fixture has one repairable finding.",
             "limitations": [],
         }
+        adjudication["groups"][0]["repair_audit"] = {
+            "scope_hash": scope_hash,
+            "candidate_ids": ["C001"],
+            "repair_direction_hash": simplifyctl.core.canonical_hash(
+                adjudication["groups"][0]["repair_direction"]
+            ),
+            "mode": "independent",
+            "auditor_id": "fixture-repair-auditor",
+            "independence_group": "fixture-repair-auditor",
+            "trigger": "retained_group",
+            "rationale": "The local literal replacement preserves the characterized public contract.",
+            "evidence_checked": ["src/service.py:2", "tests/test_service.py"],
+            "counterevidence": ["Changing the expected value would redefine the fixture contract."],
+        }
         adjudication_path = self.write_json("codebase-adjudication.json", adjudication)
         self.run_tool(
             "compile-ledger",
@@ -641,8 +655,10 @@ class SimplifyCtlTest(unittest.TestCase):
             "Approve the selected codebase fixture finding.",
         )
         gate_hash = self.load("gates/findings.json")["receipt_hash"]
+        finding = self.load("ledger.json")["findings"][0]
+        direction = finding["repair_direction"]
         plan_payload = {
-            "schema_version": "material-review/fix-plan/v1",
+            "schema_version": "material-review/fix-plan/v2",
             "scope_hash": scope_hash,
             "findings_gate_hash": gate_hash,
             "plan_summary": "Replace the fixture value and run a non-mutating regression.",
@@ -651,6 +667,21 @@ class SimplifyCtlTest(unittest.TestCase):
                     "finding_id": "F001",
                     "root_cause": "The service still returns the obsolete fixture value.",
                     "objective": "value() returns 2.",
+                    "repair_direction_assessment": {
+                        "repair_direction_hash": finding["repair_direction_hash"],
+                        "constraint_handling": [
+                            {"source": value, "handling": "Keep the public callable contract unchanged."}
+                            for value in direction["constraints_to_preserve"]
+                        ],
+                        "state_or_exception_handling": [
+                            {"source": value, "handling": "Exercise the deterministic path before and after."}
+                            for value in direction["state_or_exception_cases"]
+                        ],
+                        "open_user_decision_handling": [],
+                        "alternatives_considered": direction["alternatives_checked"],
+                        "diverges": False,
+                        "divergence_rationale": None,
+                    },
                     "depends_on": [],
                     "steps": ["Replace the obsolete return value with 2."],
                     "allowed_paths": ["src/service.py"],

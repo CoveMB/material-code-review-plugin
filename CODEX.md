@@ -2,7 +2,7 @@
 
 ## Compatibility decision
 
-Version 1.1.0 is natively compatible with the current Codex plugin system and also remains portable as an Agent Skill.
+Version 1.2.0 is natively compatible with the current Codex plugin system and also remains portable as an Agent Skill. It ships audited, hash-bound repair directions and fix-plan/v2 plan handoffs; the full plugin also contains material simplification, whose standalone archive is independently versioned at 1.1.0.
 
 The native package surfaces are:
 
@@ -22,7 +22,7 @@ The package also includes a root `SKILL.md` adapter and a standalone skill archi
 Extract the full ZIP:
 
 ```bash
-unzip material-code-review-plugin-1.1.0.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.2.0.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a marketplace:
@@ -44,13 +44,15 @@ Install the smaller archive directly into the user skill directory:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.1.0.zip \
+unzip material-code-review-codex-skill-1.2.0.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
 Restart Codex if it does not detect the skill immediately. An OpenAI Skills surface that supports ZIP import can use the same archive.
 
 Its archive root contains the canonical `SKILL.md`, `agents/openai.yaml`, controller, schemas, references, examples, and tests.
+
+For a simplification-only installation, use `material-code-simplification-codex-skill-1.1.0.zip`. Its `core/` layout carries the shared controller, schemas, and repair-direction references used by the canonical simplification workflow.
 
 ## Invocation
 
@@ -63,7 +65,7 @@ Use $material-code-review to review the current uncommitted changes for material
 After Gate A approval:
 
 ```text
-For the Gate-A-approved findings only, draft the exact repair plan with exact writable paths, commands, risks, rollback behavior, and retry limits. Stop at Gate B without editing.
+For the Gate-A-approved findings only, rederive the exact repair from each audited direction. Account for every constraint, state or exception, open decision, alternative, and divergence, then draft the exact writable paths, commands, risks, rollback behavior, and retry limits. Stop at Gate B without editing.
 ```
 
 Only after Gate B:

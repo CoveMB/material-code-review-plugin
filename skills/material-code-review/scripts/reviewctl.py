@@ -28,15 +28,15 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
-ADJUDICATION_SCHEMA = "material-review/adjudication/v2"
-LEDGER_SCHEMA = "material-review/ledger/v2"
+ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
+LEDGER_SCHEMA = "material-review/ledger/v3"
 FINDINGS_GATE_SCHEMA = "material-review/findings-gate/v1"
-FIX_PLAN_SCHEMA = "material-review/fix-plan/v1"
+FIX_PLAN_SCHEMA = "material-review/fix-plan/v2"
 PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
 FIX_SUMMARY_SCHEMA = "material-review/fix-summary/v1"
 VERIFICATION_SCHEMA = "material-review/verification/v1"
@@ -383,6 +383,13 @@ def require_string(value: Any, context: str, *, nonempty: bool = True) -> str:
     if nonempty and not value.strip():
         raise ReviewError(f"{context} must not be empty")
     return value
+
+
+def require_sha256(value: Any, context: str) -> str:
+    digest = require_string(value, context)
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ReviewError(f"{context} must be a lowercase SHA-256 digest")
+    return digest
 
 
 def require_bool(value: Any, context: str) -> bool:
@@ -825,6 +832,25 @@ def load_verified_findings_gate(run_dir: Path, state: dict[str, Any]) -> dict[st
     require_state_gate(state, "findings", receipt_hash, "Gate A receipt")
     require_state_hash(state, "findings_gate_hash", receipt_hash, "Gate A receipt")
     return receipt
+
+
+def load_verified_ledger(
+    run_dir: Path,
+    state: dict[str, Any],
+    *,
+    findings_gate: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ledger = require_object(load_json(run_dir / "ledger.json"), "ledger")
+    ledger_hash = verify_embedded_hash(
+        ledger,
+        hash_field="ledger_hash",
+        context="ledger",
+        unhashed_fields={"generated_at"},
+    )
+    require_state_hash(state, "ledger_hash", ledger_hash, "ledger")
+    if findings_gate is not None and findings_gate.get("ledger_hash") != ledger_hash:
+        raise ReviewError("Ledger does not match the hash recorded by Gate A")
+    return ledger
 
 
 def load_verified_plan(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -1690,6 +1716,107 @@ def validate_repair_direction(
         ),
     }
 
+
+def validate_repair_audit(
+    value: Any,
+    context: str,
+    *,
+    required: bool,
+    scope_hash: str,
+    candidate_ids: list[str],
+    repair_direction: dict[str, Any] | None,
+    source_independence_groups: list[str],
+    source_candidates: list[dict[str, Any]],
+    category: str,
+) -> dict[str, Any] | None:
+    if value is None:
+        if required:
+            raise ReviewError(f"{context} is required for a kept finding")
+        return None
+    if not required:
+        raise ReviewError(f"{context} must be null for a discarded finding")
+    if repair_direction is None:
+        raise ReviewError(f"{context} cannot be validated without a repair direction")
+
+    obj = require_object(value, context)
+    keys = {
+        "scope_hash",
+        "candidate_ids",
+        "repair_direction_hash",
+        "mode",
+        "auditor_id",
+        "independence_group",
+        "trigger",
+        "rationale",
+        "evidence_checked",
+        "counterevidence",
+    }
+    require_exact_keys(obj, keys, context)
+
+    audit_scope_hash = require_sha256(obj["scope_hash"], f"{context}.scope_hash")
+    if audit_scope_hash != scope_hash:
+        raise ReviewError(f"{context}.scope_hash does not match the run")
+    audit_candidate_ids = require_string_array(obj["candidate_ids"], f"{context}.candidate_ids")
+    if audit_candidate_ids != candidate_ids:
+        raise ReviewError(f"{context}.candidate_ids must exactly match the retained group")
+    direction_hash = canonical_hash(repair_direction)
+    audit_direction_hash = require_sha256(
+        obj["repair_direction_hash"],
+        f"{context}.repair_direction_hash",
+    )
+    if audit_direction_hash != direction_hash:
+        raise ReviewError(f"{context}.repair_direction_hash does not match the normalized repair direction")
+
+    mode = require_string(obj["mode"], f"{context}.mode")
+    if mode not in VALIDATION_MODES:
+        raise ReviewError(f"{context}.mode must be one of {sorted(VALIDATION_MODES)}")
+    independence_group = require_string(
+        obj["independence_group"],
+        f"{context}.independence_group",
+    )
+    if mode == "independent" and independence_group in source_independence_groups:
+        raise ReviewError(f"{context}: auditor is not independent from the candidate sources")
+
+    trigger = require_string(obj["trigger"], f"{context}.trigger")
+    if mode == "controller_direct":
+        sensitive_categories = {"security", "privacy", "api_contract", "migration", "concurrency"}
+        affected_paths = {
+            path
+            for candidate in source_candidates
+            for path in [candidate["file"], *candidate["related_changed_files"]]
+        }
+        eligible = (
+            trigger == "mechanically_entailed_low_risk"
+            and category not in sensitive_categories
+            and all(candidate["estimated_fix_risk"] == "low" for candidate in source_candidates)
+            and len(affected_paths) == 1
+            and repair_direction["status"] == "reviewed"
+            and not repair_direction["open_user_decisions"]
+        )
+        if not eligible:
+            raise ReviewError(
+                f"{context}: controller_direct is allowed only for a mechanically entailed low-risk local correction"
+            )
+
+    return {
+        "scope_hash": audit_scope_hash,
+        "candidate_ids": audit_candidate_ids,
+        "repair_direction_hash": audit_direction_hash,
+        "mode": mode,
+        "auditor_id": require_string(obj["auditor_id"], f"{context}.auditor_id"),
+        "independence_group": independence_group,
+        "trigger": trigger,
+        "rationale": require_string(obj["rationale"], f"{context}.rationale"),
+        "evidence_checked": require_string_array(
+            obj["evidence_checked"],
+            f"{context}.evidence_checked",
+        ),
+        "counterevidence": require_string_array(
+            obj["counterevidence"],
+            f"{context}.counterevidence",
+        ),
+    }
+
 def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     obj = require_object(raw, "adjudication")
     top_keys = {
@@ -1740,6 +1867,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "recommended_action",
         "required_pre_fix_verification",
         "repair_direction",
+        "repair_audit",
     }
 
     for index, raw_group in enumerate(groups_raw):
@@ -1819,7 +1947,22 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         required_pre_fix = group["required_pre_fix_verification"]
         if required_pre_fix is not None:
             required_pre_fix = require_string(required_pre_fix, f"{context}.required_pre_fix_verification")
-        repair_direction = validate_repair_direction(group["repair_direction"], f"{context}.repair_direction", required=disposition == "keep")
+        repair_direction = validate_repair_direction(
+            group["repair_direction"],
+            f"{context}.repair_direction",
+            required=disposition == "keep",
+        )
+        repair_audit = validate_repair_audit(
+            group["repair_audit"],
+            f"{context}.repair_audit",
+            required=disposition == "keep",
+            scope_hash=state["scope_hash"],
+            candidate_ids=candidate_ids,
+            repair_direction=repair_direction,
+            source_independence_groups=source_independence,
+            source_candidates=source_candidates,
+            category=category,
+        )
 
         if disposition == "keep":
             if discard_reason is not None:
@@ -1879,6 +2022,8 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             "recommended_action": recommendation,
             "required_pre_fix_verification": required_pre_fix,
             "repair_direction": repair_direction,
+            "repair_direction_hash": canonical_hash(repair_direction) if repair_direction is not None else None,
+            "repair_audit": repair_audit,
         }
         groups.append(normalized_group)
 
@@ -1937,7 +2082,104 @@ def validate_test_spec(value: Any, context: str, repo: Path) -> dict[str, Any]:
     }
 
 
-def validate_fix_plan(raw: Any, *, repo: Path, state: dict[str, Any], findings_gate: dict[str, Any]) -> dict[str, Any]:
+def validate_direction_handling(
+    value: Any,
+    context: str,
+    *,
+    expected_sources: list[str],
+) -> list[dict[str, str]]:
+    entries = require_array(value, context)
+    normalized: list[dict[str, str]] = []
+    sources: list[str] = []
+    for index, raw_entry in enumerate(entries):
+        entry_context = f"{context}[{index}]"
+        entry = require_object(raw_entry, entry_context)
+        require_exact_keys(entry, {"source", "handling"}, entry_context)
+        source = require_string(entry["source"], f"{entry_context}.source")
+        sources.append(source)
+        normalized.append(
+            {
+                "source": source,
+                "handling": require_string(entry["handling"], f"{entry_context}.handling"),
+            }
+        )
+    if sources != expected_sources:
+        raise ReviewError(f"{context} must cover each approved direction entry exactly and in order")
+    return normalized
+
+
+def validate_repair_direction_assessment(
+    value: Any,
+    context: str,
+    *,
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    obj = require_object(value, context)
+    keys = {
+        "repair_direction_hash",
+        "constraint_handling",
+        "state_or_exception_handling",
+        "open_user_decision_handling",
+        "alternatives_considered",
+        "diverges",
+        "divergence_rationale",
+    }
+    require_exact_keys(obj, keys, context)
+    direction = require_object(finding.get("repair_direction"), f"ledger {finding['finding_id']}.repair_direction")
+    expected_hash = require_sha256(
+        finding.get("repair_direction_hash"),
+        f"ledger {finding['finding_id']}.repair_direction_hash",
+    )
+    if expected_hash != canonical_hash(direction):
+        raise ReviewError(f"Ledger direction hash is invalid for {finding['finding_id']}")
+    direction_hash = require_sha256(obj["repair_direction_hash"], f"{context}.repair_direction_hash")
+    if direction_hash != expected_hash:
+        raise ReviewError(f"{context}.repair_direction_hash does not match the approved ledger direction")
+
+    alternatives = require_string_array(
+        obj["alternatives_considered"],
+        f"{context}.alternatives_considered",
+    )
+    if not alternatives:
+        raise ReviewError(f"{context}.alternatives_considered must not be empty")
+    diverges = require_bool(obj["diverges"], f"{context}.diverges")
+    rationale = obj["divergence_rationale"]
+    if diverges:
+        rationale = require_string(rationale, f"{context}.divergence_rationale")
+    elif rationale is not None:
+        raise ReviewError(f"{context}.divergence_rationale must be null when diverges is false")
+
+    return {
+        "repair_direction_hash": direction_hash,
+        "constraint_handling": validate_direction_handling(
+            obj["constraint_handling"],
+            f"{context}.constraint_handling",
+            expected_sources=direction["constraints_to_preserve"],
+        ),
+        "state_or_exception_handling": validate_direction_handling(
+            obj["state_or_exception_handling"],
+            f"{context}.state_or_exception_handling",
+            expected_sources=direction["state_or_exception_cases"],
+        ),
+        "open_user_decision_handling": validate_direction_handling(
+            obj["open_user_decision_handling"],
+            f"{context}.open_user_decision_handling",
+            expected_sources=direction["open_user_decisions"],
+        ),
+        "alternatives_considered": alternatives,
+        "diverges": diverges,
+        "divergence_rationale": rationale,
+    }
+
+
+def validate_fix_plan(
+    raw: Any,
+    *,
+    repo: Path,
+    state: dict[str, Any],
+    findings_gate: dict[str, Any],
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
     obj = require_object(raw, "fix plan")
     top_keys = {
         "schema_version",
@@ -1975,10 +2217,12 @@ def validate_fix_plan(raw: Any, *, repo: Path, state: dict[str, Any], findings_g
     items_raw = require_array(obj["items"], "fix plan.items")
     items: list[dict[str, Any]] = []
     item_ids: set[str] = set()
+    findings_by_id = {finding["finding_id"]: finding for finding in ledger["findings"]}
     item_keys = {
         "finding_id",
         "root_cause",
         "objective",
+        "repair_direction_assessment",
         "depends_on",
         "steps",
         "allowed_paths",
@@ -1997,6 +2241,14 @@ def validate_fix_plan(raw: Any, *, repo: Path, state: dict[str, Any], findings_g
         if finding_id in item_ids:
             raise ReviewError(f"Duplicate plan item for {finding_id}")
         item_ids.add(finding_id)
+        finding = findings_by_id.get(finding_id)
+        if finding is None:
+            raise ReviewError(f"{context}.finding_id does not exist in the Gate-A ledger")
+        direction_assessment = validate_repair_direction_assessment(
+            item["repair_direction_assessment"],
+            f"{context}.repair_direction_assessment",
+            finding=finding,
+        )
         depends_on = require_string_array(item["depends_on"], f"{context}.depends_on")
         if finding_id in depends_on:
             raise ReviewError(f"{context}: finding cannot depend on itself")
@@ -2024,6 +2276,7 @@ def validate_fix_plan(raw: Any, *, repo: Path, state: dict[str, Any], findings_g
                 "finding_id": finding_id,
                 "root_cause": require_string(item["root_cause"], f"{context}.root_cause"),
                 "objective": require_string(item["objective"], f"{context}.objective"),
+                "repair_direction_assessment": direction_assessment,
                 "depends_on": depends_on,
                 "steps": steps,
                 "allowed_paths": allowed_paths,
@@ -2183,6 +2436,7 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
         lines.extend(
             [
                 "- Provisional repair direction:",
+                f"  - Direction hash: `{finding['repair_direction_hash']}`",
                 f"  - Status / confidence: `{direction['status']}` / `{direction['confidence']}`",
                 f"  - Root cause: {direction['root_cause']}",
                 f"  - Objective: {direction['objective']}",
@@ -2201,6 +2455,22 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
             if direction[key]:
                 lines.append(f"  - {label}:")
                 lines.extend(f"    - {value}" for value in direction[key])
+        audit = finding["repair_audit"]
+        lines.extend(
+            [
+                "- Repair-direction audit:",
+                f"  - Mode / auditor / independence group: `{audit['mode']}` / "
+                f"`{audit['auditor_id']}` / `{audit['independence_group']}`",
+                f"  - Trigger: `{audit['trigger']}`",
+                f"  - Rationale: {audit['rationale']}",
+            ]
+        )
+        if audit["evidence_checked"]:
+            lines.append("  - Evidence checked:")
+            lines.extend(f"    - {value}" for value in audit["evidence_checked"])
+        if audit["counterevidence"]:
+            lines.append("  - Counterevidence:")
+            lines.extend(f"    - {value}" for value in audit["counterevidence"])
         if finding["required_pre_fix_verification"]:
             lines.append(f"- Required pre-fix verification: {finding['required_pre_fix_verification']}")
         lines.append("")
@@ -2241,12 +2511,31 @@ def render_plan_markdown(plan: dict[str, Any]) -> str:
                 "",
                 f"- Root cause: {item['root_cause']}",
                 f"- Objective: {item['objective']}",
+                f"- Approved direction hash: `{item['repair_direction_assessment']['repair_direction_hash']}`",
                 f"- Dependencies: {', '.join(item['depends_on']) if item['depends_on'] else 'none'}",
                 f"- Allowed paths: {', '.join(f'`{path}`' for path in item['allowed_paths'])}",
                 f"- Max attempts: `{item['max_attempts']}`",
-                "- Steps:",
             ]
         )
+        assessment = item["repair_direction_assessment"]
+        lines.append("- Repair-direction assessment:")
+        handling_fields = (
+            ("Constraints", "constraint_handling"),
+            ("States and exceptions", "state_or_exception_handling"),
+            ("Open user decisions", "open_user_decision_handling"),
+        )
+        for label, key in handling_fields:
+            lines.append(f"  - {label}:")
+            if not assessment[key]:
+                lines.append("    - none")
+            for entry in assessment[key]:
+                lines.append(f"    - {entry['source']} -> {entry['handling']}")
+        lines.append("  - Alternatives considered:")
+        lines.extend(f"    - {entry}" for entry in assessment["alternatives_considered"])
+        lines.append(f"  - Diverges from approved direction: `{str(assessment['diverges']).lower()}`")
+        if assessment["divergence_rationale"]:
+            lines.append(f"  - Divergence rationale: {assessment['divergence_rationale']}")
+        lines.append("- Steps:")
         lines.extend(f"  {index}. {step}" for index, step in enumerate(item["steps"], start=1))
         lines.append("- Tests:")
         if not item["tests"]:
@@ -2501,6 +2790,8 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
                 "observable_consequence": representative["observable_consequence"],
                 "trigger_conditions": representative["trigger_conditions"],
                 "repair_direction": group["repair_direction"],
+                "repair_direction_hash": group["repair_direction_hash"],
+                "repair_audit": group["repair_audit"],
                 "estimated_fix_risk": representative["estimated_fix_risk"],
                 "requires_user_decision": bool(group["repair_direction"]["open_user_decisions"]),
                 "assumptions": representative["assumptions"],
@@ -2663,7 +2954,14 @@ def command_validate_plan(args: argparse.Namespace) -> int:
         raise ReviewError(f"Cannot validate a plan in phase {state['phase']}")
     check_scope_fresh(repo, run_dir, state)
     findings_gate = load_verified_findings_gate(run_dir, state)
-    plan = validate_fix_plan(load_json(Path(args.input).expanduser().resolve()), repo=repo, state=state, findings_gate=findings_gate)
+    ledger = load_verified_ledger(run_dir, state, findings_gate=findings_gate)
+    plan = validate_fix_plan(
+        load_json(Path(args.input).expanduser().resolve()),
+        repo=repo,
+        state=state,
+        findings_gate=findings_gate,
+        ledger=ledger,
+    )
     plan_hash = canonical_hash(plan)
     plan["plan_hash"] = plan_hash
     plan["validated_at"] = utc_now()

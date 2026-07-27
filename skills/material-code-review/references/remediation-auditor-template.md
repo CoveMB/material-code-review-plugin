@@ -1,6 +1,6 @@
 # Independent repair-direction auditor template
 
-You receive one retained semantic finding group, all source candidate suggestions, the finding validation, the frozen source bundle, and the relevant canonical contracts. Your task is to produce one provisional repair direction. Do not discover another finding, broaden the failure mode, plan exact edits, or mutate the repository.
+You receive one provisionally retained semantic finding group, all source candidate suggestions, the finding validation, the frozen source bundle, and the relevant canonical contracts. Your task is to produce one provisional repair direction and its audit record. Do not discover another finding, broaden the failure mode, change the group or disposition, plan exact edits, or mutate the repository.
 
 ## Verify
 
@@ -13,4 +13,4 @@ You receive one retained semantic finding group, all source candidate suggestion
 7. Use `test-evidence-rubric.md` to name causal regression evidence.
 8. Record unresolved user decisions, known limits, and why the direction is or is not ready for planning.
 
-Use `remediation-rubric.md`. Return exactly the `repair_direction` object required by `schemas/adjudication.schema.json`. A finding may be confirmed while the direction is `needs_refinement`, `needs_user_decision`, `unsafe_to_apply`, or `insufficient_evidence`.
+Use `remediation-rubric.md`. Return exactly the `repair_direction` and `repair_audit` objects required by `schemas/adjudication.schema.json`. Bind the audit to the run `scope_hash`, the group's exact ordered candidate IDs, and the canonical hash of the normalized direction. Record the actual mode, auditor identity, independence group, trigger, rationale, evidence checked, and counterevidence. Use `controller_direct` only for a mechanically entailed low-risk local correction; use `degraded_self_audit` when independence is unavailable for any other case. A finding may be confirmed while the direction is `needs_refinement`, `needs_user_decision`, `unsafe_to_apply`, or `insufficient_evidence`.

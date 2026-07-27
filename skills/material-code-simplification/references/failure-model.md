@@ -16,6 +16,8 @@
 - **Validator unavailable**: use controller-direct checks for mechanical facts and expose semantic uncertainty.
 - **Candidate requires new discovery to justify itself**: discard or defer; do not recurse.
 - **No material candidates**: compile an empty ledger and still obtain Gate A acceptance.
+- **Repair auditor unavailable**: use controller-direct only for a mechanically entailed low-risk local reduction; otherwise record degraded self-audit.
+- **Audit absent, mis-bound, or stale after group/direction change**: reject adjudication and repeat the affected audit without expanding discovery.
 
 ## Gates and plan
 
@@ -23,6 +25,8 @@
 - **User approves only the general goal**: not a disposition; request exact IDs.
 - **Plan adds an unapproved item**: reject plan.
 - **Plan lacks behavior evidence or exact paths**: reject plan.
+- **Plan direction hash or constraint/state/decision handling is incomplete**: reject fix-plan/v2 and rederive from the Gate-A ledger.
+- **Plan diverges without a rationale**: reject it before Gate B.
 - **Rewrite boundary is open-ended**: reject or split into bounded approved items.
 - **Plan changes after Gate B**: invalidate Gate B and obtain a new receipt.
 - **Missing/ambiguous Gate B**: stop.

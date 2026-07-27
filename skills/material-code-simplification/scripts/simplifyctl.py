@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Sequence
 
-ADAPTER_VERSION = "1.0.0"
+ADAPTER_VERSION = "1.1.0"
 PROFILE_NAME = "material-code-simplification"
 CODEBASE_SCOPE = "codebase"
 NO_BASELINE_SHA = "0" * 40

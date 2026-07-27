@@ -19,7 +19,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "material-review/fix-plan/v1"
+      "const": "material-review/fix-plan/v2"
     },
     "scope_hash": {
       "type": "string",
@@ -42,6 +42,7 @@
           "finding_id",
           "root_cause",
           "objective",
+          "repair_direction_assessment",
           "depends_on",
           "steps",
           "allowed_paths",
@@ -64,6 +65,90 @@
           "objective": {
             "type": "string",
             "minLength": 1
+          },
+          "repair_direction_assessment": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repair_direction_hash",
+              "constraint_handling",
+              "state_or_exception_handling",
+              "open_user_decision_handling",
+              "alternatives_considered",
+              "diverges",
+              "divergence_rationale"
+            ],
+            "properties": {
+              "repair_direction_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "constraint_handling": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/directionHandling"
+                }
+              },
+              "state_or_exception_handling": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/directionHandling"
+                }
+              },
+              "open_user_decision_handling": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/directionHandling"
+                }
+              },
+              "alternatives_considered": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "diverges": {
+                "type": "boolean"
+              },
+              "divergence_rationale": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "diverges": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "diverges"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "divergence_rationale": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "divergence_rationale": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
           },
           "depends_on": {
             "type": "array",
@@ -248,6 +333,26 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 2
+    }
+  },
+  "$defs": {
+    "directionHandling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "handling"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "handling": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   }
 }

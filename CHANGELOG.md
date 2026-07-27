@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 — 2026-07-26
+
+- Added provisional grouping followed by a mandatory, hash-bound repair-direction audit for every retained finding.
+- Added adjudication/v3 and ledger/v3 audit provenance, including accurate independent, controller-direct, and degraded modes.
+- Added fix-plan/v2 with exact approved-direction hashes, complete constraint/state/decision handling, alternatives, and explicit divergence rationale.
+- Aligned material simplification with the shared audit and plan lifecycle while preserving behavior characterization, net-reduction, and bounded-rewrite rules.
+- Added the independently versioned material-simplification 1.1.0 archive with its required shared controller, schemas, and remediation references.
+- Aligned Codex and Claude plugin manifests, validators, packagers, archive identities, and current-capability documentation.
+
 ## 1.1.0 — 2026-07-17
 
 - Added a root Agent Skills `SKILL.md` entrypoint for Codex and OpenAI Skills import.

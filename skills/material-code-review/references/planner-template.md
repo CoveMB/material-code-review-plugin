@@ -7,9 +7,11 @@ Create exactly one item for each approved `F###` and no other item. For each:
 - reread the canonical contract owner and all direct consumers affected by the finding;
 - state the supported root cause and observable objective;
 - rederive the exact repair instead of copying the provisional direction;
-- preserve every listed constraint and resolve each material state or exception;
+- bind `repair_direction_assessment.repair_direction_hash` to the exact approved ledger direction;
+- preserve every listed constraint and resolve each material state or exception with one exact `source`/`handling` record in the corresponding assessment array;
+- record one exact handling entry for every open user decision; do not silently decide it;
 - compare the literal candidate proposal, the smallest safe change, and any wider alternative required by the contract;
-- state in the objective or steps when and why the exact plan differs from the provisional repair direction;
+- list the alternatives considered, set `diverges` explicitly, and provide `divergence_rationale` whenever it is true; use null when it is false;
 - list ordered, concrete steps;
 - list exact repository-relative files or final symlinks that may change, including anticipated new files; never authorize a directory;
 - list dependencies on other approved findings;
@@ -29,4 +31,4 @@ At plan level set:
 - `scope_expansion_policy: restore_and_reapprove`;
 - `max_repair_rounds` from 0 to 2.
 
-Return exactly `schemas/fix-plan.schema.json`. Do not edit code or imply that plan validation grants permission; Gate B is still required.
+Return exactly fix-plan/v2 under `schemas/fix-plan.schema.json`. The controller rejects a stale direction hash, missing or reordered source coverage, an omitted user decision, or unexplained divergence. Do not edit code or imply that plan validation grants permission; Gate B is still required.

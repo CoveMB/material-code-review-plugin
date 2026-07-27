@@ -1,8 +1,8 @@
 # Material Code Review
 
-`material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
+`material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact Git change set, gathers repository context, captures review candidates, independently validates them, and produces a complete kept/discarded ledger. It then stops at two mandatory user gates:
+The package freezes the exact scope, gathers repository context, captures candidates, independently validates them, and produces a complete kept/discarded ledger. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -42,6 +42,7 @@ The narrowed descriptions and the workflow preflight reduce false activation; th
 - Codex skill interface metadata: `skills/material-code-review/agents/openai.yaml`
 - Portable package entrypoint: root `SKILL.md`
 - Canonical workflow: `skills/material-code-review/SKILL.md`
+- Canonical simplification workflow: `skills/material-code-simplification/SKILL.md`
 - Claude Code compatibility manifests: `.claude-plugin/`
 - Read-only Claude specialist agents: `agents/`
 - Claude compatibility command: `commands/material-review.md`
@@ -66,7 +67,7 @@ The controller uses only the Python standard library.
 Extract the archive first:
 
 ```bash
-unzip material-code-review-plugin-1.1.0.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.2.0.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a local Codex marketplace:
@@ -94,7 +95,7 @@ Use the smaller archive for direct Codex skill installation:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.1.0.zip \
+unzip material-code-review-codex-skill-1.2.0.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -113,6 +114,19 @@ tests/
 ```
 
 Skills may have separate installation state across OpenAI product surfaces, so install the archive in the surface where it will be used.
+
+## Standalone material simplification Skill
+
+The full plugin already includes material simplification. For a compact direct Skill import, build or install the independently versioned archive:
+
+```bash
+make package-simplification
+mkdir -p "$HOME/.agents/skills/material-code-simplification"
+unzip material-code-simplification-codex-skill-1.1.0.zip \
+  -d "$HOME/.agents/skills/material-code-simplification"
+```
+
+Its `core/` directory contains the shared controller, schemas, remediation auditor, remediation rubric, and causal test-evidence rubric needed to preserve the same two-gate lifecycle without the full plugin layout.
 
 ## Optional project-scoped Codex reviewers
 
@@ -231,20 +245,22 @@ Core tests alone:
 python3 -m unittest discover -s skills/material-code-review/tests -p 'test_*.py' -v
 ```
 
-The package includes **19 lifecycle, boundary, restoration, and artifact-integrity tests**. Packaging validation also checks the Codex and Claude manifests, skill frontmatter, activation contract, referenced support files, JSON schemas, generated-file hygiene, Python compilation, the Bash wrapper, and both extracted ZIP layouts. These static checks prove that the intended activation contract is packaged and cannot silently drift; they do not prove model-selection behavior. This repository has no behavioral skill-selection evaluation harness, so implicit selection remains model-mediated. A live local install was also validated with **Codex CLI 0.144.5** in an isolated `CODEX_HOME`: marketplace registration, plugin installation, enablement, cache population, and skill-resource discovery all succeeded. The ChatGPT desktop UI was not available in this environment, so desktop-side invocation was not exercised.
+The package includes lifecycle, boundary, restoration, direction-audit, plan-handoff, simplification, and artifact-integrity tests. Packaging validation also checks the Codex and Claude manifests, skill frontmatter, activation contract, referenced support files, JSON schemas, generated-file hygiene, Python compilation, the Bash wrapper, and all extracted ZIP layouts. These static checks prove that the intended activation contract is packaged and cannot silently drift; they do not prove model-selection behavior. This repository has no behavioral skill-selection evaluation harness, so implicit selection remains model-mediated. A live local install was also validated with **Codex CLI 0.144.5** in an isolated `CODEX_HOME`: marketplace registration, plugin installation, enablement, cache population, and skill-resource discovery all succeeded. The ChatGPT desktop UI was not available in this environment, so desktop-side invocation was not exercised.
 
 ## Distribution files
 
 Packaging produces:
 
 ```text
-material-code-review-plugin-1.1.0.zip
-material-code-review-plugin-1.1.0.zip.sha256
-material-code-review-codex-skill-1.1.0.zip
-material-code-review-codex-skill-1.1.0.zip.sha256
+material-code-review-plugin-1.2.0.zip
+material-code-review-plugin-1.2.0.zip.sha256
+material-code-review-codex-skill-1.2.0.zip
+material-code-review-codex-skill-1.2.0.zip.sha256
+material-code-simplification-codex-skill-1.1.0.zip
+material-code-simplification-codex-skill-1.1.0.zip.sha256
 ```
 
-The full ZIP is the recommended dual-host distribution. The standalone ZIP is the compact Agent Skills/Codex import.
+The full ZIP is the recommended dual-host distribution. The material-review and independently versioned material-simplification ZIPs are compact Agent Skills/Codex imports.
 
 ## Design research
 

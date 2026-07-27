@@ -7,9 +7,10 @@ The canonical skill defines the judgment contract. `reviewctl.py` enforces state
 | new | `init` | `CONTEXT_FROZEN` and immutable source/diff bundle |
 | context | `check-scope` | confirms current identity still matches |
 | context | `ingest-candidates --input ...` | validates reviewer JSON and writes normalized candidate bundle |
-| candidates | `compile-ledger --input ...` | validates complete adjudication and assigns stable `F###` IDs |
+| candidates | provisional grouping + repair audit | partitions every candidate once and binds every provisionally kept direction to scope, candidate IDs, and direction hash |
+| audited provisional groups | `compile-ledger --input ...` | validates complete final adjudication and assigns stable `F###` IDs |
 | adjudicated | `gate-findings ...` | records user dispositions and Gate A receipt |
-| findings approved | `validate-plan --input ...` | validates exact approved-ID plan; no write permission |
+| findings approved | `validate-plan --input ...` | loads the Gate-A ledger and validates exact approved IDs plus the direction-bound assessment; no write permission |
 | plan validated | `gate-plan --approve|--reject` | records Gate B receipt |
 | plan approved | `begin-fix` | captures repair-layer checkpoint and workspace guard |
 | fixing | `start-finding --finding F###` | creates per-finding checkpoint |
@@ -33,6 +34,6 @@ The default is the active repository's Git path `material-code-review`. A custom
 
 ## Input order
 
-Multiple candidate inputs may be ingested in one command. Adjudication consumes the normalized candidate bundle hash. The fix plan consumes the Gate A receipt hash. Verification consumes the approved plan hash and prepared fix-summary hash. Any mismatch fails closed.
+Multiple candidate inputs may be ingested in one command. Provisional grouping consumes the normalized candidate bundle; every retained group then receives a repair audit. Final adjudication consumes the normalized candidate bundle hash and the audit's exact scope, candidate-ID, and repair-direction-hash bindings. Fix-plan/v2 consumes the Gate A receipt and its hash-verified ledger, then binds each approved item to the exact direction hash and complete constraint, state/exception, and decision coverage. Verification consumes the approved plan hash and prepared fix-summary hash. Any mismatch fails closed.
 
 Run `python3 scripts/reviewctl.py <command> --help` for exact flags. On Windows use `py -3`.

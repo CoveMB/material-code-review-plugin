@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -309,6 +310,64 @@ class StandalonePackagingTests(unittest.TestCase):
 
             self.assertEqual(validation_result.returncode, 0, validation_result.stderr)
             self.assertIn("standalone archive is safe", validation_result.stdout)
+
+    def test_simplification_archive_ships_repair_direction_references(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_repository_fixture(temp_root)
+            output = temp_root / "standalone.zip"
+
+            package_result = self.run_packager(fixture_root, output)
+
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            with zipfile.ZipFile(output) as archive:
+                names = set(archive.namelist())
+            self.assertTrue(
+                {
+                    "core/references/remediation-auditor-template.md",
+                    "core/references/remediation-rubric.md",
+                    "core/references/test-evidence-rubric.md",
+                }.issubset(names)
+            )
+
+    def test_release_versions_are_aligned_and_independent(self) -> None:
+        full_version = "1.2.0"
+        simplification_version = "1.1.0"
+
+        for relative in (
+            ".codex-plugin/plugin.json",
+            ".claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json",
+        ):
+            manifest = json.loads((REPOSITORY_ROOT / relative).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["version"], full_version)
+
+        makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn(f"VERSION := {full_version}", makefile)
+        self.assertIn(f"SIMPLIFY_VERSION := {simplification_version}", makefile)
+        self.assertIn("material-code-simplification-codex-skill-$(SIMPLIFY_VERSION).zip", makefile)
+
+        full_surfaces = (
+            "scripts/package_plugin.py",
+            "scripts/validate_package.py",
+            "skills/material-code-review/scripts/reviewctl.py",
+            "skills/material-code-review/scripts/validate_package.py",
+        )
+        for relative in full_surfaces:
+            self.assertIn(full_version, (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"))
+
+        simplification_surfaces = (
+            "scripts/package_simplification_skill.py",
+            "skills/material-code-simplification/scripts/simplifyctl.py",
+            "skills/material-code-simplification/scripts/validate_package.py",
+        )
+        for relative in simplification_surfaces:
+            self.assertIn(
+                simplification_version,
+                (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
+            )
+
+        self.assertNotEqual(full_version, simplification_version)
 
     def test_archive_validator_rejects_unsafe_and_incomplete_archives(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
