@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,9 +12,9 @@ import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path, PurePosixPath
 from subprocess import CompletedProcess, TimeoutExpired
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
-from scripts.material_review_evaluation.benchmark import CommandSpec, load_benchmark
+from scripts.material_review_evaluation.benchmark import Benchmark, CommandSpec, load_benchmark
 from scripts.material_review_evaluation.artifacts import (
     NATIVE_SCHEMA_PROFILES,
     find_native_run,
@@ -25,9 +26,14 @@ from scripts.material_review_evaluation.artifacts import (
 )
 from scripts.material_review_evaluation.model import (
     EvaluationError,
+    atomic_write_json,
     canonical_hash,
     safe_relative_path,
     sha256_file,
+)
+from scripts.material_review_evaluation.controller import (
+    EvaluationController,
+    EvaluationRequest,
 )
 from scripts.material_review_evaluation.bundles import (
     build_agreement_bundle,
@@ -2738,6 +2744,1098 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         )
 
         scan_blinded_bundle(bundle)
+
+
+class FakeInterruption(BaseException):
+    """Simulate a process interruption without classifying it as infrastructure."""
+
+
+class ScriptedRandom:
+    """Keep private assignment stable while alternating the paired trial waves."""
+
+    def sample(self, population: object, count: int) -> list[object]:
+        values = list(population)  # type: ignore[arg-type]
+        if count != len(values):
+            raise AssertionError("controller must sample the complete supplied population")
+        if values == ["A1", "B1"]:
+            return values
+        if values == ["A2", "B2"]:
+            return list(reversed(values))
+        return values
+
+
+class FakeExecutor:
+    GATE_A_WITH_FINDINGS = (
+        "Evaluation policy approves every retained finding for planning and no others; "
+        "repair is not authorized."
+    )
+    GATE_A_EMPTY = (
+        "Evaluation policy accepts the empty material ledger; repair is not authorized."
+    )
+    GATE_B = (
+        "Evaluation policy approves this exact validated plan for comparison evidence "
+        "only; no repair or plan command execution is authorized."
+    )
+    CURRENT_PROFILE = (
+        "material-review/state/v1",
+        "material-review/ledger/v3",
+        "material-review/fix-plan/v2",
+    )
+    OLD_PROFILE = (
+        "material-review/state/v1",
+        "material-review/ledger/v1",
+        "material-review/fix-plan/v1",
+    )
+
+    def __init__(
+        self,
+        *,
+        agreement: dict[str, object] | None = None,
+        findings: dict[str, int] | None = None,
+        infrastructure_failures: dict[str, int] | None = None,
+        interrupt_once: set[str] | None = None,
+        repair_label: str | None = None,
+    ) -> None:
+        self.agreement = dict(agreement or {})
+        self.findings = dict(findings or {})
+        self.infrastructure_failures = dict(infrastructure_failures or {})
+        self.interrupt_once = set(interrupt_once or ())
+        self.repair_label = repair_label
+        self.consumed_interruptions: set[str] = set()
+        self.trial_labels: list[str] = []
+        self.trial_start_attempts: dict[str, int] = {}
+        self.trial_targets: list[Path] = []
+        self.trial_session_ids: list[str] = []
+        self.resume_statements: list[str] = []
+        self.agreement_starts: dict[str, int] = {"A": 0, "B": 0}
+        self.judge_starts = 0
+        self.schedule_present_at_trial_start: list[bool] = []
+        self._session_counter = 0
+        self._log_counter = 0
+        self._sessions: dict[str, dict[str, object]] = {}
+        self._statuses: dict[str, str] = {}
+
+    def start(self, session_spec: SessionSpec) -> SessionResult:
+        if session_spec.role == "trial":
+            return self._start_trial(session_spec)
+        if session_spec.role == "agreement":
+            return self._start_agreement(session_spec)
+        if session_spec.role == "judge":
+            return self._start_judgment(session_spec)
+        raise AssertionError(f"unexpected fake role: {session_spec.role}")
+
+    def resume(
+        self,
+        session_id: str,
+        statement: str,
+        session_spec: SessionSpec,
+    ) -> SessionResult:
+        context = self._sessions[session_id]
+        if context["spec"] != session_spec:
+            raise EvaluationError("fake resume configuration differs from start")
+        self.resume_statements.append(statement)
+        run_directory = Path(context["run_directory"])
+        state = self._read_json(run_directory / "state.json")
+        label = str(context["label"])
+        findings = int(context["findings"])
+        profile = tuple(context["profile"])
+        if state["phase"] == "ADJUDICATED":
+            expected = self.GATE_A_WITH_FINDINGS if findings else self.GATE_A_EMPTY
+            if statement != expected:
+                raise EvaluationError("fake received a non-exact Gate A statement")
+            self._advance_gate_a(run_directory, findings, profile)
+            if self.repair_label == label:
+                state = self._read_json(run_directory / "state.json")
+                state["phase"] = "FIXING"
+                atomic_write_json(run_directory / "state.json", state)
+            self._interrupt("gate_a")
+            final_output = "native review reached Gate B" if findings else "native review complete"
+            return self._success(session_spec, session_id, final_output)
+        if state["phase"] == "PLAN_VALIDATED":
+            if statement != self.GATE_B:
+                raise EvaluationError("fake received a non-exact Gate B statement")
+            self._advance_gate_b(run_directory)
+            self._interrupt("gate_b")
+            return self._success(session_spec, session_id, "native review stopped at Gate B")
+        return self._success(session_spec, session_id, "native review already advanced")
+
+    def status(self, session_id: str) -> str:
+        return self._statuses.get(session_id, "failed")
+
+    def _start_trial(self, spec: SessionSpec) -> SessionResult:
+        match = re.search(r"Anonymous trial ([AB])-(\d+)", spec.prompt_path.read_text())
+        if match is None:
+            raise AssertionError("trial request did not contain its anonymous semantic label")
+        label = f"{match.group(1)}{match.group(2)}"
+        attempt = self.trial_start_attempts.get(label, 0) + 1
+        self.trial_start_attempts[label] = attempt
+        self.trial_targets.append(spec.working_directory)
+        self.schedule_present_at_trial_start.append(
+            any((parent / "schedule.json").is_file() for parent in spec.output_directory.parents)
+        )
+        remaining_failures = self.infrastructure_failures.get(label, 0)
+        if remaining_failures:
+            self.infrastructure_failures[label] = remaining_failures - 1
+            return self._failure(spec, label, "timeout")
+
+        self._session_counter += 1
+        session_id = f"{label}-session-{self._session_counter}"
+        findings = self.findings.get(match.group(1), 0)
+        if spec.readable_workflow is None:
+            raise AssertionError("trial fake requires a materialized workflow")
+        profile_value = self._read_json(spec.readable_workflow / "profile.json")["profile"]
+        profile = tuple(profile_value)
+        run_directory = self._write_gate_a_fixture(
+            spec,
+            session_id=session_id,
+            findings=findings,
+            profile=profile,
+        )
+        if label not in self.trial_labels:
+            self.trial_labels.append(label)
+        self.trial_session_ids.append(session_id)
+        self._sessions[session_id] = {
+            "label": label,
+            "findings": findings,
+            "profile": profile,
+            "run_directory": run_directory,
+            "spec": spec,
+        }
+        return self._success(spec, session_id, "native review paused at Gate A")
+
+    def _start_agreement(self, spec: SessionSpec) -> SessionResult:
+        bundle = self._read_json(spec.working_directory / "bundle.json")
+        variant = str(bundle["anonymous_variant"])
+        trial_count = len(bundle["trials"])
+        self.agreement_starts[variant] += 1
+        configured = self.agreement.get(variant, "materially_similar")
+        if isinstance(configured, (list, tuple)):
+            index = min(self.agreement_starts[variant] - 1, len(configured) - 1)
+            classification = str(configured[index])
+        else:
+            classification = str(configured)
+        reason_category = {
+            "materially_similar": "trial_agreement",
+            "materially_different": "trial_variability",
+            "insufficient_evidence": "trial_variability",
+            "infrastructure_failure": "infrastructure_failure",
+        }[classification]
+        if classification == "infrastructure_failure":
+            classification = "insufficient_evidence"
+        output = {
+            "schema": "material-review-evaluation/agreement/v1",
+            "anonymous_variant": variant,
+            "classification": classification,
+            "reason_category": reason_category,
+            "summary": "Fake agreement result derived from the supplied native evidence.",
+            "artifact_citations": [
+                {"trial": 1, "artifact": "ledger", "evidence": "first citation"},
+                {
+                    "trial": min(2, trial_count),
+                    "artifact": "gate",
+                    "evidence": "second citation",
+                },
+            ],
+            "outlier_trials": [1] if classification == "materially_different" else [],
+            "confidence": "high",
+            "limitations": [],
+        }
+        self._session_counter += 1
+        session_id = f"agreement-{variant}-{self._session_counter}"
+        result = self._success(spec, session_id, json.dumps(output))
+        self._interrupt("agreement")
+        return result
+
+    def _start_judgment(self, spec: SessionSpec) -> SessionResult:
+        self.judge_starts += 1
+        dimensions = {
+            name: {
+                "decision": "TIE",
+                "rationale": "The supplied fake evidence is materially equivalent.",
+                "artifact_citations": ["variants/A/trial-1.json", "variants/B/trial-1.json"],
+            }
+            for name in (
+                "finding_validity_and_coverage",
+                "validation_quality",
+                "repair_safety",
+                "scope_and_gate_integrity",
+                "traceability",
+                "machine_validation_and_artifact_completeness",
+                "consistency_across_trials",
+                "report_clarity_and_copyability",
+                "efficiency_and_cost",
+            )
+        }
+        output = {
+            "schema": "material-review-evaluation/judgment/v1",
+            "dimensions": dimensions,
+            "overall_decision": "MATERIAL_TIE",
+            "overall_rationale": "No material winner is forced by the fake evidence.",
+            "trial_stability": "Stable unless a variant agreement says otherwise.",
+            "known_failures": [],
+            "unsupported_findings": [],
+            "plan_boundary_comparison": "Both variants preserve the no-repair boundary.",
+            "workflow_failures": [],
+            "cost_observations": [],
+            "confidence": "high",
+            "limitations": [],
+        }
+        self._session_counter += 1
+        session_id = f"judge-{self._session_counter}"
+        result = self._success(spec, session_id, json.dumps(output))
+        self._interrupt("judgment")
+        return result
+
+    def _success(
+        self,
+        spec: SessionSpec,
+        session_id: str,
+        final_output: str,
+    ) -> SessionResult:
+        stdout_path, stderr_path = self._write_logs(spec, final_output, "")
+        self._statuses[session_id] = "complete"
+        return SessionResult(
+            session_id=session_id,
+            status="complete",
+            final_output=final_output,
+            usage=MappingProxyType(
+                {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5}
+            ),
+            tool_events=({"type": "fake_tool", "command": "native-controller"},),
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+
+    def _failure(self, spec: SessionSpec, label: str, kind: str) -> SessionResult:
+        stdout_path, stderr_path = self._write_logs(spec, "", f"fake {kind}\n")
+        return SessionResult(
+            session_id=None,
+            status="failed",
+            final_output=None,
+            usage=MappingProxyType({}),
+            tool_events=(),
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            failure=InfrastructureFailure(kind, f"fake infrastructure failure for {label}"),
+        )
+
+    def _write_logs(
+        self,
+        spec: SessionSpec,
+        stdout: str,
+        stderr: str,
+    ) -> tuple[Path, Path]:
+        self._log_counter += 1
+        logs = spec.output_directory / "fake-session-logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        stdout_path = logs / f"{self._log_counter:03d}.stdout.log"
+        stderr_path = logs / f"{self._log_counter:03d}.stderr.log"
+        stdout_path.write_text(stdout, encoding="utf-8")
+        stderr_path.write_text(stderr, encoding="utf-8")
+        return stdout_path, stderr_path
+
+    def _interrupt(self, stage: str) -> None:
+        if stage in self.interrupt_once and stage not in self.consumed_interruptions:
+            self.consumed_interruptions.add(stage)
+            raise FakeInterruption(stage)
+
+    def _write_gate_a_fixture(
+        self,
+        spec: SessionSpec,
+        *,
+        session_id: str,
+        findings: int,
+        profile: tuple[object, ...],
+    ) -> Path:
+        artifact_root = spec.output_directory / "native-controller-artifacts"
+        run_directory = artifact_root / "runs" / f"native-{session_id}"
+        run_directory.mkdir(parents=True)
+        baseline = subprocess.run(
+            ["git", "-C", str(spec.working_directory), "rev-parse", "HEAD^"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        comparison = subprocess.run(
+            ["git", "-C", str(spec.working_directory), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        identity = {
+            "mode": "range",
+            "baseline_reference": baseline,
+            "comparison_reference": comparison,
+            "files": [
+                {
+                    "path": "tracked.txt",
+                    "baseline_state": {"kind": "file"},
+                    "comparison_state": {"kind": "file"},
+                }
+            ],
+        }
+        scope_hash = canonical_hash(identity)
+        scope = {
+            "schema_version": "material-review/scope/v1",
+            "identity": identity,
+            "scope_hash": scope_hash,
+        }
+        candidate_records = []
+        groups = []
+        ledger_findings = []
+        if findings:
+            candidate_records.append(
+                {"candidate_id": "C001", "reviewer_id": "fake", "local_id": "one"}
+            )
+            groups.append(
+                {
+                    "group_id": "G001",
+                    "candidate_ids": ["C001"],
+                    "disposition": "keep",
+                }
+            )
+            finding = {
+                "finding_id": "F001",
+                "group_id": "G001",
+                "candidate_ids": ["C001"],
+                "title": "Fake material finding",
+                "severity": "high",
+                "confidence": "high",
+                "file": "tracked.txt",
+                "line_start": 1,
+                "line_end": 1,
+                "evidence_side": "comparison",
+                "evidence_quote": "comparison",
+                "observable_consequence": "fake consequence",
+                "trigger_conditions": ["fake trigger"],
+                "validation": {"verdict": "confirmed"},
+                "materiality": {"material": True},
+                "decision_reason": "fake material evidence",
+                "recommended_action": "fix_now",
+                "required_pre_fix_verification": [],
+            }
+            if profile[1] == "material-review/ledger/v3":
+                direction = {"objective": "correct the fake defect", "constraints": []}
+                finding["repair_direction"] = direction
+                finding["repair_direction_hash"] = canonical_hash(direction)
+                finding["repair_audit"] = {
+                    "mode": "independent",
+                    "verdict": "approved",
+                    "auditor_id": "fake-auditor",
+                }
+            else:
+                finding["proposed_resolution"] = "correct the fake defect"
+            ledger_findings.append(finding)
+        candidates = {
+            "schema_version": "material-review/candidates-normalized/v1",
+            "scope_hash": scope_hash,
+            "reviewer_sets": [],
+            "candidates": candidate_records,
+            "rejections": [],
+        }
+        candidate_hash = canonical_hash(candidates)
+        candidates["candidate_bundle_hash"] = candidate_hash
+        candidates["generated_at"] = "2026-07-27T12:00:00Z"
+        adjudication = {
+            "schema_version": {
+                "material-review/ledger/v1": "material-review/adjudication/v1",
+                "material-review/ledger/v3": "material-review/adjudication/v3",
+            }[str(profile[1])],
+            "scope_hash": scope_hash,
+            "candidate_bundle_hash": candidate_hash,
+            "groups": groups,
+        }
+        ledger = {
+            "schema_version": profile[1],
+            "scope_hash": scope_hash,
+            "candidate_bundle_hash": candidate_hash,
+            "adjudicator_id": "fake-adjudicator",
+            "verdict": "SHOULD FIX BEFORE MERGE" if findings else "READY",
+            "summary": "Fake native ledger.",
+            "findings": ledger_findings,
+            "discarded": [],
+            "limitations": [],
+        }
+        ledger_hash = canonical_hash(ledger)
+        ledger["ledger_hash"] = ledger_hash
+        ledger["generated_at"] = "2026-07-27T12:01:00Z"
+        state = {
+            "schema_version": profile[0],
+            "tool_version": "fake-native-controller/1",
+            "run_id": run_directory.name,
+            "phase": "ADJUDICATED",
+            "scope_hash": scope_hash,
+            "hashes": {
+                "candidate_bundle_hash": candidate_hash,
+                "ledger_hash": ledger_hash,
+            },
+            "gates": {},
+            "approved_findings": [],
+        }
+        atomic_write_json(run_directory / "scope.json", scope)
+        atomic_write_json(run_directory / "candidates.json", candidates)
+        atomic_write_json(run_directory / "adjudication.normalized.json", adjudication)
+        atomic_write_json(run_directory / "ledger.json", ledger)
+        atomic_write_json(run_directory / "state.json", state)
+        return run_directory
+
+    def _advance_gate_a(
+        self,
+        run_directory: Path,
+        findings: int,
+        profile: tuple[object, ...],
+    ) -> None:
+        state = self._read_json(run_directory / "state.json")
+        ledger = self._read_json(run_directory / "ledger.json")
+        approved = ["F001"] if findings else []
+        receipt = {
+            "schema_version": "material-review/findings-gate/v1",
+            "run_id": state["run_id"],
+            "scope_hash": state["scope_hash"],
+            "ledger_hash": ledger["ledger_hash"],
+            "decisions": {
+                "approved": approved,
+                "rejected": [],
+                "deferred": [],
+                "accepted_empty": not findings,
+            },
+            "user_statement": self.GATE_A_WITH_FINDINGS if findings else self.GATE_A_EMPTY,
+            "recorded_at": "2026-07-27T12:02:00Z",
+        }
+        receipt_hash = canonical_hash(receipt)
+        receipt["receipt_hash"] = receipt_hash
+        (run_directory / "gates").mkdir(exist_ok=True)
+        atomic_write_json(run_directory / "gates" / "findings.json", receipt)
+        state["gates"]["findings"] = receipt_hash
+        state["hashes"]["findings_gate_hash"] = receipt_hash
+        state["approved_findings"] = approved
+        if not findings:
+            state["phase"] = "COMPLETE"
+            atomic_write_json(run_directory / "state.json", state)
+            return
+        plan = {
+            "schema_version": profile[2],
+            "scope_hash": state["scope_hash"],
+            "findings_gate_hash": receipt_hash,
+            "plan_summary": "Fake validated plan.",
+            "items": [
+                {
+                    "finding_id": "F001",
+                    "root_cause": "fake root cause",
+                    "objective": "correct the fake defect",
+                    "depends_on": [],
+                    "steps": ["Edit tracked.txt."],
+                    "allowed_paths": ["tracked.txt"],
+                    "tests": [],
+                    "manual_verification": [],
+                    "risk_controls": ["no repair during evaluation"],
+                    "rollback_strategy": "restore the target",
+                    "success_evidence": ["fake test"],
+                    "max_attempts": 1,
+                }
+            ],
+            "global_tests": [],
+            "no_unrelated_cleanup": True,
+            "no_new_improvements_during_fix": True,
+            "post_fix_review_scope": "approved_findings_only",
+            "scope_expansion_policy": "restore_and_reapprove",
+            "max_repair_rounds": 1,
+        }
+        plan_hash = canonical_hash(plan)
+        plan["plan_hash"] = plan_hash
+        plan["validated_at"] = "2026-07-27T12:03:00Z"
+        atomic_write_json(run_directory / "fix-plan.json", plan)
+        state["hashes"]["plan_hash"] = plan_hash
+        state["phase"] = "PLAN_VALIDATED"
+        atomic_write_json(run_directory / "state.json", state)
+
+    def _advance_gate_b(self, run_directory: Path) -> None:
+        state = self._read_json(run_directory / "state.json")
+        findings_gate = self._read_json(run_directory / "gates" / "findings.json")
+        plan = self._read_json(run_directory / "fix-plan.json")
+        receipt = {
+            "schema_version": "material-review/plan-gate/v1",
+            "run_id": state["run_id"],
+            "scope_hash": state["scope_hash"],
+            "findings_gate_hash": findings_gate["receipt_hash"],
+            "plan_hash": plan["plan_hash"],
+            "approved": True,
+            "user_statement": self.GATE_B,
+            "recorded_at": "2026-07-27T12:04:00Z",
+        }
+        receipt_hash = canonical_hash(receipt)
+        receipt["receipt_hash"] = receipt_hash
+        atomic_write_json(run_directory / "gates" / "plan.json", receipt)
+        state["gates"]["plan"] = receipt_hash
+        state["hashes"]["plan_gate_hash"] = receipt_hash
+        state["phase"] = "PLAN_APPROVED"
+        atomic_write_json(run_directory / "state.json", state)
+
+    @staticmethod
+    def _read_json(path: Path) -> dict[str, object]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+
+class EvaluationControllerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.runs_root = self.root / "evaluation-runs"
+        self.runs_root.mkdir()
+        self.skill_repository = self._create_skill_repository()
+        self.target_repository, shas = self._create_target_repository()
+        self.baseline_sha, self.comparison_sha = shas
+        self.evaluation_root = self._create_evaluation_assets()
+        benchmark_root = self.evaluation_root / "benchmarks" / "fixture"
+        self.benchmark = Benchmark(
+            benchmark_id="fixture",
+            root=benchmark_root,
+            target_repository="https://example.invalid/evaluation-target.git",
+            baseline_sha=self.baseline_sha,
+            comparison_sha=self.comparison_sha,
+            require_immediate_parent=True,
+            review_mode="range",
+            posture="immutable",
+            include_untracked=False,
+            baseline_validation_commands=(
+                CommandSpec(("python3", "-c", "pass"), PurePosixPath("."), 10),
+            ),
+            dependency_installation_commands=(
+                CommandSpec(("python3", "-c", "pass"), PurePosixPath("."), 10),
+            ),
+            initial_trials=2,
+            conditional_third=True,
+            default_timeout_seconds=30,
+            infrastructure_retry_limit=1,
+            gate_a_policy="approve_all_retained_for_planning",
+            gate_b_policy="approve_validated_plan_no_repair",
+            required_artifacts=("native",),
+            required_lenses=("correctness",),
+            prohibitions=frozenset({"repair"}),
+            executor_isolation_modes=("filesystem_blinding", "logical_blinding"),
+            executor_exposed_roots=("trial_workflow", "target", "trial_output"),
+            require_fresh_agent_context=True,
+            require_fresh_target_clone=True,
+            file_hashes=MappingProxyType(
+                {
+                    "review_request_sha256": sha256_file(
+                        benchmark_root / "review-request.md"
+                    ),
+                    "judge_oracle_sha256": sha256_file(
+                        benchmark_root / "judge-oracle.json"
+                    ),
+                    "judge_rubric_sha256": sha256_file(
+                        self.evaluation_root / "judge-rubric.md"
+                    ),
+                }
+            ),
+        )
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def controller(
+        self,
+        executor: FakeExecutor,
+        *,
+        runs_root: Path | None = None,
+    ) -> EvaluationController:
+        return EvaluationController(
+            runs_root=runs_root or self.runs_root,
+            executor=executor,
+            random_source=ScriptedRandom(),
+        )
+
+    def request(
+        self,
+        *,
+        base_ref: str = "old",
+        candidate_ref: str = "current",
+        benchmark: Benchmark | None = None,
+        new_run: bool = False,
+    ) -> EvaluationRequest:
+        return EvaluationRequest(
+            repository_root=self.skill_repository,
+            benchmark=benchmark or self.benchmark,
+            base_ref=base_ref,
+            candidate_ref=candidate_ref,
+            target_repository=self.target_repository,
+            executor_adapter="fake",
+            adapter_version="1",
+            model="gpt-5.6",
+            reasoning_effort="high",
+            permission_profile="workspace-write",
+            isolation_mode="filesystem_blinding",
+            new_run=new_run,
+        )
+
+    def test_two_consistent_zero_finding_variants_complete_in_paired_waves(self) -> None:
+        executor = FakeExecutor()
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        self.assertEqual(summary.semantic_trial_counts, {"A": 2, "B": 2})
+        self.assertEqual(executor.trial_labels, ["A1", "B1", "B2", "A2"])
+        self.assertEqual(len(executor.trial_targets), len(set(executor.trial_targets)))
+        self.assertEqual(len(executor.trial_session_ids), len(set(executor.trial_session_ids)))
+        self.assertTrue(all(executor.schedule_present_at_trial_start))
+        run_state = self.read_json(summary.run_root / "run.json")
+        self.assertNotIn("private_variant_map", run_state)
+        self.assertRegex(run_state["private_variant_map_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_conditional_third_trial_runs_only_for_inconsistent_variant(self) -> None:
+        executor = FakeExecutor(
+            agreement={"A": "materially_different", "B": "materially_similar"}
+        )
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(executor.trial_labels, ["A1", "B1", "B2", "A2", "A3"])
+        self.assertEqual(summary.semantic_trial_counts, {"A": 3, "B": 2})
+        self.assertEqual(executor.agreement_starts, {"A": 2, "B": 1})
+
+    def test_old_and_current_native_schema_profiles_are_preserved(self) -> None:
+        summary = self.controller(FakeExecutor()).compare(self.request())
+
+        old_trial = self.read_json(summary.run_root / "trials/A/1/normalized.json")
+        current_trial = self.read_json(summary.run_root / "trials/B/1/normalized.json")
+        self.assertEqual(
+            old_trial["native_schema_versions"]["ledger"],
+            "material-review/ledger/v1",
+        )
+        self.assertEqual(
+            current_trial["native_schema_versions"]["ledger"],
+            "material-review/ledger/v3",
+        )
+
+    def test_infrastructure_retry_preserves_attempts_without_incrementing_trials(self) -> None:
+        executor = FakeExecutor(infrastructure_failures={"A1": 1})
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        self.assertEqual(summary.semantic_trial_counts, {"A": 2, "B": 2})
+        self.assertEqual(executor.trial_start_attempts["A1"], 2)
+        attempts = sorted((summary.run_root / "attempts/A1").glob("attempt-*.json"))
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(self.read_json(attempts[0])["status"], "infrastructure_failure")
+        self.assertEqual(self.read_json(attempts[1])["status"], "complete")
+
+    def test_repeated_infrastructure_failure_marks_run_incomplete(self) -> None:
+        executor = FakeExecutor(infrastructure_failures={"A1": 2})
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(summary.semantic_trial_counts, {"A": 0, "B": 1})
+        self.assertIn("infrastructure", summary.terminal_reason.lower())
+        self.assertEqual(executor.trial_start_attempts["A1"], 2)
+
+    def test_variant_materialization_failure_is_blinded_and_runnable_side_continues(
+        self,
+    ) -> None:
+        summary = self.controller(FakeExecutor()).compare(
+            self.request(base_ref="current", candidate_ref="bad-one")
+        )
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        self.assertEqual(summary.semantic_trial_counts, {"A": 2, "B": 0})
+        comparison_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (summary.run_root / "judge/comparison-bundle").rglob("*")
+            if path.is_file()
+        )
+        self.assertIn("materialization", comparison_text)
+        self.assertNotIn("bad-one", comparison_text)
+
+    def test_variant_materialization_failure_reaches_judge_when_agreement_is_insufficient(
+        self,
+    ) -> None:
+        executor = FakeExecutor(agreement={"B": "infrastructure_failure"})
+
+        summary = self.controller(executor).compare(
+            self.request(base_ref="current", candidate_ref="bad-one")
+        )
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        self.assertEqual(executor.judge_starts, 1)
+        agreement = self.read_json(summary.run_root / "variant-b/agreement.json")
+        self.assertEqual(agreement["reason_category"], "infrastructure_failure")
+
+    def test_shared_materialization_failure_marks_run_incomplete(self) -> None:
+        executor = FakeExecutor()
+
+        summary = self.controller(executor).compare(
+            self.request(base_ref="bad-one", candidate_ref="bad-two")
+        )
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(executor.trial_labels, [])
+        self.assertIn("materialization", summary.terminal_reason.lower())
+
+    def test_equivalent_environmental_failures_proceed_with_limitations(self) -> None:
+        failing = CommandSpec(
+            ("python3", "-c", "import sys; print('same failure'); sys.exit(3)"),
+            PurePosixPath("."),
+            10,
+        )
+        benchmark = replace(
+            self.benchmark,
+            dependency_installation_commands=(failing,),
+        )
+
+        summary = self.controller(FakeExecutor()).compare(
+            self.request(benchmark=benchmark)
+        )
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        normalized = self.read_json(summary.run_root / "trials/A/1/normalized.json")
+        self.assertIn("environment", json.dumps(normalized["evaluation_limitations"]).lower())
+
+    def test_unmatched_environmental_failure_marks_run_incomplete(self) -> None:
+        unmatched = CommandSpec(
+            (
+                "python3",
+                "-c",
+                "import pathlib,sys; sys.exit(3 if pathlib.Path.cwd().name.startswith('A1') else 0)",
+            ),
+            PurePosixPath("."),
+            10,
+        )
+        benchmark = replace(
+            self.benchmark,
+            dependency_installation_commands=(unmatched,),
+        )
+        executor = FakeExecutor()
+
+        summary = self.controller(executor).compare(self.request(benchmark=benchmark))
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(executor.trial_labels, [])
+        self.assertIn("environment", summary.terminal_reason.lower())
+
+    def test_interruption_resumes_at_each_durable_boundary(self) -> None:
+        for index, stage in enumerate(("gate_a", "gate_b", "agreement", "judgment")):
+            with self.subTest(stage=stage):
+                runs_root = self.root / f"resume-runs-{index}"
+                runs_root.mkdir()
+                executor = FakeExecutor(
+                    findings={"A": 1, "B": 1} if stage == "gate_b" else None,
+                    interrupt_once={stage},
+                )
+                controller = self.controller(executor, runs_root=runs_root)
+                with self.assertRaises(FakeInterruption):
+                    controller.compare(self.request(new_run=True))
+
+                summary = controller.compare(self.request())
+
+                self.assertEqual(summary.phase, "COMPLETE")
+                self.assertEqual(len([path for path in runs_root.iterdir() if path.is_dir()]), 1)
+
+    def test_no_consensus_after_third_trial_marks_variant_unstable(self) -> None:
+        executor = FakeExecutor(
+            agreement={
+                "A": ["materially_different", "materially_different"],
+                "B": "materially_similar",
+            }
+        )
+
+        summary = self.controller(executor).compare(self.request())
+
+        stability = self.read_json(summary.run_root / "variant-a/stability.json")
+        agreement = self.read_json(summary.run_root / "variant-a/agreement.json")
+        self.assertTrue(stability["unstable"])
+        self.assertEqual(agreement["outlier_trials"], [1])
+        self.assertEqual(summary.semantic_trial_counts["A"], 3)
+
+    def test_infrastructure_insufficient_agreement_marks_run_incomplete(self) -> None:
+        executor = FakeExecutor(
+            agreement={"A": "infrastructure_failure", "B": "materially_similar"}
+        )
+
+        summary = self.controller(executor).compare(self.request())
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertEqual(executor.judge_starts, 0)
+        self.assertIn("infrastructure", summary.terminal_reason.lower())
+
+    def test_resuming_run_does_not_resolve_moved_skill_refs(self) -> None:
+        executor = FakeExecutor(interrupt_once={"gate_a"})
+        controller = self.controller(executor)
+        with self.assertRaises(FakeInterruption):
+            controller.compare(self.request(new_run=True))
+        original_sha = self.git(self.skill_repository, "rev-parse", "current")
+        self.run_git(self.skill_repository, "branch", "-f", "current", "bad-one")
+        self.assertNotEqual(
+            self.git(self.skill_repository, "rev-parse", "current"),
+            original_sha,
+        )
+
+        summary = controller.compare(self.request())
+
+        self.assertEqual(summary.phase, "COMPLETE")
+        run_state = self.read_json(summary.run_root / "run.json")
+        self.assertEqual(run_state["resolved_skill_shas"]["candidate"], original_sha)
+
+    def test_predecessor_hash_change_is_rejected_on_resume(self) -> None:
+        executor = FakeExecutor(interrupt_once={"agreement"})
+        controller = self.controller(executor)
+        with self.assertRaises(FakeInterruption):
+            controller.compare(self.request(new_run=True))
+        run_root = next(path for path in self.runs_root.iterdir() if path.is_dir())
+        schedule = self.read_json(run_root / "schedule.json")
+        schedule["persisted_before_trials"] = False
+        atomic_write_json(run_root / "schedule.json", schedule)
+
+        with self.assertRaisesRegex(EvaluationError, "predecessor artifact changed"):
+            controller.status(run_root.name)
+
+    def test_model_reasoning_executor_and_permission_mismatch_abort_resume(self) -> None:
+        mutations = {
+            "model": "gpt-5.6-mini",
+            "reasoning_effort": "medium",
+            "executor_adapter": "different-fake",
+            "permission_profile": "danger-full-access",
+        }
+        for index, (field, changed) in enumerate(mutations.items()):
+            with self.subTest(field=field):
+                runs_root = self.root / f"mismatch-runs-{index}"
+                runs_root.mkdir()
+                executor = FakeExecutor(interrupt_once={"gate_a"})
+                controller = self.controller(executor, runs_root=runs_root)
+                request = self.request(new_run=True)
+                with self.assertRaises(FakeInterruption):
+                    controller.compare(request)
+
+                mismatched = replace(request, new_run=False, **{field: changed})
+                summary = controller.compare(mismatched)
+
+                self.assertEqual(summary.phase, "ABORTED")
+                self.assertIn("configuration", summary.terminal_reason.lower())
+
+    def test_reveal_is_written_only_after_locked_judgment(self) -> None:
+        summary = self.controller(FakeExecutor()).compare(self.request())
+
+        judgment = self.read_json(summary.run_root / "judge/judgment.json")
+        reveal = self.read_json(summary.run_root / "judge/reveal.json")
+        run_state = self.read_json(summary.run_root / "run.json")
+        self.assertEqual(
+            reveal["judgment_sha256"],
+            sha256_file(summary.run_root / "judge/judgment.json"),
+        )
+        self.assertEqual(run_state["judgment_sha256"], reveal["judgment_sha256"])
+        self.assertLess(judgment["locked_at"], reveal["revealed_at"])
+        self.assertEqual(judgment["overall_decision"], "MATERIAL_TIE")
+
+    def test_any_repair_phase_entry_invalidates_the_trial(self) -> None:
+        summary = self.controller(FakeExecutor(repair_label="A1")).compare(
+            self.request()
+        )
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertIn("repair phase", summary.terminal_reason.lower())
+
+    def test_status_and_clean_remove_only_owned_workspaces(self) -> None:
+        controller = self.controller(FakeExecutor())
+        summary = controller.compare(self.request())
+
+        status = controller.status(summary.run_id)
+        removed = controller.clean(summary.run_id)
+
+        self.assertEqual(status.phase, "COMPLETE")
+        self.assertTrue(removed)
+        self.assertTrue((summary.run_root / "run.json").is_file())
+        self.assertTrue((summary.run_root / "judge/judgment.json").is_file())
+        self.assertTrue((summary.run_root / "judge/reveal.json").is_file())
+        self.assertTrue(all(not path.exists() for path in removed))
+
+    def _create_skill_repository(self) -> Path:
+        repository = self.root / "skill-repository"
+        self.run_git(repository, "init", "--quiet")
+        self.run_git(repository, "config", "user.name", "Controller Tests")
+        self.run_git(repository, "config", "user.email", "controller@example.invalid")
+        package_script = textwrap.dedent(
+            """\
+            import argparse
+            import zipfile
+            from pathlib import Path
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--package-root", required=True)
+            parser.add_argument("--output", required=True)
+            parser.add_argument("--standalone-output", required=True)
+            arguments = parser.parse_args()
+            root = Path(arguments.package_root) / "skills/material-code-review"
+            with zipfile.ZipFile(arguments.output, "w") as archive:
+                archive.writestr("full.txt", "discarded")
+            with zipfile.ZipFile(arguments.standalone_output, "w") as archive:
+                for relative in ("SKILL.md", "profile.json", "scripts/reviewctl.py"):
+                    archive.write(root / relative, relative)
+            """
+        )
+        validator_script = textwrap.dedent(
+            """\
+            import argparse
+            import zipfile
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--package-root", required=True)
+            parser.add_argument("--standalone-archive", required=True)
+            arguments = parser.parse_args()
+            with zipfile.ZipFile(arguments.standalone_archive) as archive:
+                required = {"SKILL.md", "profile.json", "scripts/reviewctl.py"}
+                if not required.issubset(archive.namelist()):
+                    raise SystemExit(1)
+            """
+        )
+        native_controller = textwrap.dedent(
+            """\
+            import json
+            import sys
+            from pathlib import Path
+
+            command = sys.argv[1]
+            def option(name):
+                return sys.argv[sys.argv.index(name) + 1]
+            artifact_root = Path(option("--artifact-root"))
+            run_id = option("--run-id")
+            run_directory = artifact_root / "runs" / run_id
+            state = json.loads((run_directory / "state.json").read_text())
+            if command == "check-scope":
+                print("scope is fresh")
+            elif command == "status":
+                print(json.dumps({
+                    "run_id": state["run_id"],
+                    "phase": state["phase"],
+                    "scope_hash": state["scope_hash"],
+                    "hashes": state["hashes"],
+                    "gates": state["gates"],
+                    "approved_findings": state["approved_findings"],
+                    "artifact_directory": str(run_directory.resolve()),
+                }))
+            else:
+                raise SystemExit(2)
+            """
+        )
+        files = {
+            "scripts/package_plugin.py": package_script,
+            "scripts/validate_package.py": validator_script,
+            "skills/material-code-review/SKILL.md": "# Old material review fixture\n",
+            "skills/material-code-review/profile.json": json.dumps(
+                {"profile": list(FakeExecutor.OLD_PROFILE)}
+            )
+            + "\n",
+            "skills/material-code-review/scripts/reviewctl.py": native_controller,
+        }
+        for relative, contents in files.items():
+            path = repository / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+        self.run_git(repository, "add", ".")
+        self.run_git(repository, "commit", "--quiet", "-m", "old workflow fixture")
+        self.run_git(repository, "branch", "old")
+
+        (repository / "skills/material-code-review/SKILL.md").write_text(
+            "# Current material review fixture\n",
+            encoding="utf-8",
+        )
+        (repository / "skills/material-code-review/profile.json").write_text(
+            json.dumps({"profile": list(FakeExecutor.CURRENT_PROFILE)}) + "\n",
+            encoding="utf-8",
+        )
+        self.run_git(repository, "add", ".")
+        self.run_git(repository, "commit", "--quiet", "-m", "current workflow fixture")
+        self.run_git(repository, "branch", "current")
+
+        (repository / "scripts/package_plugin.py").write_text(
+            "raise SystemExit(7)\n",
+            encoding="utf-8",
+        )
+        self.run_git(repository, "add", "scripts/package_plugin.py")
+        self.run_git(repository, "commit", "--quiet", "-m", "first broken packager")
+        self.run_git(repository, "branch", "bad-one")
+        (repository / "broken-marker.txt").write_text("second\n", encoding="utf-8")
+        self.run_git(repository, "add", "broken-marker.txt")
+        self.run_git(repository, "commit", "--quiet", "-m", "second broken packager")
+        self.run_git(repository, "branch", "bad-two")
+        return repository
+
+    def _create_target_repository(self) -> tuple[Path, tuple[str, str]]:
+        repository = self.root / "target-repository"
+        self.run_git(repository, "init", "--quiet")
+        self.run_git(repository, "config", "user.name", "Controller Tests")
+        self.run_git(repository, "config", "user.email", "controller@example.invalid")
+        tracked = repository / "tracked.txt"
+        tracked.write_text("baseline\n", encoding="utf-8")
+        self.run_git(repository, "add", "tracked.txt")
+        self.run_git(repository, "commit", "--quiet", "-m", "baseline")
+        baseline = self.git(repository, "rev-parse", "HEAD")
+        tracked.write_text("comparison\n", encoding="utf-8")
+        self.run_git(repository, "add", "tracked.txt")
+        self.run_git(repository, "commit", "--quiet", "-m", "comparison")
+        comparison = self.git(repository, "rev-parse", "HEAD")
+        return repository, (baseline, comparison)
+
+    def _create_evaluation_assets(self) -> Path:
+        root = self.root / "evaluation-assets"
+        benchmark = root / "benchmarks" / "fixture"
+        schemas = root / "schemas"
+        prompts = root / "prompts"
+        benchmark.mkdir(parents=True)
+        schemas.mkdir(parents=True)
+        prompts.mkdir(parents=True)
+        benchmark.joinpath("manifest.json").write_text(
+            '{"schema":"fixture"}\n', encoding="utf-8"
+        )
+        benchmark.joinpath("review-request.md").write_text(
+            "Review the exact temporary range and stop at both evaluation gates.\n",
+            encoding="utf-8",
+        )
+        benchmark.joinpath("judge-oracle.json").write_text(
+            '{"schema":"fixture-oracle","failure_modes":[]}\n',
+            encoding="utf-8",
+        )
+        root.joinpath("judge-rubric.md").write_text(
+            "Judge only material evidence and never force a winner.\n",
+            encoding="utf-8",
+        )
+        shutil.copyfile(
+            EVALUATION_ROOT / "prompts/trial-agreement.md",
+            prompts / "trial-agreement.md",
+        )
+        shutil.copyfile(
+            EVALUATION_ROOT / "prompts/comparison-judge.md",
+            prompts / "comparison-judge.md",
+        )
+        for name in (
+            "agreement.schema.json",
+            "judgment.schema.json",
+            "evaluation-run.schema.json",
+        ):
+            shutil.copyfile(EVALUATION_ROOT / "schemas" / name, schemas / name)
+        return root
+
+    def run_git(
+        self,
+        repository: Path,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[str]:
+        repository.mkdir(parents=True, exist_ok=True)
+        return subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+    def git(self, repository: Path, *arguments: str) -> str:
+        return self.run_git(repository, *arguments).stdout.strip()
+
+    @staticmethod
+    def read_json(path: Path) -> dict[str, object]:
+        return json.loads(path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
