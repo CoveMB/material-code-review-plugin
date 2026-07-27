@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
-from .model import EvaluationError
+from .model import EvaluationError, atomic_write_json, canonical_hash
 
 
 SessionStatus = Literal["running", "waiting", "complete", "failed"]
@@ -76,6 +76,7 @@ class AgentExecutor(Protocol):
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SESSION_SPEC_SCHEMA = "material-review-evaluation/executor-session-spec/v1"
 _SENSITIVE_ENVIRONMENT_NAME = re.compile(
     r"(?i)(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL)"
 )
@@ -338,14 +339,7 @@ def _start_argv(spec: SessionSpec) -> list[str]:
     if spec.role == "trial":
         if spec.readable_workflow is None:
             raise EvaluationError("validated trial spec lost its workflow")
-        argv.extend(
-            (
-                "--add-dir",
-                str(spec.readable_workflow),
-                "--add-dir",
-                str(spec.output_directory),
-            )
-        )
+        argv.extend(("--add-dir", str(spec.output_directory)))
     else:
         if spec.output_schema is None:
             raise EvaluationError("validated judge spec lost its output schema")
@@ -387,8 +381,25 @@ def _text_output(value: object) -> str:
     return str(value)
 
 
+def _scrub_nested_strings(value: Any, sensitive_values: Sequence[str]) -> Any:
+    if isinstance(value, str):
+        return _redact_sensitive_values(value, sensitive_values)
+    if isinstance(value, list):
+        return [_scrub_nested_strings(item, sensitive_values) for item in value]
+    if isinstance(value, dict):
+        return {
+            _scrub_nested_strings(key, sensitive_values): _scrub_nested_strings(
+                item,
+                sensitive_values,
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
 def _parse_jsonl(
     stdout: str,
+    sensitive_values: Sequence[str],
 ) -> tuple[str | None, str | None, dict[str, int], tuple[dict[str, Any], ...]]:
     thread_id: str | None = None
     final_output: str | None = None
@@ -398,9 +409,10 @@ def _parse_jsonl(
         if not raw_line.strip():
             continue
         try:
-            event = json.loads(raw_line)
+            raw_event = json.loads(raw_line)
         except json.JSONDecodeError as error:
             raise ValueError(f"JSONL line {line_number} is malformed") from error
+        event = _scrub_nested_strings(raw_event, sensitive_values)
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             raise ValueError(f"JSONL line {line_number} is not an event object")
         event_type = event["type"]
@@ -436,6 +448,143 @@ def _parse_jsonl(
             elif item_type not in {None, "agent_message", "reasoning"}:
                 tool_events.append(event)
     return thread_id, final_output, usage, tuple(tool_events)
+
+
+def _session_spec_payload(spec: SessionSpec) -> dict[str, Any]:
+    return {
+        "role": spec.role,
+        "working_directory": str(spec.working_directory),
+        "readable_workflow": (
+            str(spec.readable_workflow) if spec.readable_workflow is not None else None
+        ),
+        "output_directory": str(spec.output_directory),
+        "prompt_path": str(spec.prompt_path),
+        "output_schema": str(spec.output_schema) if spec.output_schema is not None else None,
+        "model": spec.model,
+        "reasoning_effort": spec.reasoning_effort,
+        "sandbox_mode": spec.sandbox_mode,
+        "timeout_seconds": spec.timeout_seconds,
+    }
+
+
+def _session_spec_path(output_directory: Path, session_id: str) -> Path:
+    if _SESSION_ID_PATTERN.fullmatch(session_id) is None:
+        raise EvaluationError("Codex session ID is not safe for persisted state")
+    output = Path(output_directory).resolve(strict=True)
+    state_root = output / "executor-state"
+    sessions_root = state_root / "sessions"
+    for directory in (state_root, sessions_root):
+        if directory.is_symlink():
+            raise EvaluationError("executor session state must not use symlinks")
+        if directory.exists():
+            if not directory.is_dir():
+                raise EvaluationError("executor session state must use directories")
+        else:
+            try:
+                directory.mkdir(mode=0o700)
+            except OSError as error:
+                raise EvaluationError("executor session state could not be created") from error
+        if directory.is_symlink() or not directory.is_dir():
+            raise EvaluationError("executor session state must not use symlinks")
+    resolved_sessions = sessions_root.resolve(strict=True)
+    if not resolved_sessions.is_relative_to(output):
+        raise EvaluationError("executor session state escaped its output directory")
+    return resolved_sessions / f"{session_id}.json"
+
+
+def _persist_session_spec(session_id: str, spec: SessionSpec) -> None:
+    path = _session_spec_path(spec.output_directory, session_id)
+    if path.exists() or path.is_symlink():
+        raise EvaluationError("Codex session specification already exists")
+    payload = _session_spec_payload(spec)
+    atomic_write_json(
+        path,
+        {
+            "schema": _SESSION_SPEC_SCHEMA,
+            "session_id": session_id,
+            "session_spec": payload,
+            "session_spec_sha256": canonical_hash(payload),
+        },
+    )
+
+
+def _load_session_spec(session_id: str, output_directory: Path) -> SessionSpec:
+    path = _session_spec_path(output_directory, session_id)
+    if path.is_symlink() or not path.is_file():
+        raise EvaluationError("cannot resume an unrecorded Codex session")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise EvaluationError("persisted Codex session specification is unreadable") from error
+    if not isinstance(record, dict) or set(record) != {
+        "schema",
+        "session_id",
+        "session_spec",
+        "session_spec_sha256",
+    }:
+        raise EvaluationError("persisted Codex session specification is malformed")
+    payload = record.get("session_spec")
+    expected_keys = {
+        "role",
+        "working_directory",
+        "readable_workflow",
+        "output_directory",
+        "prompt_path",
+        "output_schema",
+        "model",
+        "reasoning_effort",
+        "sandbox_mode",
+        "timeout_seconds",
+    }
+    if (
+        record.get("schema") != _SESSION_SPEC_SCHEMA
+        or record.get("session_id") != session_id
+        or not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or record.get("session_spec_sha256") != canonical_hash(payload)
+    ):
+        raise EvaluationError("persisted Codex session specification is malformed")
+    for key in (
+        "role",
+        "working_directory",
+        "output_directory",
+        "prompt_path",
+        "model",
+        "reasoning_effort",
+        "sandbox_mode",
+    ):
+        if not isinstance(payload[key], str):
+            raise EvaluationError("persisted Codex session specification is malformed")
+    for key in ("readable_workflow", "output_schema"):
+        if payload[key] is not None and not isinstance(payload[key], str):
+            raise EvaluationError("persisted Codex session specification is malformed")
+    if isinstance(payload["timeout_seconds"], bool) or not isinstance(
+        payload["timeout_seconds"],
+        int,
+    ):
+        raise EvaluationError("persisted Codex session specification is malformed")
+    return _validated_spec(
+        SessionSpec(
+            role=payload["role"],
+            working_directory=Path(payload["working_directory"]),
+            readable_workflow=(
+                Path(payload["readable_workflow"])
+                if payload["readable_workflow"] is not None
+                else None
+            ),
+            output_directory=Path(payload["output_directory"]),
+            prompt_path=Path(payload["prompt_path"]),
+            output_schema=(
+                Path(payload["output_schema"])
+                if payload["output_schema"] is not None
+                else None
+            ),
+            model=payload["model"],
+            reasoning_effort=payload["reasoning_effort"],
+            sandbox_mode=payload["sandbox_mode"],
+            timeout_seconds=payload["timeout_seconds"],
+        )
+    )
 
 
 def _resolve_schema_reference(reference: str, root_schema: Mapping[str, Any]) -> Any:
@@ -786,12 +935,23 @@ class CodexExecutor:
         source_environment = os.environ if environment is None else environment
         self._environment = _narrow_environment(source_environment)
         self._sensitive_values = _sensitive_environment_values(source_environment)
-        self._specs: dict[str, SessionSpec] = {}
         self._statuses: dict[str, SessionStatus] = {}
 
     def start(self, session_spec: SessionSpec) -> SessionResult:
         spec = _validated_spec(session_spec)
-        return self._execute(_start_argv(spec), spec.prompt_path.read_text(encoding="utf-8"), spec)
+        result = self._execute(
+            _start_argv(spec),
+            spec.prompt_path.read_text(encoding="utf-8"),
+            spec,
+        )
+        if (
+            spec.role == "trial"
+            and result.status == "complete"
+            and result.failure is None
+            and result.session_id is not None
+        ):
+            _persist_session_spec(result.session_id, spec)
+        return result
 
     def resume(
         self,
@@ -799,10 +959,8 @@ class CodexExecutor:
         statement: str,
         session_spec: SessionSpec,
     ) -> SessionResult:
-        if session_id not in self._specs:
-            raise EvaluationError("cannot resume an unrecorded Codex session")
-        recorded = self._specs[session_id]
         supplied = _validated_spec(session_spec)
+        recorded = _load_session_spec(session_id, supplied.output_directory)
         if supplied != recorded:
             raise EvaluationError("resume configuration differs from the recorded session")
         if recorded.role != "trial":
@@ -894,7 +1052,10 @@ class CodexExecutor:
                 returncode=completed.returncode,
             )
         try:
-            session_id, final_output, usage, tool_events = _parse_jsonl(stdout)
+            session_id, final_output, usage, tool_events = _parse_jsonl(
+                stdout,
+                self._sensitive_values,
+            )
         except ValueError:
             return self._failed_result(
                 expected_session_id,
@@ -939,7 +1100,6 @@ class CodexExecutor:
                     stderr_path,
                 )
 
-        self._specs[session_id] = spec
         self._statuses[session_id] = "complete"
         return SessionResult(
             session_id=session_id,

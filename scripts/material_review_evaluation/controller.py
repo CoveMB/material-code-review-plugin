@@ -25,6 +25,7 @@ from .bundles import (
     build_comparison_bundle,
     build_trial_request,
     scan_blinded_bundle,
+    validate_trial_launch,
 )
 from .executor import AgentExecutor, SessionResult, SessionSpec, _validate_final_output
 from .model import (
@@ -38,11 +39,14 @@ from .workspace import (
     CommandResult,
     ResolvedVariant,
     WorkspaceRecord,
+    attest_immutable_workflow,
     clean_owned_workspaces,
     create_trial_target,
+    create_trial_workflow,
     materialize_variant,
     prepare_target_mirror,
     resolve_variant,
+    resolved_variant_subject,
     run_benchmark_commands,
     verify_benchmark_range,
 )
@@ -534,12 +538,14 @@ class EvaluationController:
                     variant,
                     self.runs_root,
                     run_root.name,
+                    anonymous_identifier=anonymous_variant,
                 )
             except EvaluationError as error:
                 evidence = (
                     run_root
-                    / "variants"
-                    / variant.commit_sha
+                    / "private"
+                    / "materialization"
+                    / anonymous_variant
                     / "evidence"
                     / "materialization.json"
                 )
@@ -874,6 +880,9 @@ class EvaluationController:
                         f"persisted retry for {label} does not follow an infrastructure failure"
                     )
                 workspace_records.append(_workspace_from_payload(attempt["target"]))
+                workflow = _workspace_from_payload(attempt["workflow"])
+                attest_immutable_workflow(workflow)
+                workspace_records.append(workflow)
                 attempts.append(attempt)
             if attempts:
                 latest = attempts[-1]
@@ -936,7 +945,9 @@ class EvaluationController:
                     else:
                         state["infrastructure_attempts"].append(summary)
                     target = _workspace_from_payload(attempt["target"])
+                    workflow = _workspace_from_payload(attempt["workflow"])
                     self._add_public_workspace(state, target, "target")
+                    self._add_public_workspace(state, workflow, "workflow")
                     self._add_output_workspace(
                         state,
                         Path(str(attempt["output_directory"])),
@@ -1013,6 +1024,15 @@ class EvaluationController:
             run_root.name,
             f"{label}-attempt-{attempt_number}",
         )
+        canonical_workflow = _workspace_from_payload(
+            preparation["variants"][variant]["workspace"]
+        )
+        workflow = create_trial_workflow(
+            canonical_workflow,
+            self.runs_root,
+            run_root.name,
+            f"{label}-attempt-{attempt_number}",
+        )
         output_directory = run_root / "trials" / variant / str(trial_number) / f"attempt-{attempt_number}"
         output_directory.mkdir(parents=True, exist_ok=False)
         dependency_results = run_benchmark_commands(
@@ -1042,6 +1062,7 @@ class EvaluationController:
             "ended_at": None,
             "error": None,
             "target": _workspace_payload(target),
+            "workflow": _workspace_payload(workflow),
             "output_directory": str(output_directory),
             "environment": {
                 "dependency_installation": [self._command_result(value) for value in dependency_results],
@@ -1054,7 +1075,7 @@ class EvaluationController:
         }
         atomic_write_json(attempt_path, attempt)
         records = self._load_workspace_records(run_root)
-        records.append(target)
+        records.extend((target, workflow))
         self._save_workspace_records(run_root, records)
 
         def record_attempt(state: dict[str, Any]) -> None:
@@ -1070,6 +1091,7 @@ class EvaluationController:
                 }
             )
             self._add_public_workspace(state, target, "target")
+            self._add_public_workspace(state, workflow, "workflow")
             self._add_output_workspace(state, output_directory, label, attempt_number)
 
         self._update_run(run_root, record_attempt)
@@ -1154,13 +1176,14 @@ class EvaluationController:
     ) -> str:
         attempt = self._read_json(attempt_path, "trial attempt")
         variant, trial_number = self._parse_label(label)
-        preparation = self._read_json(run_root / "state/preparation.json", "preparation")
-        workflow = _workspace_from_payload(preparation["variants"][variant]["workspace"])
+        workflow = _workspace_from_payload(attempt["workflow"])
         target = _workspace_from_payload(attempt["target"])
         output_directory = Path(str(attempt["output_directory"]))
         request_path = output_directory / "trial-request.md"
         request_record = output_directory / "trial-request.record.json"
         configuration = self._executor_configuration(request)
+        private_tokens = self._private_tokens(run_root)
+        private_identity_labels = tuple(self._private_map(run_root).values())
         if not request_path.exists():
             build_trial_request(
                 request_path,
@@ -1172,6 +1195,8 @@ class EvaluationController:
                 anonymous_trial_label=f"{variant}-{trial_number}",
                 isolation_mode=request.isolation_mode,
                 executor_configuration=configuration,
+                private_tokens=private_tokens,
+                private_identity_labels=private_identity_labels,
             )
         spec = SessionSpec(
             role="trial",
@@ -1185,8 +1210,16 @@ class EvaluationController:
             sandbox_mode=request.permission_profile,
             timeout_seconds=request.benchmark.default_timeout_seconds,
         )
+        attest_immutable_workflow(workflow)
+        validate_trial_launch(
+            request_path,
+            asdict(spec),
+            private_tokens=private_tokens,
+            private_identity_labels=private_identity_labels,
+        )
         if attempt["status"] == "prepared":
             result = self.executor.start(spec)
+            attest_immutable_workflow(workflow)
             self._record_session(attempt, "start", result)
             if result.status != "complete" or result.failure is not None:
                 self._record_infrastructure_failure(run_root, attempt_path, attempt, result)
@@ -1223,7 +1256,15 @@ class EvaluationController:
                 )
                 if command.argv[-1] != expected:
                     raise EvaluationError("Gate A command did not contain the exact auto statement")
+                attest_immutable_workflow(workflow)
+                validate_trial_launch(
+                    request_path,
+                    asdict(spec),
+                    private_tokens=private_tokens,
+                    private_identity_labels=private_identity_labels,
+                )
                 result = self.executor.resume(str(attempt["session_id"]), expected, spec)
+                attest_immutable_workflow(workflow)
                 self._record_session(attempt, "gate_a", result)
                 if result.status != "complete" or result.failure is not None:
                     self._record_infrastructure_failure(run_root, attempt_path, attempt, result)
@@ -1264,11 +1305,19 @@ class EvaluationController:
                 command = gate_b_command(artifacts)
                 if command.argv[-1] != GATE_B_STATEMENT:
                     raise EvaluationError("Gate B command did not contain the exact auto statement")
+                attest_immutable_workflow(workflow)
+                validate_trial_launch(
+                    request_path,
+                    asdict(spec),
+                    private_tokens=private_tokens,
+                    private_identity_labels=private_identity_labels,
+                )
                 result = self.executor.resume(
                     str(attempt["session_id"]),
                     GATE_B_STATEMENT,
                     spec,
                 )
+                attest_immutable_workflow(workflow)
                 self._record_session(attempt, "gate_b", result)
                 if result.status != "complete" or result.failure is not None:
                     self._record_infrastructure_failure(run_root, attempt_path, attempt, result)
@@ -1301,6 +1350,8 @@ class EvaluationController:
         variant: str,
         trial_number: int,
     ) -> str:
+        workflow = _workspace_from_payload(attempt["workflow"])
+        attest_immutable_workflow(workflow)
         normalized = normalize_trial_evidence(
             artifacts,
             turn_metadata={
@@ -1953,12 +2004,18 @@ class EvaluationController:
 
     def _private_tokens(self, run_root: Path) -> tuple[str, ...]:
         resolved = self._resolved_variants(run_root)
+        private_request = self._read_json(
+            run_root / "private/request.json",
+            "private request",
+        )
+        repository_root = Path(str(private_request["repository_root"]))
         tokens: list[str] = []
         for variant in resolved.values():
             tokens.extend(
                 (
                     variant.supplied_ref,
                     variant.commit_sha,
+                    resolved_variant_subject(repository_root, variant),
                     variant.commit_subject_sha256,
                 )
             )

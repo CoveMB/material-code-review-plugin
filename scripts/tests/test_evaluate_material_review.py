@@ -18,6 +18,8 @@ from subprocess import CompletedProcess, TimeoutExpired
 from types import MappingProxyType, SimpleNamespace
 from unittest import mock
 
+from scripts.material_review_evaluation import bundles as bundles_module
+from scripts.material_review_evaluation import workspace as workspace_module
 from scripts.material_review_evaluation.benchmark import Benchmark, CommandSpec, load_benchmark
 from scripts.material_review_evaluation.artifacts import (
     NATIVE_SCHEMA_PROFILES,
@@ -397,7 +399,10 @@ class WorkspaceManagerTests(unittest.TestCase):
                     "SKILL.md",
                     (root / "skills/material-code-review/SKILL.md").read_text(),
                 )
-                archive.writestr("materialized-commit.txt", root.name + "\\n")
+                archive.writestr(
+                    "materialized-commit.txt",
+                    (root / "skills/material-code-review/SKILL.md").read_text(),
+                )
             """
         )
         validate_script = textwrap.dedent(
@@ -497,7 +502,7 @@ class WorkspaceManagerTests(unittest.TestCase):
 
         self.assertEqual(
             (materialized.path / "materialized-commit.txt").read_text().strip(),
-            original.commit_sha,
+            "historical workflow",
         )
 
     def test_non_parent_benchmark_pair_is_rejected(self) -> None:
@@ -514,9 +519,22 @@ class WorkspaceManagerTests(unittest.TestCase):
         repository = self.create_skill_repository()
         variant = resolve_variant(repository, "candidate")
 
-        record = materialize_variant(repository, variant, self.workspace_root, "run-one")
+        record = materialize_variant(
+            repository,
+            variant,
+            self.workspace_root,
+            "run-one",
+            anonymous_identifier="A",
+        )
 
         self.assertEqual((record.path / "validator-ran.txt").read_text(), "yes\n")
+        self.assertIn("A", record.path.parts)
+        for private_identity in (
+            variant.supplied_ref,
+            variant.commit_sha,
+            variant.commit_subject_sha256,
+        ):
+            self.assertNotIn(private_identity, str(record.path))
         self.assertFalse((record.path / ".git").exists())
         self.assertFalse((record.path / "evaluations").exists())
         self.assertFalse((record.path / "scripts/material_review_evaluation").exists())
@@ -532,6 +550,49 @@ class WorkspaceManagerTests(unittest.TestCase):
         self.assertFalse(
             any(path.name.startswith("discarded-full") for path in run_root.rglob("*"))
         )
+
+    def test_trial_workflow_snapshots_are_read_only_isolated_and_tamper_evident(
+        self,
+    ) -> None:
+        repository = self.create_skill_repository()
+        variant = resolve_variant(repository, "candidate")
+        canonical = materialize_variant(
+            repository,
+            variant,
+            self.workspace_root,
+            "run-snapshots",
+            anonymous_identifier="A",
+        )
+
+        first = workspace_module.create_trial_workflow(
+            canonical,
+            self.workspace_root,
+            "run-snapshots",
+            "A1-attempt-1",
+        )
+        self.assertNotEqual(first.path, canonical.path)
+        self.assertEqual(first.path.stat().st_mode & 0o222, 0)
+        self.assertEqual((first.path / "SKILL.md").stat().st_mode & 0o222, 0)
+        workspace_module.attest_immutable_workflow(first)
+
+        first_skill = first.path / "SKILL.md"
+        first_skill.chmod(0o644)
+        first_skill.write_text("tampered\n", encoding="utf-8")
+        with self.assertRaisesRegex(EvaluationError, "workflow.*change"):
+            workspace_module.attest_immutable_workflow(first)
+
+        second = workspace_module.create_trial_workflow(
+            canonical,
+            self.workspace_root,
+            "run-snapshots",
+            "A2-attempt-1",
+        )
+        self.assertNotEqual(second.path, first.path)
+        self.assertEqual(
+            (second.path / "SKILL.md").read_text(encoding="utf-8"),
+            "historical workflow\n",
+        )
+        workspace_module.attest_immutable_workflow(second)
 
     def test_materialization_rejects_symlink_from_git_archive(self) -> None:
         repository = self.create_skill_repository()
@@ -557,8 +618,14 @@ class WorkspaceManagerTests(unittest.TestCase):
         contents = package_script.read_text(encoding="utf-8")
         package_script.write_text(
             contents.replace(
-                'archive.writestr("materialized-commit.txt", root.name + "\\n")',
-                'archive.writestr("materialized-commit.txt", root.name + "\\n")\n'
+                '    archive.writestr(\n'
+                '        "materialized-commit.txt",\n'
+                '        (root / "skills/material-code-review/SKILL.md").read_text(),\n'
+                '    )',
+                '    archive.writestr(\n'
+                '        "materialized-commit.txt",\n'
+                '        (root / "skills/material-code-review/SKILL.md").read_text(),\n'
+                '    )\n'
                 '    archive.writestr('
                 '"evaluations/material-code-review/judge-oracle.json", "secret")',
             ),
@@ -577,8 +644,14 @@ class WorkspaceManagerTests(unittest.TestCase):
         contents = package_script.read_text(encoding="utf-8")
         package_script.write_text(
             contents.replace(
-                'archive.writestr("materialized-commit.txt", root.name + "\\n")',
-                'archive.writestr("materialized-commit.txt", root.name + "\\n")\n'
+                '    archive.writestr(\n'
+                '        "materialized-commit.txt",\n'
+                '        (root / "skills/material-code-review/SKILL.md").read_text(),\n'
+                '    )',
+                '    archive.writestr(\n'
+                '        "materialized-commit.txt",\n'
+                '        (root / "skills/material-code-review/SKILL.md").read_text(),\n'
+                '    )\n'
                 '    archive.writestr("C:escape.txt", "outside")',
             ),
             encoding="utf-8",
@@ -2098,8 +2171,6 @@ class ExecutorAndBlindingTests(unittest.TestCase):
                 "--cd",
                 str(self.target_path),
                 "--add-dir",
-                str(self.workflow_path),
-                "--add-dir",
                 str(self.trial_output),
                 "-",
             ],
@@ -2122,9 +2193,25 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         executor = CodexExecutor(runner=runner, environment=self.environment)
         spec = self.session_spec()
         executor.start(spec)
+        persisted_spec = (
+            self.trial_output
+            / "executor-state"
+            / "sessions"
+            / "trial-session.json"
+        )
+        self.assertTrue(persisted_spec.is_file())
+        persisted_text = persisted_spec.read_text(encoding="utf-8")
+        for secret in (
+            "configured-openai-key",
+            "github-secret",
+            "cloud-secret",
+            "locale-shaped-secret",
+        ):
+            self.assertNotIn(secret, persisted_text)
         runner.stdout = self.successful_jsonl(final_output="review paused at Gate B")
 
-        result = executor.resume("trial-session", "Approve Gate A.", spec)
+        fresh_executor = CodexExecutor(runner=runner, environment=self.environment)
+        result = fresh_executor.resume("trial-session", "Approve Gate A.", spec)
 
         self.assertEqual(result.session_id, "trial-session")
         self.assertEqual(
@@ -2147,7 +2234,40 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         )
         self.assertEqual(runner.options["cwd"], self.target_path)
         self.assertEqual(runner.options["input"], "Approve Gate A.")
-        self.assertEqual(executor.status("trial-session"), "complete")
+        self.assertEqual(fresh_executor.status("trial-session"), "complete")
+
+        calls_before_drift = len(runner.calls)
+        with self.assertRaisesRegex(EvaluationError, "configuration differs"):
+            CodexExecutor(runner=runner, environment=self.environment).resume(
+                "trial-session",
+                "Approve Gate A.",
+                replace(spec, reasoning_effort="medium"),
+            )
+        self.assertEqual(len(runner.calls), calls_before_drift)
+
+        persisted = json.loads(persisted_spec.read_text(encoding="utf-8"))
+        persisted["unexpected"] = True
+        atomic_write_json(persisted_spec, persisted)
+        with self.assertRaisesRegex(EvaluationError, "specification is malformed"):
+            CodexExecutor(runner=runner, environment=self.environment).resume(
+                "trial-session",
+                "Approve Gate A.",
+                spec,
+            )
+        self.assertEqual(len(runner.calls), calls_before_drift)
+
+    def test_executor_state_symlink_is_rejected_without_out_of_root_write(self) -> None:
+        external = self.root / "external-state"
+        external.mkdir()
+        os.symlink(external, self.trial_output / "executor-state")
+        runner = RecordingRunner(stdout=self.successful_jsonl())
+
+        with self.assertRaisesRegex(EvaluationError, "must not use symlinks"):
+            CodexExecutor(runner=runner, environment=self.environment).start(
+                self.session_spec()
+            )
+
+        self.assertFalse((external / "sessions").exists())
 
     def test_explicitly_empty_child_environment_does_not_inherit_parent_values(
         self,
@@ -2182,6 +2302,134 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         ):
             self.assertNotIn(secret, persisted)
         self.assertIn("<redacted-credential>", persisted)
+
+    def test_codex_recursively_scrubs_nested_event_strings_and_timeout_streams(
+        self,
+    ) -> None:
+        events = (
+            {"type": "thread.started", "thread_id": "nested-session"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "tool-1",
+                    "type": "command_execution",
+                    "safe": {"status": "kept", "count": 2},
+                    "nested": [
+                        "configured-openai-key",
+                        {"github-secret": "cloud-secret"},
+                    ],
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "message-1",
+                    "type": "agent_message",
+                    "text": "review saw configured-openai-key",
+                },
+            },
+        )
+        stdout = "".join(json.dumps(event) + "\n" for event in events)
+        result = CodexExecutor(
+            runner=RecordingRunner(stdout=stdout),
+            environment=self.environment,
+        ).start(self.session_spec())
+
+        persisted_result = json.dumps(
+            {
+                "final_output": result.final_output,
+                "tool_events": result.tool_events,
+            },
+            sort_keys=True,
+        )
+        for secret in (
+            "configured-openai-key",
+            "github-secret",
+            "cloud-secret",
+        ):
+            self.assertNotIn(secret, persisted_result)
+        self.assertEqual(result.tool_events[0]["item"]["safe"], {"status": "kept", "count": 2})
+        self.assertIn("<redacted-credential>", persisted_result)
+
+        timeout_stdout = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "nested": {"token": "configured-openai-key"},
+                },
+            }
+        )
+        timeout_result = CodexExecutor(
+            runner=RecordingRunner(
+                stdout="",
+                error=TimeoutExpired(
+                    cmd=["codex"],
+                    timeout=123,
+                    output=timeout_stdout,
+                    stderr="cloud-secret",
+                ),
+            ),
+            environment=self.environment,
+        ).start(self.session_spec())
+        timeout_logs = (
+            timeout_result.stdout_path.read_text(encoding="utf-8")
+            + timeout_result.stderr_path.read_text(encoding="utf-8")
+        )
+        self.assertNotIn("configured-openai-key", timeout_logs)
+        self.assertNotIn("cloud-secret", timeout_logs)
+        self.assertIn("<redacted-credential>", timeout_logs)
+
+    def test_trial_request_and_session_prelaunch_reject_private_identity_tokens(
+        self,
+    ) -> None:
+        private_ref = "feature/private-workflow"
+        private_sha = "a" * 40
+        private_subject = "private workflow subject"
+        leaking_workflow = self.root / "candidate" / private_sha
+        leaking_workflow.mkdir(parents=True)
+        leaking_skill = leaking_workflow / "SKILL.md"
+        leaking_skill.write_text("# Skill\n", encoding="utf-8")
+        request_path = self.root / "leaking-request.md"
+        record_path = self.root / "leaking-request.json"
+
+        with self.assertRaisesRegex(EvaluationError, "identity leak"):
+            build_trial_request(
+                request_path,
+                record_path,
+                review_request_path=self.prompt_path,
+                materialized_skill_path=leaking_skill,
+                target_path=self.target_path,
+                artifact_root=self.trial_output,
+                anonymous_trial_label="A-1",
+                isolation_mode="logical_blinding",
+                executor_configuration={"model": "gpt-5.6"},
+                private_tokens=(private_ref, private_sha, private_subject),
+                private_identity_labels=("baseline", "candidate"),
+            )
+        self.assertFalse(request_path.exists())
+        self.assertFalse(record_path.exists())
+
+        safe_request = self.root / "safe-request.md"
+        safe_request.write_text("Anonymous review.\n", encoding="utf-8")
+        with self.assertRaisesRegex(EvaluationError, "identity leak"):
+            bundles_module.validate_trial_launch(
+                safe_request,
+                {
+                    "role": "trial",
+                    "working_directory": str(self.target_path),
+                    "readable_workflow": str(self.workflow_path),
+                    "output_directory": str(self.trial_output),
+                    "prompt_path": str(safe_request),
+                    "output_schema": None,
+                    "model": private_subject,
+                    "reasoning_effort": "high",
+                    "sandbox_mode": "workspace-write",
+                    "timeout_seconds": 123,
+                },
+                private_tokens=(private_ref, private_sha, private_subject),
+                private_identity_labels=("baseline", "candidate"),
+            )
 
     def test_agreement_start_is_fresh_ephemeral_read_only_and_schema_validated(
         self,
@@ -2459,6 +2707,7 @@ class ExecutorAndBlindingTests(unittest.TestCase):
         self.assertIn(str(self.target_path), text)
         self.assertIn(str(self.trial_output), text)
         self.assertIn("read that exact skill and no other copy", text.lower())
+        self.assertIn("python3 -B", text)
         self.assertIn("filesystem_blinding", text)
         self.assertNotIn("feature/evaluator", text)
         expected_request_hash = hashlib.sha256(request_path.read_bytes()).hexdigest()
@@ -2813,6 +3062,7 @@ class FakeExecutor:
         self.trial_labels: list[str] = []
         self.trial_start_attempts: dict[str, int] = {}
         self.trial_targets: list[Path] = []
+        self.trial_specs: list[SessionSpec] = []
         self.trial_session_ids: list[str] = []
         self.resume_statements: list[str] = []
         self.agreement_starts: dict[str, int] = {"A": 0, "B": 0}
@@ -2878,6 +3128,7 @@ class FakeExecutor:
         attempt = self.trial_start_attempts.get(label, 0) + 1
         self.trial_start_attempts[label] = attempt
         self.trial_targets.append(spec.working_directory)
+        self.trial_specs.append(spec)
         self.schedule_present_at_trial_start.append(
             any((parent / "schedule.json").is_file() for parent in spec.output_directory.parents)
         )
@@ -3412,11 +3663,207 @@ class EvaluationControllerTests(unittest.TestCase):
         self.assertEqual(summary.semantic_trial_counts, {"A": 2, "B": 2})
         self.assertEqual(executor.trial_labels, ["A1", "B1", "B2", "A2"])
         self.assertEqual(len(executor.trial_targets), len(set(executor.trial_targets)))
+        self.assertEqual(
+            len(executor.trial_specs),
+            len({spec.readable_workflow for spec in executor.trial_specs}),
+        )
         self.assertEqual(len(executor.trial_session_ids), len(set(executor.trial_session_ids)))
         self.assertTrue(all(executor.schedule_present_at_trial_start))
         run_state = self.read_json(summary.run_root / "run.json")
         self.assertNotIn("private_variant_map", run_state)
         self.assertRegex(run_state["private_variant_map_sha256"], r"^[0-9a-f]{64}$")
+        resolved = self.read_json(summary.run_root / "private/resolved-variants.json")
+        private_tokens = {
+            str(value)
+            for identity in ("baseline", "candidate")
+            for value in resolved[identity].values()
+        }
+        private_tokens.update({"old workflow fixture", "current workflow fixture"})
+        for spec in executor.trial_specs:
+            prompt_and_spec = spec.prompt_path.read_text(encoding="utf-8") + json.dumps(
+                {
+                    "role": spec.role,
+                    "working_directory": str(spec.working_directory),
+                    "readable_workflow": str(spec.readable_workflow),
+                    "output_directory": str(spec.output_directory),
+                    "prompt_path": str(spec.prompt_path),
+                    "model": spec.model,
+                    "reasoning_effort": spec.reasoning_effort,
+                    "sandbox_mode": spec.sandbox_mode,
+                    "timeout_seconds": spec.timeout_seconds,
+                },
+                sort_keys=True,
+            )
+            for private_token in private_tokens:
+                if re.fullmatch(r"[A-Za-z0-9_]+", private_token):
+                    self.assertIsNone(
+                        re.search(
+                            rf"(?<![A-Za-z0-9_]){re.escape(private_token)}"
+                            rf"(?![A-Za-z0-9_])",
+                            prompt_and_spec,
+                        )
+                    )
+                else:
+                    self.assertNotIn(private_token, prompt_and_spec)
+            self.assertFalse(
+                {"baseline", "candidate"}
+                & {part.casefold() for part in spec.readable_workflow.parts}
+            )
+
+    def test_workflow_tamper_is_terminal_before_trial_evidence_is_accepted(
+        self,
+    ) -> None:
+        class WorkflowTamperingExecutor(FakeExecutor):
+            def _start_trial(self, spec: SessionSpec) -> SessionResult:
+                result = super()._start_trial(spec)
+                if len(self.trial_specs) == 1:
+                    skill_path = spec.readable_workflow / "SKILL.md"  # type: ignore[operator]
+                    skill_path.chmod(0o644)
+                    skill_path.write_text("tampered workflow\n", encoding="utf-8")
+                return result
+
+        summary = self.controller(WorkflowTamperingExecutor()).compare(self.request())
+
+        self.assertEqual(summary.phase, "INCOMPLETE")
+        self.assertIn("workflow", summary.terminal_reason.lower())
+        self.assertFalse((summary.run_root / "trials/A/1/normalized.json").exists())
+
+    def test_fresh_controller_and_codex_executor_resume_persisted_gate_session(
+        self,
+    ) -> None:
+        backend = FakeExecutor(findings={"A": 1})
+
+        class GateRunner:
+            def __init__(self) -> None:
+                self.run_directory: Path | None = None
+                self.profile: tuple[object, ...] | None = None
+                self.interrupted_gate_a = False
+                self.fresh_resume_observed = False
+                self.start_argv: list[str] | None = None
+
+            def __call__(
+                self,
+                argv: list[str],
+                **options: object,
+            ) -> CompletedProcess[str]:
+                if argv[:3] != ["codex", "exec", "resume"]:
+                    self.start_argv = list(argv)
+                    prompt = str(options["input"])
+                    workflow_match = re.search(
+                        r"Use the exact materialized skill at `([^`]+)/SKILL\.md`",
+                        prompt,
+                    )
+                    if workflow_match is None:
+                        raise AssertionError("trial prompt omitted the exact workflow")
+                    add_directories = [
+                        Path(argv[index + 1])
+                        for index, value in enumerate(argv[:-1])
+                        if value == "--add-dir"
+                    ]
+                    output_directory = add_directories[-1]
+                    workflow = Path(workflow_match.group(1))
+                    profile = tuple(
+                        backend._read_json(workflow / "profile.json")["profile"]
+                    )
+                    spec = SessionSpec(
+                        role="trial",
+                        working_directory=Path(options["cwd"]),
+                        readable_workflow=workflow,
+                        output_directory=output_directory,
+                        prompt_path=output_directory / "trial-request.md",
+                        output_schema=None,
+                        model=argv[argv.index("--model") + 1],
+                        reasoning_effort=argv[argv.index("-c") + 1].split("=", 1)[1],
+                        sandbox_mode=argv[argv.index("--sandbox") + 1],
+                        timeout_seconds=int(options["timeout"]),
+                    )
+                    self.profile = profile
+                    self.run_directory = backend._write_gate_a_fixture(
+                        spec,
+                        session_id="restart-session",
+                        findings=1,
+                        profile=profile,
+                    )
+                    stdout = ExecutorAndBlindingTests.successful_jsonl(
+                        thread_id="restart-session",
+                        final_output="native review paused at Gate A",
+                    )
+                    return CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+                if self.run_directory is None or self.profile is None:
+                    raise AssertionError("resume occurred before trial start")
+                state = backend._read_json(self.run_directory / "state.json")
+                if state["phase"] == "ADJUDICATED":
+                    backend._advance_gate_a(self.run_directory, 1, self.profile)
+                    self.interrupted_gate_a = True
+                    raise FakeInterruption("gate_a_process_restart")
+                if state["phase"] == "PLAN_VALIDATED":
+                    self.fresh_resume_observed = True
+                    raise FakeInterruption("fresh_gate_b_resume")
+                raise AssertionError(f"unexpected resumed native phase: {state['phase']}")
+
+        runner = GateRunner()
+        first_controller = EvaluationController(
+            runs_root=self.runs_root,
+            executor=CodexExecutor(runner=runner, environment={}),
+            random_source=ScriptedRandom(),
+        )
+        with self.assertRaisesRegex(FakeInterruption, "gate_a_process_restart"):
+            first_controller.compare(self.request(new_run=True))
+        run_root = next(path for path in self.runs_root.iterdir() if path.is_dir())
+        self.assertTrue(runner.interrupted_gate_a)
+        self.assertIsNotNone(runner.start_argv)
+        resolved = self.read_json(run_root / "private/resolved-variants.json")
+        argv_text = " ".join(runner.start_argv or ())
+        for identity in ("baseline", "candidate"):
+            variant = resolved[identity]
+            subject = self.git(
+                self.skill_repository,
+                "show",
+                "-s",
+                "--format=%s",
+                str(variant["commit_sha"]),
+            )
+            for private_token in (
+                variant["supplied_ref"],
+                variant["commit_sha"],
+                variant["commit_subject_sha256"],
+                subject,
+            ):
+                token = str(private_token)
+                if re.fullmatch(r"[A-Za-z0-9_]+", token):
+                    self.assertIsNone(
+                        re.search(
+                            rf"(?<![A-Za-z0-9_]){re.escape(token)}"
+                            rf"(?![A-Za-z0-9_])",
+                            argv_text,
+                        )
+                    )
+                else:
+                    self.assertNotIn(token, argv_text)
+        self.assertFalse(
+            {"baseline", "candidate"}
+            & {
+                component.casefold()
+                for argument in runner.start_argv or ()
+                for component in re.split(r"[/\\]+", argument)
+            }
+        )
+        self.assertTrue(
+            (
+                run_root
+                / "trials/A/1/attempt-1/executor-state/sessions/restart-session.json"
+            ).is_file()
+        )
+
+        fresh_controller = EvaluationController(
+            runs_root=self.runs_root,
+            executor=CodexExecutor(runner=runner, environment={}),
+            random_source=ScriptedRandom(),
+        )
+        with self.assertRaisesRegex(FakeInterruption, "fresh_gate_b_resume"):
+            fresh_controller.compare(self.request())
+        self.assertTrue(runner.fresh_resume_observed)
 
     def test_conditional_third_trial_runs_only_for_inconsistent_variant(self) -> None:
         executor = FakeExecutor(

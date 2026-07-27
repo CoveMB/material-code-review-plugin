@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import uuid
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -169,6 +170,21 @@ def resolve_variant(repo_root: Path, ref: str) -> ResolvedVariant:
         commit_sha=commit_sha,
         commit_subject_sha256=_sha256_text(subject),
     )
+
+
+def resolved_variant_subject(repo_root: Path, variant: ResolvedVariant) -> str:
+    """Load and hash-check the immutable commit subject for launch blinding."""
+
+    repository = Path(repo_root).resolve(strict=True)
+    commit_sha = _ensure_sha(variant.commit_sha, "resolved variant")
+    subject = _git_output(
+        repository,
+        ["show", "-s", "--format=%s", commit_sha],
+        "resolved variant subject lookup",
+    )
+    if _sha256_text(subject) != variant.commit_subject_sha256:
+        raise EvaluationError("resolved variant subject changed")
+    return subject
 
 
 def verify_benchmark_range(mirror: Path, benchmark: Benchmark) -> None:
@@ -452,6 +468,8 @@ def materialize_variant(
     variant: ResolvedVariant,
     workspace_root: Path,
     run_id: str,
+    *,
+    anonymous_identifier: str | None = None,
 ) -> WorkspaceRecord:
     """Package and validate one immutable historical skill distribution."""
 
@@ -460,11 +478,16 @@ def materialize_variant(
     workspace.mkdir(parents=True, exist_ok=True)
     _require_identifier(run_id, "run_id")
     _ensure_sha(variant.commit_sha, "resolved variant")
+    identifier = _require_identifier(
+        anonymous_identifier or f"workflow-{uuid.uuid4().hex}",
+        "anonymous workflow identifier",
+    )
 
     run_root = workspace / run_id
-    variant_root = run_root / "variants" / variant.commit_sha
-    evidence_root = variant_root / "evidence"
-    source_snapshot = run_root / "sources" / variant.commit_sha
+    variant_root = run_root / "variants" / identifier
+    private_materialization = run_root / "private" / "materialization" / identifier
+    evidence_root = private_materialization / "evidence"
+    source_snapshot = private_materialization / "source"
     workflow = variant_root / "workflow" / "material-code-review"
     source_archive = evidence_root / "source.tar"
     full_archive = evidence_root / "discarded-full.zip"
@@ -578,6 +601,127 @@ def materialize_variant(
                 discarded.unlink()
             except FileNotFoundError:
                 pass
+
+
+def _content_inventory(inventory: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {"path": str(entry["path"]), "sha256": str(entry["sha256"])}
+        for entry in inventory
+    ]
+
+
+def _make_tree_read_only(path: Path) -> None:
+    entries = sorted(path.rglob("*"), key=lambda entry: len(entry.parts), reverse=True)
+    for entry in entries:
+        if entry.is_symlink():
+            raise EvaluationError("workflow snapshot contains a symlink")
+        mode = stat.S_IMODE(entry.stat().st_mode)
+        if entry.is_dir():
+            entry.chmod((mode & ~0o222) | 0o500)
+        elif entry.is_file():
+            entry.chmod(mode & ~0o222)
+        else:
+            raise EvaluationError("workflow snapshot contains a special file")
+    root_mode = stat.S_IMODE(path.stat().st_mode)
+    path.chmod((root_mode & ~0o222) | 0o500)
+
+
+def _make_tree_owner_writable(path: Path) -> None:
+    path.chmod(stat.S_IMODE(path.stat().st_mode) | 0o700)
+    for entry in path.rglob("*"):
+        mode = stat.S_IMODE(entry.stat().st_mode)
+        if entry.is_dir():
+            entry.chmod(mode | 0o700)
+        elif entry.is_file():
+            entry.chmod(mode | 0o600)
+
+
+def attest_immutable_workflow(record: WorkspaceRecord) -> dict[str, str]:
+    """Verify a registered canonical or per-attempt workflow has not changed."""
+
+    if record.kind not in {"variant-workflow", "trial-workflow"}:
+        raise EvaluationError("workflow attestation requires a workflow record")
+    _, initial = _load_registered_record(record)
+    current_inventory_sha256 = _inventory_hash(record.path)
+    if (
+        current_inventory_sha256 != record.initial_status_sha256
+        or current_inventory_sha256 != initial.get("inventory_sha256")
+    ):
+        raise EvaluationError("workflow has unrecorded changes")
+    if record.kind == "trial-workflow":
+        for entry in (record.path, *record.path.rglob("*")):
+            if entry.is_symlink() or not (entry.is_dir() or entry.is_file()):
+                raise EvaluationError("workflow has unrecorded changes")
+            if stat.S_IMODE(entry.stat().st_mode) & 0o222:
+                raise EvaluationError("workflow has unrecorded changes")
+    return {"inventory_sha256": current_inventory_sha256}
+
+
+def create_trial_workflow(
+    canonical_workflow: WorkspaceRecord,
+    workspace_root: Path,
+    run_id: str,
+    trial_identifier: str,
+) -> WorkspaceRecord:
+    """Create one anonymous, read-only workflow snapshot for a single attempt."""
+
+    if canonical_workflow.kind != "variant-workflow":
+        raise EvaluationError("trial workflow source must be a canonical variant workflow")
+    workspace = Path(workspace_root).resolve(strict=True)
+    _require_identifier(run_id, "run_id")
+    _require_identifier(trial_identifier, "trial workflow identifier")
+    if canonical_workflow.owner_run_id != run_id:
+        raise EvaluationError("trial workflow source belongs to a different run")
+    source_workspace, _ = _derive_run_root(canonical_workflow)
+    if source_workspace.resolve(strict=True) != workspace:
+        raise EvaluationError("trial workflow source belongs to a different workspace root")
+    attest_immutable_workflow(canonical_workflow)
+    source_inventory = _inventory(canonical_workflow.path)
+
+    destination = (
+        workspace
+        / run_id
+        / "trial-workflows"
+        / trial_identifier
+        / "material-code-review"
+    )
+    if destination.exists() or destination.is_symlink():
+        raise EvaluationError("trial workflow workspace already exists")
+    destination.parent.mkdir(parents=True, exist_ok=False)
+    try:
+        shutil.copytree(canonical_workflow.path, destination, symlinks=False)
+        copied_inventory = _inventory(destination)
+        if _content_inventory(copied_inventory) != _content_inventory(source_inventory):
+            raise EvaluationError("trial workflow does not match its canonical source")
+        _make_tree_read_only(destination)
+        inventory_sha256 = _inventory_hash(destination)
+        record = WorkspaceRecord(
+            kind="trial-workflow",
+            path=destination,
+            owner_run_id=run_id,
+            expected_head=None,
+            initial_status_sha256=inventory_sha256,
+        )
+        _register_record(
+            workspace,
+            record,
+            {
+                "inventory_sha256": inventory_sha256,
+                "source_inventory_sha256": canonical_workflow.initial_status_sha256,
+            },
+        )
+        attest_immutable_workflow(record)
+        return record
+    except BaseException:
+        if destination.exists() and not destination.is_symlink():
+            destination.chmod(0o700)
+            for entry in destination.rglob("*"):
+                if entry.is_dir():
+                    entry.chmod(0o700)
+                elif entry.is_file():
+                    entry.chmod(0o600)
+            shutil.rmtree(destination)
+        raise
 
 
 def _mirror_attestation(mirror: Path) -> dict[str, str]:
@@ -989,9 +1133,8 @@ def clean_owned_workspaces(
         registry, initial = _load_registered_record(record)
         if record.kind == "trial-target":
             attest_clean_target(record)
-        elif record.kind == "variant-workflow":
-            if _inventory_hash(path) != initial.get("inventory_sha256"):
-                raise EvaluationError("workspace has unrecorded changes")
+        elif record.kind in {"variant-workflow", "trial-workflow"}:
+            attest_immutable_workflow(record)
         elif record.kind == "target-mirror":
             if canonical_hash(_mirror_attestation(path)) != record.initial_status_sha256:
                 raise EvaluationError("target mirror has unrecorded changes")
@@ -1001,6 +1144,8 @@ def clean_owned_workspaces(
 
     removed: list[Path] = []
     for record, registry in approved:
+        if record.kind == "trial-workflow":
+            _make_tree_owner_writable(record.path)
         shutil.rmtree(record.path)
         registry.unlink()
         removed.append(record.path)

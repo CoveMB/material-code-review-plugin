@@ -16,11 +16,13 @@ _ANONYMOUS_LABEL_PATTERN = re.compile(r"^[A-Z](?:-[1-9][0-9]*)?$")
 _GIT_SHA_PATTERN = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
 _IDENTITY_LABEL_PATTERNS = (
     re.compile(
-        r"\b(?:variant|candidate|workflow|skill|version)\s*[:=_-]?\s*(?:old|new)\b",
+        r"\b(?:variant|candidate|workflow|skill|version)\s*[:=_-]?\s*"
+        r"(?:old|new|baseline|candidate)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:old|new)\s*[:=_-]?\s*(?:variant|candidate|workflow|skill|version)\b",
+        r"\b(?:old|new|baseline|candidate)\s*[:=_-]?\s*"
+        r"(?:variant|candidate|workflow|skill|version)\b",
         re.IGNORECASE,
     ),
 )
@@ -205,7 +207,7 @@ def _contains_json_identity(text: str) -> bool:
                 if (
                     key_terms & _IDENTITY_JSON_KEY_TERMS
                     and isinstance(child, str)
-                    and child.casefold() in {"old", "new"}
+                    and child.casefold() in {"old", "new", "baseline", "candidate"}
                 ):
                     return True
                 if isinstance(child, (dict, list)) and contains_identity(child):
@@ -213,6 +215,92 @@ def _contains_json_identity(text: str) -> bool:
         return False
 
     return contains_identity(value)
+
+
+def _contains_private_token(text: str, token: str) -> bool:
+    if not token:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_]+", token):
+        return re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])",
+            text,
+        ) is not None
+    return token in text
+
+
+def _string_values(value: object) -> tuple[str, ...]:
+    values: list[str] = []
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            values.append(item)
+        elif isinstance(item, Path):
+            values.append(str(item))
+        elif isinstance(item, Mapping):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, Iterable) and not isinstance(item, (bytes, bytearray)):
+            pending.extend(item)
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            raise EvaluationError("trial launch values must be JSON-compatible")
+    return tuple(values)
+
+
+def _path_contains_private_label(value: str, private_labels: tuple[str, ...]) -> bool:
+    if not any(separator in value for separator in ("/", "\\")):
+        return False
+    components = {
+        component.casefold()
+        for component in re.split(r"[/\\]+", value)
+        if component
+    }
+    return any(label.casefold() in components for label in private_labels)
+
+
+def _validate_trial_identity(
+    request_text: str,
+    session_values: object,
+    *,
+    private_tokens: object,
+    private_identity_labels: Iterable[str],
+) -> None:
+    tokens = _flatten_private_tokens(private_tokens)
+    labels = tuple(private_identity_labels)
+    if any(not isinstance(label, str) or not label for label in labels):
+        raise EvaluationError("private identity labels must be non-empty strings")
+    values = (request_text, *_string_values(session_values))
+    if any(
+        _contains_private_token(value, token)
+        for value in values
+        for token in tokens
+    ):
+        raise EvaluationError("identity leak in reviewer launch")
+    if any(
+        _path_contains_private_label(value, labels)
+        for value in _string_values(session_values)
+    ):
+        raise EvaluationError("identity leak in reviewer launch path")
+
+
+def validate_trial_launch(
+    request_path: Path,
+    session_values: Mapping[str, Any],
+    *,
+    private_tokens: object = (),
+    private_identity_labels: Iterable[str] = (),
+) -> None:
+    """Reject private skill identity in a generated request or session spec."""
+
+    request_text = _read_utf8_file(request_path, "trial request")
+    if not isinstance(session_values, Mapping):
+        raise EvaluationError("trial session values must be a mapping")
+    _validate_trial_identity(
+        request_text,
+        session_values,
+        private_tokens=private_tokens,
+        private_identity_labels=private_identity_labels,
+    )
 
 
 def _scan_text(text: str, private_tokens: tuple[str, ...], relative_path: str) -> None:
@@ -371,6 +459,8 @@ def build_trial_request(
     anonymous_trial_label: str,
     isolation_mode: str,
     executor_configuration: Mapping[str, Any],
+    private_tokens: object = (),
+    private_identity_labels: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Write the common trial request plus only its anonymous operational roots."""
 
@@ -396,10 +486,25 @@ def build_trial_request(
         f"# Anonymous trial {anonymous_trial_label}\n\n"
         f"Host isolation mode: `{isolation_mode}`\n\n"
         f"Use the exact materialized skill at `{skill}`. "
-        "Read that exact skill and no other copy.\n\n"
+        "Read that exact skill and no other copy. Invoke its Python controller with "
+        "bytecode disabled (`python3 -B`) and keep all controller state under the "
+        "provided artifact root.\n\n"
         f"Frozen target: `{target}`\n\n"
         f"Controller artifact root: `{artifacts}`\n\n"
         f"{common_request}"
+    )
+    _validate_trial_identity(
+        wrapper,
+        {
+            "materialized_skill_path": str(skill),
+            "target_path": str(target),
+            "artifact_root": str(artifacts),
+            "anonymous_trial_label": anonymous_trial_label,
+            "isolation_mode": isolation_mode,
+            "executor_configuration": dict(executor_configuration),
+        },
+        private_tokens=private_tokens,
+        private_identity_labels=private_identity_labels,
     )
     request = Path(request_path)
     record_file = Path(record_path)
