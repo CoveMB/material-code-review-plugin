@@ -66,9 +66,8 @@ _CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
-_UNIX_ABSOLUTE_PATH_PATTERN = re.compile(
-    r"(?<![\w.<>/\\])/(?!/)[^\s<>]*"
-)
+_UNIX_SLASH_CANDIDATE_PATTERN = re.compile(r"(?=(/[^\s]*))")
+_WEB_URL_PATTERN = re.compile(r"(?i)https?://[^\s<>]*")
 _NON_PATH_TRAILING_PUNCTUATION = ",;:!?)}]>'\""
 _ESCAPED_INLINE_CODE_END_PATTERN = re.compile(r"\\`[,;:.!?)}\]>'\"]*$")
 _WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(
@@ -159,8 +158,32 @@ def _render_list(values: Sequence[str]) -> list[str]:
 
 
 def _contains_unix_absolute_path(text: str) -> bool:
-    for match in _UNIX_ABSOLUTE_PATH_PATTERN.finditer(text):
-        path_suffix = _ESCAPED_INLINE_CODE_END_PATTERN.sub("", match.group()[1:])
+    web_url_ranges = tuple(
+        (match.start(), match.end()) for match in _WEB_URL_PATTERN.finditer(text)
+    )
+    for match in _UNIX_SLASH_CANDIDATE_PATTERN.finditer(text):
+        slash_index = match.start()
+        if any(start <= slash_index < end for start, end in web_url_ranges):
+            continue
+        if slash_index > 0:
+            predecessor = text[slash_index - 1]
+            if predecessor.isalnum() or predecessor in "_./":
+                continue
+            if predecessor == "\\":
+                backslash_start = slash_index - 1
+                while backslash_start > 0 and text[backslash_start - 1] == "\\":
+                    backslash_start -= 1
+                if backslash_start > 0:
+                    before_backslashes = text[backslash_start - 1]
+                    if before_backslashes.isalnum() or before_backslashes in "_.":
+                        continue
+            if (
+                predecessor == "-"
+                and slash_index > 1
+                and (text[slash_index - 2].isalnum() or text[slash_index - 2] == "_")
+            ):
+                continue
+        path_suffix = _ESCAPED_INLINE_CODE_END_PATTERN.sub("", match.group(1)[1:])
         if path_suffix.rstrip(_NON_PATH_TRAILING_PUNCTUATION):
             return True
     return False

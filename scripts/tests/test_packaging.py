@@ -19,7 +19,7 @@ REVIEW_VALIDATOR = REPOSITORY_ROOT / "skills" / "material-code-review" / "script
 SIMPLIFICATION_VALIDATOR = (
     REPOSITORY_ROOT / "skills" / "material-code-simplification" / "scripts" / "validate_package.py"
 )
-DISTRIBUTION_LAYOUT = os.environ.get("MATERIAL_REVIEW_DISTRIBUTION_LAYOUT") == "1"
+DISTRIBUTION_LAYOUT = not (REPOSITORY_ROOT / ".git").exists()
 
 
 class StandalonePackagingTests(unittest.TestCase):
@@ -507,6 +507,41 @@ class StandalonePackagingTests(unittest.TestCase):
                 r"test_source_validator_requires_evaluator_test_module .* skipped ",
             )
 
+    def test_extracted_full_archive_package_uses_distribution_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            archive_path = temp_root / "full-plugin.zip"
+            package_result = self.run_full_packager(fixture_root, archive_path)
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            extracted_root = temp_root / "extracted"
+            self.extract_archive_with_modes(archive_path, extracted_root)
+            distribution_directory = temp_root / "repacked"
+
+            validation_result = subprocess.run(
+                [
+                    "make",
+                    "-o",
+                    "validate",
+                    "package",
+                    f"DIST_DIR={distribution_directory}",
+                ],
+                cwd=extracted_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+
+            self.assertEqual(
+                validation_result.returncode,
+                0,
+                validation_result.stdout + validation_result.stderr,
+            )
+            self.assertTrue(
+                (distribution_directory / "material-code-review-plugin-1.2.0.zip").is_file()
+            )
+
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
@@ -553,8 +588,59 @@ class StandalonePackagingTests(unittest.TestCase):
         self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
         self.assertIn("scripts/evaluate_material_review.py", dry_run.stdout)
         self.assertIn("scripts/material_review_evaluation", dry_run.stdout)
-        self.assertIn("bash -n bin/material-reviewctl bin/material-review-evaluate", dry_run.stdout)
         self.assertNotIn("scripts/evaluate_material_review.py compare", dry_run.stdout)
+
+    def test_git_checkout_compile_and_shell_require_evaluator_assets(self) -> None:
+        for target, relative in (
+            ("compile", "scripts/evaluate_material_review.py"),
+            ("shell", "bin/material-review-evaluate"),
+        ):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                (fixture_root / ".git").mkdir()
+                (fixture_root / relative).unlink(missing_ok=True)
+
+                result = subprocess.run(
+                    ["make", target],
+                    cwd=fixture_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(relative, result.stdout + result.stderr)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "ambient-layout spoofing regression requires a source checkout",
+    )
+    def test_ambient_distribution_environment_cannot_skip_source_checks(self) -> None:
+        environment = os.environ.copy()
+        environment["MATERIAL_REVIEW_DISTRIBUTION_LAYOUT"] = "1"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "unittest",
+                "scripts.tests.test_packaging.StandalonePackagingTests."
+                "test_source_validator_requires_evaluator_test_module",
+                "-v",
+            ],
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+
+        combined_output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined_output)
+        self.assertNotIn("skipped", combined_output)
+        self.assertIn("test_source_validator_requires_evaluator_test_module", combined_output)
 
     def test_review_validators_require_implicit_invocation_true(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:

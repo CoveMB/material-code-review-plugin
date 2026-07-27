@@ -4657,6 +4657,26 @@ class EvaluationCliTests(unittest.TestCase):
                 ):
                     render_comparison_report(self.run_root)
 
+    def test_report_rejects_angle_and_backslash_adjacent_absolute_paths(self) -> None:
+        from scripts.material_review_evaluation.reporting import render_comparison_report
+
+        for value in (
+            "Angle path </opt/private.json> must not publish.",
+            r"Escaped angle path \</opt/private.json\> must not publish.",
+            r"Backslash-adjacent path \/opt/private.json must not publish.",
+            r"Windows path C:\Users\review\private.json must not publish.",
+        ):
+            with self.subTest(value=value):
+                self._mutate_locked_judgment(
+                    lambda judgment: judgment.__setitem__("limitations", [value])
+                )
+
+                with self.assertRaisesRegex(
+                    EvaluationError,
+                    "absolute machine path",
+                ):
+                    render_comparison_report(self.run_root)
+
     def test_report_allows_non_path_slash_boundaries(self) -> None:
         from scripts.material_review_evaluation.reporting import render_comparison_report
 
@@ -4666,7 +4686,7 @@ class EvaluationCliTests(unittest.TestCase):
                 [
                     "A/B, 1/2, read/write, namespace/@host, "
                     "https://example.invalid/a/b, slash punctuation /, /; (/), "
-                    "a literal `/`, and a standalone / mark are safe."
+                    r"a literal `/`, escaped prose and\/or, and a standalone / mark are safe."
                 ],
             )
         )
@@ -4677,6 +4697,7 @@ class EvaluationCliTests(unittest.TestCase):
         self.assertIn("https://example.invalid/a/b", report)
         self.assertIn("slash punctuation /, /; (/)", report)
         self.assertIn("literal \\`/\\`", report)
+        self.assertIn(r"escaped prose and\\/or", report)
         self.assertIn("standalone / mark", report)
 
     def test_report_command_prints_and_atomically_copies_only_sanitized_report(
