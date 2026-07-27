@@ -192,11 +192,9 @@ def _contains_json_identity(text: str) -> bool:
     except json.JSONDecodeError:
         return False
 
-    def contains_identity(item: object, identity_context: bool = False) -> bool:
-        if isinstance(item, str):
-            return identity_context and item.casefold() in {"old", "new"}
+    def contains_identity(item: object) -> bool:
         if isinstance(item, list):
-            return any(contains_identity(child, identity_context) for child in item)
+            return any(contains_identity(child) for child in item)
         if isinstance(item, dict):
             for key, child in item.items():
                 key_terms = set(
@@ -204,10 +202,13 @@ def _contains_json_identity(text: str) -> bool:
                     for part in re.split(r"[^a-z0-9]+", key.casefold())
                     if part
                 )
-                if contains_identity(
-                    child,
-                    identity_context or bool(key_terms & _IDENTITY_JSON_KEY_TERMS),
+                if (
+                    key_terms & _IDENTITY_JSON_KEY_TERMS
+                    and isinstance(child, str)
+                    and child.casefold() in {"old", "new"}
                 ):
+                    return True
+                if isinstance(child, (dict, list)) and contains_identity(child):
                     return True
         return False
 

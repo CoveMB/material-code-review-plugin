@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
@@ -113,6 +114,11 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
 )
 _SUPPORTED_SCHEMA_TYPES = frozenset(
     {"array", "boolean", "integer", "null", "number", "object", "string"}
+)
+_RFC3339_DATE_TIME_PATTERN = re.compile(
+    r"^(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]"
+    r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:(?:[0-5][0-9]|60)"
+    r"(?:\.[0-9]+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
 )
 
 
@@ -538,7 +544,14 @@ def _matches_type(value: Any, expected: str) -> bool:
     if expected == "string":
         return isinstance(value, str)
     if expected == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+        return (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+        ) or (
+            isinstance(value, float)
+            and math.isfinite(value)
+            and value.is_integer()
+        )
     if expected == "number":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected == "boolean":
@@ -557,12 +570,14 @@ def _matches_declared_type(value: Any, expected: object) -> bool:
 
 
 def _is_valid_datetime(value: str) -> bool:
-    normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    match = _RFC3339_DATE_TIME_PATTERN.fullmatch(value)
+    if match is None:
+        return False
     try:
-        parsed = datetime.fromisoformat(normalized)
+        date.fromisoformat(match.group("date"))
     except ValueError:
         return False
-    return parsed.tzinfo is not None
+    return True
 
 
 def _validate_json_value(

@@ -2278,6 +2278,46 @@ class ExecutorAndBlindingTests(unittest.TestCase):
                 self.assertEqual(result.status, "failed")
                 self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
 
+    def test_output_schema_integer_uses_mathematical_integrality(self) -> None:
+        schema = {"type": "integer"}
+
+        for valid in (1, 1.0, -2.0):
+            with self.subTest(valid=valid):
+                self.assertIsNone(self.execute_with_schema(schema, valid).failure)
+        for invalid in (True, 1.5):
+            with self.subTest(invalid=invalid):
+                result = self.execute_with_schema(schema, invalid)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
+
+    def test_output_schema_date_time_accepts_rfc3339_case_and_offsets(self) -> None:
+        schema = {"type": "string", "format": "date-time"}
+
+        for valid in (
+            "2026-07-27T12:30:00Z",
+            "2026-07-27t12:30:00z",
+            "2026-07-27T12:30:00.123456+05:30",
+            "2026-07-27T12:30:00-23:59",
+        ):
+            with self.subTest(valid=valid):
+                self.assertIsNone(self.execute_with_schema(schema, valid).failure)
+
+    def test_output_schema_date_time_rejects_non_rfc3339_forms(self) -> None:
+        schema = {"type": "string", "format": "date-time"}
+
+        for invalid in (
+            "2026-07-27",
+            "2026-07-27 12:30:00Z",
+            "2026-07-27T12:30:00",
+            "2026-02-30T12:30:00Z",
+            "2026-07-27T12:30:00+24:00",
+            "2026-07-27T12:30:00+05:60",
+        ):
+            with self.subTest(invalid=invalid):
+                result = self.execute_with_schema(schema, invalid)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(result.failure.kind, "schema_invalid_output")  # type: ignore[union-attr]
+
     def test_output_schema_with_unknown_keyword_fails_closed(self) -> None:
         result = self.execute_with_schema(
             {"type": "object", "unsupportedConstraint": True},
@@ -2641,6 +2681,7 @@ class ExecutorAndBlindingTests(unittest.TestCase):
                 {"variant": "old"},
                 {"anonymous_variant": "new"},
                 {"metadata": {"skill_version": "old"}},
+                {"candidate": {"metadata": {"variant": "old"}}},
             )
         ):
             bundle = self.root / f"json-identity-{index}"
@@ -2661,6 +2702,8 @@ class ExecutorAndBlindingTests(unittest.TestCase):
                 {
                     "status": "new",
                     "summary": "Old evidence was replaced by new evidence.",
+                    "candidate": {"status": "new"},
+                    "workflow": {"summary": "old"},
                 }
             )
             + "\n",
