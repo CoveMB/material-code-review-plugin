@@ -34,6 +34,7 @@ SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
 CANDIDATE_PREFLIGHT_SCHEMA = "material-review/candidate-preflight/v1"
+COVERAGE_STATUS_SCHEMA = "material-review/coverage-status/v1"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
 LEDGER_SCHEMA = "material-review/ledger/v3"
@@ -44,6 +45,7 @@ FIX_SUMMARY_SCHEMA = "material-review/fix-summary/v1"
 VERIFICATION_SCHEMA = "material-review/verification/v1"
 
 PHASE_CONTEXT = "CONTEXT_FROZEN"
+PHASE_REVIEW_INCOMPLETE = "REVIEW_INCOMPLETE"
 PHASE_CANDIDATES = "CANDIDATES_CAPTURED"
 PHASE_ADJUDICATED = "ADJUDICATED"
 PHASE_FINDINGS_APPROVED = "FINDINGS_APPROVED"
@@ -457,6 +459,15 @@ def require_string_array(value: Any, context: str, *, unique: bool = True) -> li
     return result
 
 
+def require_control_id(value: Any, context: str) -> str:
+    identifier = require_string(value, context)
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", identifier) is None:
+        raise ReviewError(
+            f"{context} must be 1-128 characters using letters, digits, dot, underscore, or hyphen"
+        )
+    return identifier
+
+
 def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
     context = "coverage plan"
     obj = require_object(raw, context)
@@ -518,8 +529,8 @@ def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
             },
             lens_context,
         )
-        lens_id = require_string(lens["lens_id"], f"{lens_context}.lens_id")
-        reviewer_id = require_string(lens["reviewer_id"], f"{lens_context}.reviewer_id")
+        lens_id = require_control_id(lens["lens_id"], f"{lens_context}.lens_id")
+        reviewer_id = require_control_id(lens["reviewer_id"], f"{lens_context}.reviewer_id")
         if lens_id in lens_ids:
             raise ReviewError(f"coverage plan has duplicate lens_id: {lens_id}")
         if reviewer_id in reviewer_ids:
@@ -1119,7 +1130,11 @@ def resolve_run_dir(args: argparse.Namespace, repo: Path) -> tuple[Path, Path]:
             continue
         if Path(state.get("repo_root", "")).resolve() != repo:
             continue
-        if state.get("phase") not in {PHASE_COMPLETE, PHASE_ABORTED}:
+        if state.get("phase") not in {
+            PHASE_COMPLETE,
+            PHASE_ABORTED,
+            PHASE_REVIEW_INCOMPLETE,
+        }:
             candidates.append(path)
     if len(candidates) == 1:
         return artifact_root, candidates[0]
@@ -2994,10 +3009,67 @@ def load_verified_coverage_plan(
 def load_candidate_preflight_receipt(
     run_dir: Path, record: dict[str, Any]
 ) -> dict[str, Any]:
+    require_exact_keys(record, {"path", "receipt_hash"}, "candidate preflight state record")
     relative_path = require_string(record.get("path"), "candidate preflight state path")
+    if re.fullmatch(
+        r"candidate-preflight/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/attempt-[12]\.json",
+        relative_path,
+    ) is None:
+        raise ReviewError("Candidate preflight state path is invalid")
     receipt = require_object(
         load_json(run_dir / relative_path), f"candidate preflight receipt {relative_path}"
     )
+    require_exact_keys(
+        receipt,
+        {
+            "schema_version",
+            "scope_hash",
+            "coverage_plan_hash",
+            "lens_id",
+            "fallback",
+            "attempt",
+            "draft_hash",
+            "semantic_hash",
+            "supersedes_receipt_hash",
+            "verdict",
+            "diagnostics",
+            "reviewer_id",
+            "source_file",
+            "receipt_hash",
+        },
+        f"candidate preflight receipt {relative_path}",
+    )
+    if receipt["schema_version"] != CANDIDATE_PREFLIGHT_SCHEMA:
+        raise ReviewError(f"Unsupported candidate preflight schema in {relative_path}")
+    require_sha256(receipt["scope_hash"], f"{relative_path}.scope_hash")
+    require_sha256(receipt["coverage_plan_hash"], f"{relative_path}.coverage_plan_hash")
+    lens_id = require_control_id(receipt["lens_id"], f"{relative_path}.lens_id")
+    require_bool(receipt["fallback"], f"{relative_path}.fallback")
+    attempt = require_int(receipt["attempt"], f"{relative_path}.attempt", minimum=1, maximum=2)
+    if relative_path != f"candidate-preflight/{lens_id}/attempt-{attempt}.json":
+        raise ReviewError("Candidate preflight receipt path does not match its lens and attempt")
+    require_sha256(receipt["draft_hash"], f"{relative_path}.draft_hash")
+    for field in ("semantic_hash", "supersedes_receipt_hash"):
+        if receipt[field] is not None:
+            require_sha256(receipt[field], f"{relative_path}.{field}")
+    verdict = require_string(receipt["verdict"], f"{relative_path}.verdict")
+    if verdict not in {"valid", "correctable", "rejected"}:
+        raise ReviewError(f"{relative_path}.verdict is invalid")
+    diagnostics = require_array(receipt["diagnostics"], f"{relative_path}.diagnostics")
+    for index, raw_diagnostic in enumerate(diagnostics):
+        context = f"{relative_path}.diagnostics[{index}]"
+        diagnostic = require_object(raw_diagnostic, context)
+        require_exact_keys(diagnostic, {"code", "path", "message", "correctable"}, context)
+        require_string(diagnostic["code"], f"{context}.code")
+        require_string(diagnostic["path"], f"{context}.path")
+        require_string(diagnostic["message"], f"{context}.message")
+        require_bool(diagnostic["correctable"], f"{context}.correctable")
+    if verdict == "valid" and diagnostics:
+        raise ReviewError(f"{relative_path}: valid receipt may not contain diagnostics")
+    if verdict != "valid" and not diagnostics:
+        raise ReviewError(f"{relative_path}: non-valid receipt requires diagnostics")
+    require_control_id(receipt["reviewer_id"], f"{relative_path}.reviewer_id")
+    require_string(receipt["source_file"], f"{relative_path}.source_file")
     receipt_hash = verify_embedded_hash(
         receipt,
         hash_field="receipt_hash",
@@ -3009,6 +3081,203 @@ def load_candidate_preflight_receipt(
     if receipt_hash != expected_hash:
         raise ReviewError("Candidate preflight receipt does not match its state hash")
     return receipt
+
+
+def load_all_candidate_preflight_receipts(
+    run_dir: Path,
+    state: dict[str, Any],
+    coverage_plan: dict[str, Any],
+    coverage_plan_hash: str,
+) -> list[dict[str, Any]]:
+    plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
+    raw_state = require_object(state.get("candidate_preflight", {}), "state.candidate_preflight")
+    receipts: list[dict[str, Any]] = []
+    seen_hashes: set[str] = set()
+    for lens_id, raw_records in raw_state.items():
+        require_control_id(lens_id, "state.candidate_preflight lens ID")
+        if lens_id not in plan_lenses:
+            raise ReviewError(f"Candidate preflight state references unplanned lens {lens_id}")
+        records = require_array(raw_records, f"state.candidate_preflight.{lens_id}")
+        if len(records) > 2:
+            raise ReviewError(f"Candidate preflight attempt limit exceeded for lens {lens_id}")
+        for raw_record in records:
+            record = require_object(raw_record, f"state.candidate_preflight.{lens_id} record")
+            receipt = load_candidate_preflight_receipt(run_dir, record)
+            if receipt["lens_id"] != lens_id:
+                raise ReviewError("Candidate preflight receipt lens does not match state")
+            if receipt["scope_hash"] != state["scope_hash"]:
+                raise ReviewError("Candidate preflight receipt has a stale scope hash")
+            if receipt["coverage_plan_hash"] != coverage_plan_hash:
+                raise ReviewError("Candidate preflight receipt has a stale coverage-plan hash")
+            plan_lens = plan_lenses[lens_id]
+            if receipt["reviewer_id"] != plan_lens["reviewer_id"]:
+                raise ReviewError("Candidate preflight reviewer does not match the coverage plan")
+            if receipt["fallback"] and (
+                not plan_lens["required"]
+                or plan_lens["fallback"] != "sequential_degraded_self_audit"
+            ):
+                raise ReviewError(f"Candidate preflight fallback is not permitted for lens {lens_id}")
+            if receipt["receipt_hash"] in seen_hashes:
+                raise ReviewError("Candidate preflight state contains a duplicate receipt hash")
+            seen_hashes.add(receipt["receipt_hash"])
+            receipts.append(receipt)
+    return receipts
+
+
+def latest_candidate_preflight_receipts(
+    receipts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    latest: dict[tuple[str, bool], dict[str, Any]] = {}
+    for receipt in receipts:
+        key = (receipt["lens_id"], receipt["fallback"])
+        if key not in latest or receipt["attempt"] > latest[key]["attempt"]:
+            latest[key] = receipt
+    return list(latest.values())
+
+
+def build_coverage_status(
+    *, state: dict[str, Any], coverage_plan: dict[str, Any], receipts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    lens_results: list[dict[str, Any]] = []
+    limitations: list[str] = []
+    for lens in coverage_plan["lenses"]:
+        matching = [item for item in receipts if item["lens_id"] == lens["lens_id"]]
+        primary = max(
+            (item for item in matching if not item["fallback"]),
+            key=lambda item: item["attempt"],
+            default=None,
+        )
+        fallback = max(
+            (item for item in matching if item["fallback"]),
+            key=lambda item: item["attempt"],
+            default=None,
+        )
+        completed = any(
+            item is not None and item["verdict"] == "valid"
+            for item in (primary, fallback)
+        )
+        if not completed:
+            availability = "required" if lens["required"] else "optional"
+            limitations.append(
+                f"{lens['lens_id']}: {availability} review evidence is unavailable"
+            )
+        lens_results.append(
+            {
+                "lens_id": lens["lens_id"],
+                "required": lens["required"],
+                "completed": completed,
+                "primary_receipt_hash": primary["receipt_hash"] if primary else None,
+                "fallback_receipt_hash": fallback["receipt_hash"] if fallback else None,
+                "reviewer_id": lens["reviewer_id"],
+                "independence_group": lens["independence_group"],
+                "review_mode": lens["review_mode"],
+                "diagnostics": [
+                    diagnostic["code"]
+                    for item in matching
+                    for diagnostic in item["diagnostics"]
+                ],
+            }
+        )
+    complete = all(item["completed"] for item in lens_results if item["required"])
+    payload = {
+        "schema_version": COVERAGE_STATUS_SCHEMA,
+        "scope_hash": state["scope_hash"],
+        "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+        "status": "complete" if complete else "incomplete",
+        "lenses": lens_results,
+        "limitations": limitations,
+    }
+    payload["coverage_status_hash"] = canonical_hash(payload)
+    return payload
+
+
+def validate_coverage_status(
+    raw: Any, *, state: dict[str, Any], coverage_plan: dict[str, Any]
+) -> dict[str, Any]:
+    status = require_object(raw, "coverage status")
+    require_exact_keys(
+        status,
+        {
+            "schema_version",
+            "scope_hash",
+            "coverage_plan_hash",
+            "status",
+            "lenses",
+            "limitations",
+            "coverage_status_hash",
+        },
+        "coverage status",
+    )
+    if status["schema_version"] != COVERAGE_STATUS_SCHEMA:
+        raise ReviewError("Unsupported coverage-status schema_version")
+    if require_sha256(status["scope_hash"], "coverage status.scope_hash") != state["scope_hash"]:
+        raise ReviewError("Coverage status has a stale scope hash")
+    if require_sha256(
+        status["coverage_plan_hash"], "coverage status.coverage_plan_hash"
+    ) != state["hashes"]["coverage_plan_hash"]:
+        raise ReviewError("Coverage status has a stale coverage-plan hash")
+    status_value = require_string(status["status"], "coverage status.status")
+    if status_value not in {"complete", "incomplete"}:
+        raise ReviewError("coverage status.status must be complete or incomplete")
+    plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
+    seen_lenses: set[str] = set()
+    completed_required = True
+    for index, raw_lens in enumerate(require_array(status["lenses"], "coverage status.lenses")):
+        context = f"coverage status.lenses[{index}]"
+        lens = require_object(raw_lens, context)
+        require_exact_keys(
+            lens,
+            {
+                "lens_id",
+                "required",
+                "completed",
+                "primary_receipt_hash",
+                "fallback_receipt_hash",
+                "reviewer_id",
+                "independence_group",
+                "review_mode",
+                "diagnostics",
+            },
+            context,
+        )
+        lens_id = require_control_id(lens["lens_id"], f"{context}.lens_id")
+        if lens_id in seen_lenses or lens_id not in plan_lenses:
+            raise ReviewError(f"Coverage status has duplicate or unplanned lens {lens_id}")
+        seen_lenses.add(lens_id)
+        planned = plan_lenses[lens_id]
+        required = require_bool(lens["required"], f"{context}.required")
+        completed = require_bool(lens["completed"], f"{context}.completed")
+        if required != planned["required"]:
+            raise ReviewError(f"Coverage status required flag differs for lens {lens_id}")
+        for field in ("primary_receipt_hash", "fallback_receipt_hash"):
+            if lens[field] is not None:
+                require_sha256(lens[field], f"{context}.{field}")
+        for field in ("reviewer_id", "independence_group", "review_mode"):
+            if require_string(lens[field], f"{context}.{field}") != planned[field]:
+                raise ReviewError(f"Coverage status {field} differs for lens {lens_id}")
+        require_string_array(lens["diagnostics"], f"{context}.diagnostics", unique=False)
+        if required and not completed:
+            completed_required = False
+    if seen_lenses != set(plan_lenses):
+        raise ReviewError("Coverage status does not account for every planned lens")
+    expected_status = "complete" if completed_required else "incomplete"
+    if status_value != expected_status:
+        raise ReviewError("Coverage status summary disagrees with required lens completion")
+    require_string_array(status["limitations"], "coverage status.limitations", unique=False)
+    require_sha256(status["coverage_status_hash"], "coverage status.coverage_status_hash")
+    return status
+
+
+def load_verified_coverage_status(
+    run_dir: Path, state: dict[str, Any], coverage_plan: dict[str, Any]
+) -> dict[str, Any]:
+    raw = require_object(load_json(run_dir / "coverage-status.json"), "coverage status")
+    status_hash = verify_embedded_hash(
+        raw, hash_field="coverage_status_hash", context="coverage status"
+    )
+    status = validate_coverage_status(raw, state=state, coverage_plan=coverage_plan)
+    require_state_hash(state, "coverage_status_hash", status_hash, "coverage status")
+    return status
 
 
 def command_check_candidates(args: argparse.Namespace) -> int:
@@ -3176,16 +3445,122 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
 
     reviewer_sets: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
-    for raw_path in args.input:
-        source = Path(raw_path).expanduser().resolve()
-        try:
-            normalized_set, finding_rejections = validate_candidate_set(
-                load_json(source), source_file=source, repo=repo, run_dir=run_dir, state=state
+    coverage_status: dict[str, Any] | None = None
+    coverage_required = bool(state.get("coverage_required", False))
+    unmatched_inputs = False
+    if coverage_required:
+        coverage_plan, coverage_plan_hash = load_verified_coverage_plan(run_dir, state)
+        all_receipts = load_all_candidate_preflight_receipts(
+            run_dir, state, coverage_plan, coverage_plan_hash
+        )
+        latest_receipts = latest_candidate_preflight_receipts(all_receipts)
+        coverage_receipts = [
+            receipt for receipt in latest_receipts if receipt["verdict"] != "valid"
+        ]
+        used_receipt_hashes: set[str] = set()
+        plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
+        for raw_path in args.input:
+            source = Path(raw_path).expanduser().resolve()
+            try:
+                draft_bytes = source.read_bytes()
+            except OSError as exc:
+                rejections.append({"source_file": str(source), "reason": str(exc)})
+                unmatched_inputs = True
+                continue
+            draft_hash = sha256_bytes(draft_bytes)
+            matches = [
+                receipt
+                for receipt in latest_receipts
+                if receipt["verdict"] == "valid"
+                and receipt["receipt_hash"] not in used_receipt_hashes
+                and receipt["draft_hash"] == draft_hash
+                and Path(receipt["source_file"]).expanduser().resolve() == source
+            ]
+            if len(matches) != 1:
+                rejections.append(
+                    {
+                        "source_file": str(source),
+                        "reason": "Input bytes do not match exactly one latest valid candidate-preflight receipt",
+                    }
+                )
+                unmatched_inputs = True
+                continue
+            receipt = matches[0]
+            lens = plan_lenses[receipt["lens_id"]]
+            try:
+                normalized_set, finding_rejections = validate_candidate_set(
+                    json.loads(draft_bytes.decode("utf-8")),
+                    source_file=source,
+                    repo=repo,
+                    run_dir=run_dir,
+                    state=state,
+                )
+                if any(
+                    normalized_set[field] != lens[field]
+                    for field in ("reviewer_id", "independence_group", "review_mode")
+                ):
+                    raise ReviewError(
+                        f"{source}: candidate identity no longer matches coverage-plan lens {receipt['lens_id']}"
+                    )
+                reviewer_sets.append(normalized_set)
+                rejections.extend(finding_rejections)
+                coverage_receipts.append(receipt)
+                used_receipt_hashes.add(receipt["receipt_hash"])
+            except (ReviewError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                rejections.append({"source_file": str(source), "reason": str(exc)})
+                unmatched_inputs = True
+
+        coverage_status = build_coverage_status(
+            state=state,
+            coverage_plan=coverage_plan,
+            receipts=coverage_receipts,
+        )
+        atomic_write_json(run_dir / "coverage-status.json", coverage_status)
+        state["hashes"]["coverage_status_hash"] = coverage_status["coverage_status_hash"]
+        state["events"].append(
+            {
+                "at": utc_now(),
+                "event": "coverage_status_recorded",
+                "status": coverage_status["status"],
+                "coverage_status_hash": coverage_status["coverage_status_hash"],
+            }
+        )
+        atomic_write_json(run_dir / "candidate-rejections.json", rejections)
+        if coverage_status["status"] != "complete":
+            (run_dir / "candidates.json").unlink(missing_ok=True)
+            (run_dir / "candidates.md").unlink(missing_ok=True)
+            state["hashes"].pop("candidate_bundle_hash", None)
+            state["phase"] = PHASE_REVIEW_INCOMPLETE
+            state["events"].append(
+                {
+                    "at": utc_now(),
+                    "event": "review_incomplete",
+                    "coverage_status_hash": coverage_status["coverage_status_hash"],
+                }
             )
-            reviewer_sets.append(normalized_set)
-            rejections.extend(finding_rejections)
-        except ReviewError as exc:
-            rejections.append({"source_file": str(source), "reason": str(exc)})
+            save_state(run_dir, state)
+            print("[FAIL] Required review coverage is incomplete")
+            print(f"Artifact: {run_dir / 'coverage-status.json'}")
+            return 2
+        if unmatched_inputs:
+            save_state(run_dir, state)
+            print("[FAIL] One or more candidate inputs lack a matching valid preflight receipt")
+            return 2
+    else:
+        for raw_path in args.input:
+            source = Path(raw_path).expanduser().resolve()
+            try:
+                normalized_set, finding_rejections = validate_candidate_set(
+                    load_json(source),
+                    source_file=source,
+                    repo=repo,
+                    run_dir=run_dir,
+                    state=state,
+                )
+                reviewer_sets.append(normalized_set)
+                rejections.extend(finding_rejections)
+            except ReviewError as exc:
+                rejections.append({"source_file": str(source), "reason": str(exc)})
     if not reviewer_sets:
         atomic_write_json(run_dir / "candidate-rejections.json", rejections)
         raise ReviewError("All candidate-set inputs were rejected; review coverage is not valid")
@@ -3212,6 +3587,8 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
         "candidates": candidates,
         "rejections": rejections,
     }
+    if coverage_status is not None:
+        payload["coverage"] = coverage_status
     bundle_hash = canonical_hash(payload)
     payload["candidate_bundle_hash"] = bundle_hash
     payload["generated_at"] = utc_now()
@@ -3255,6 +3632,13 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
         unhashed_fields={"generated_at"},
     )
     require_state_hash(state, "candidate_bundle_hash", candidate_hash, "normalized candidates")
+    if state.get("coverage_required", False):
+        coverage_plan, _ = load_verified_coverage_plan(run_dir, state)
+        coverage_status = load_verified_coverage_status(run_dir, state, coverage_plan)
+        if coverage_status["status"] != "complete":
+            raise ReviewError("Cannot compile ledger with incomplete required review coverage")
+        if candidates_bundle.get("coverage") != coverage_status:
+            raise ReviewError("Normalized candidates do not contain the hash-bound coverage status")
     adjudication = validate_adjudication(load_json(Path(args.input).expanduser().resolve()), candidates_bundle=candidates_bundle, state=state)
     candidates_by_id = {item["candidate_id"]: item for item in candidates_bundle["candidates"]}
     kept_groups = [group for group in adjudication["groups"] if group["disposition"] == "keep"]

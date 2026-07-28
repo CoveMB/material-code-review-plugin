@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/coverage-status.schema.json",
+  "title": "Material Code Review coverage status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "coverage_plan_hash",
+    "status",
+    "lenses",
+    "limitations",
+    "coverage_status_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/coverage-status/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "coverage_plan_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": ["complete", "incomplete"]
+    },
+    "lenses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lens_id",
+          "required",
+          "completed",
+          "primary_receipt_hash",
+          "fallback_receipt_hash",
+          "reviewer_id",
+          "independence_group",
+          "review_mode",
+          "diagnostics"
+        ],
+        "properties": {
+          "lens_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "primary_receipt_hash": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fallback_receipt_hash": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "reviewer_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "independence_group": {
+            "type": "string",
+            "minLength": 1
+          },
+          "review_mode": {
+            "enum": ["subagent", "controller", "external"]
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "coverage_status_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

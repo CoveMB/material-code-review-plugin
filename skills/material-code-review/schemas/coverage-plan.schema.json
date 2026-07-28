@@ -71,14 +71,18 @@
         "properties": {
           "lens_id": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
           },
           "required": {
             "type": "boolean"
           },
           "reviewer_id": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
           },
           "independence_group": {
             "type": "string",
