@@ -115,7 +115,7 @@ Reject incompatible or incomplete selectors before reviewer dispatch. In particu
 
 Before interpreting the diff, locate and read applicable repository instructions, including root and ancestor-scoped `AGENTS.md`, `CLAUDE.md`, contribution docs, test instructions, and architecture/decision records. Read only files relevant to the changed paths.
 
-For a PR, also read the PR title/body, linked requirement or plan, prior unresolved review threads, and base/head metadata through read-only APIs. Do not check out a remote PR merely to review it.
+For a PR, also read the PR title/body, linked requirement or plan, prior unresolved review threads, and the actual pull-request base and head through read-only APIs. Bind those exact lowercase 40-character SHAs and the host identifier during initialization. If the lookup fails, stop: never substitute the head parent or infer either boundary. Do not check out a remote PR merely to review it.
 
 #### 0.2 Initialize the run
 
@@ -133,6 +133,10 @@ Explicit examples:
 python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope uncommitted
 python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope branch --base origin/main
 python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope range --base origin/main --head refs/review/pr-123-head
+python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope range \
+  --base <exact-base-sha> --head <exact-head-sha> \
+  --review-object-kind pull_request --review-object-id owner/repository#123 \
+  --review-base-sha <exact-base-sha> --review-head-sha <exact-head-sha>
 ```
 
 `init` must fail rather than guess when it cannot establish the base or reviewed tree. Untracked files are included unless `--exclude-untracked` is explicitly used and the exclusion is reported to the user.
@@ -159,6 +163,14 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .
 
 A mismatch means prior reviewer output is stale. Do not “adjust mentally”; reinitialize or regenerate affected artifacts.
 
+Derive a root-owned coverage plan from the frozen context before dispatch. Always require `correctness`, `test_adequacy`, and `standards_alignment`. Add required `protocol_coherence` whenever the context records `multi_stage_lifecycle`, `cross_boundary_data`, `prompt_contract`, `conditional_validation`, `state_dependent_schema`, `trust_ordering`, or `shared_schema`. Record actual reviewer IDs, process/model independence groups, modes, and bounded fallback policy; reviewers do not choose their own coverage authority.
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" record-coverage \
+  --repo-root . \
+  --input /tmp/coverage-plan.json
+```
+
 ### Phase 1 — Generate candidates
 
 #### 1.1 Reviewer selection
@@ -170,6 +182,8 @@ Always cover:
 - correctness and edge cases;
 - test adequacy for fragile changed behavior;
 - repository standards and explicit requirement/plan alignment.
+
+Cover `protocol_coherence` when the coverage plan contains any controlled protocol risk signal. Load `references/protocol-coherence-lens.md` only for that reviewer.
 
 Select conditional lenses only when the diff contains a real concern:
 
@@ -204,7 +218,7 @@ Obtain explicit user permission for that egress. A failed or unverifiable extern
 
 #### 1.3 Candidate contract
 
-Each reviewer returns JSON conforming to `schemas/candidate-set.schema.json`. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`.
+Each reviewer returns JSON conforming to `schemas/candidate-set.schema.json`; candidate-set/v1 remains the only candidate output contract. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`.
 
 A reviewer must actively check for:
 
@@ -214,7 +228,18 @@ A reviewer must actively check for:
 - tests that already cover the claimed gap;
 - intentional tradeoffs documented in the task or repository.
 
-Do not seed reviewers with one another's candidates. That manufactures agreement.
+Do not seed reviewers with one another's candidates. That manufactures agreement. The root controller may provide frozen context and the assigned coverage-plan lens, but not another reviewer's output or a private evaluation oracle.
+
+Preflight every returned draft before ingestion:
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" check-candidates \
+  --repo-root . \
+  --lens correctness \
+  --input /tmp/reviewer-correctness.json
+```
+
+A `correctable` receipt permits at most one correction attempt by that draft's author, using `--supersedes <receipt-hash>`. The correction may repair JSON shape, top-level metadata, local IDs, or evidence anchors; it must preserve substantive finding fields. Do not let the controller or adjudicator rewrite a candidate's substance. If a required primary lens fails, its declared policy may permit one sequential `--fallback` review. Label same-model-family fallback honestly; it is degraded coverage, not independent corroboration.
 
 Save each return to a temporary JSON file, then ingest all returns together:
 
@@ -225,7 +250,16 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" ingest-candidates \
   --input /tmp/reviewer-testing.json
 ```
 
-The tool verifies scope hashes, required fields, changed-path relation, source-side evidence, and ID uniqueness. Malformed findings are rejected visibly in the ingestion report; do not repair their substance during adjudication by guessing.
+The tool verifies each input's exact bytes against its latest valid preflight receipt, then verifies scope hashes, required fields, changed-path relation, source-side evidence, and ID uniqueness. Malformed or wholly rejected coverage remains visible. Ingest only after every required lens has a valid primary or permitted fallback receipt. Missing required coverage ends in `REVIEW_INCOMPLETE`; it has no merge verdict, produces no candidate bundle, and cannot proceed to validation, adjudication, or Gate A.
+
+The discovery sequence is:
+
+```text
+read PR metadata -> init exact range with provenance -> record coverage plan ->
+dispatch one lens per reviewer -> preflight each draft -> at most one author-owned
+mechanical correction -> optional required-lens fallback -> ingest only with
+complete required coverage -> validate/adjudicate -> Gate A
+```
 
 ### Phase 2 — Validate and adjudicate
 
@@ -298,7 +332,7 @@ Do not let pre-existing record-only observations affect the verdict.
 
 ### Gate A — User approves findings for repair planning
 
-This is a hard pause. Gate A approves whether each finding should proceed to planning. It does not approve the provisional repair direction, exact edits, paths, commands, or any mutation. Do not draft a fix plan before the user responds.
+This is a hard pause. Gate A approves findings only: it decides whether each ledger finding should proceed to planning. It does not approve coverage, a provisional repair direction, exact edits, paths, commands, or any mutation. A `REVIEW_INCOMPLETE` run never reaches this gate. Do not draft a fix plan before the user responds.
 
 Present:
 
@@ -554,6 +588,10 @@ Read `references/failure-model.md`. In summary:
 
 - unknown or stale scope -> stop and refreeze;
 - malformed reviewer output -> reject that output, do not guess;
+- unavailable or mismatched PR metadata -> stop; never fall back to the head parent;
+- missing or stale coverage plan -> stop before dispatch or ingestion;
+- correctable candidate draft -> permit one author-owned mechanical correction only;
+- missing required lens after its permitted fallback -> `REVIEW_INCOMPLETE` with no merge verdict;
 - unavailable subagents -> same checklist, sequential/degraded self-audit;
 - validator infrastructure failure -> preserve high-impact uncertainty visibly;
 - user gate absent -> stop;
@@ -569,6 +607,7 @@ Read `references/failure-model.md`. In summary:
 Load references only at the stage that needs them:
 
 - `references/context-checklist.md` — Phase 0
+- `references/protocol-coherence-lens.md` — Phase 1 when protocol risk is recorded
 - `references/materiality-rubric.md` — Phases 1–2
 - `references/remediation-rubric.md` — repair-direction audit, adjudication, and planning
 - `references/test-evidence-rubric.md` — coverage findings and repair-test design

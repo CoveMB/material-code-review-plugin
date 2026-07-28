@@ -6,7 +6,12 @@ The canonical skill defines the judgment contract. `reviewctl.py` enforces state
 |---|---|---|
 | new | `init` | `CONTEXT_FROZEN` and immutable source/diff bundle |
 | context | `check-scope` | confirms current identity still matches |
-| context | `ingest-candidates --input ...` | validates reviewer JSON and writes normalized candidate bundle |
+| context | `record-coverage --input ...` | records the scope-bound root-owned lens roster and risk signals |
+| context | `check-candidates --lens ... --input ...` | writes a hash-bound valid, correctable, or rejected receipt without advancing phase |
+| context | `check-candidates ... --supersedes HASH` | permits the one mechanical correction attempt without substantive drift |
+| context | `check-candidates ... --fallback` | records at most one declared sequential fallback for a failed required lens |
+| context | `ingest-candidates --input ...` | verifies exact preflighted bytes and writes normalized candidates only when required coverage is complete |
+| context | incomplete required coverage | terminal `REVIEW_INCOMPLETE`; no candidate bundle, merge verdict, adjudication, or Gate A |
 | candidates | provisional grouping + repair audit | partitions every candidate once and binds every provisionally kept direction to scope, candidate IDs, and direction hash |
 | audited provisional groups | `compile-ledger --input ...` | validates complete final adjudication and assigns stable `F###` IDs |
 | adjudicated | `gate-findings ...` | records user dispositions and Gate A receipt |
@@ -34,6 +39,6 @@ The default is the active repository's Git path `material-code-review`. A custom
 
 ## Input order
 
-Multiple candidate inputs may be ingested in one command. Provisional grouping consumes the normalized candidate bundle; every retained group then receives a repair audit. Final adjudication consumes the normalized candidate bundle hash and the audit's exact scope, candidate-ID, and repair-direction-hash bindings. Fix-plan/v2 consumes the Gate A receipt and its hash-verified ledger, then binds each approved item to the exact direction hash and complete constraint, state/exception, and decision coverage. Verification consumes the approved plan hash and prepared fix-summary hash. Any mismatch fails closed.
+Multiple candidate inputs may be ingested in one command only after `record-coverage` and a valid `check-candidates` receipt for each input. Rejected primary, fallback, and optional coverage remains in `coverage-status.json`. Provisional grouping consumes the normalized candidate bundle; every retained group then receives a repair audit. Final adjudication consumes the normalized candidate bundle hash and its complete coverage status plus the audit's exact scope, candidate-ID, and repair-direction-hash bindings. Fix-plan/v2 consumes the Gate A receipt and its hash-verified ledger, then binds each approved item to the exact direction hash and complete constraint, state/exception, and decision coverage. Verification consumes the approved plan hash and prepared fix-summary hash. Any mismatch fails closed.
 
 Run `python3 scripts/reviewctl.py <command> --help` for exact flags. On Windows use `py -3`.

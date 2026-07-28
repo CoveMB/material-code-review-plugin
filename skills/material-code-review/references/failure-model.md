@@ -3,9 +3,14 @@
 | Failure | Required response |
 |---|---|
 | Repository/base/comparison cannot be resolved | Stop. Do not substitute a narrower diff. |
+| Pull-request metadata lookup fails or disagrees with the resolved range | Stop before run creation. Never fall back to the head parent. |
 | Frozen scope changed | Invalidate downstream artifacts and refreeze. |
 | Ref/remote source unavailable | Mark coverage incomplete or stop; never inspect unrelated workspace files. |
 | Malformed reviewer JSON | Reject the output. Do not repair it by guessing. |
+| Coverage plan missing, stale, or incomplete | Stop before candidate dispatch or ingestion and repair the root-owned plan. |
+| Candidate draft is mechanically correctable | Permit one author-owned `check-candidates --supersedes ...` correction; reject substantive drift or any third attempt. |
+| Required primary lens fails | Run at most one declared sequential fallback; preserve the primary diagnostics. |
+| Required lens remains unavailable | Persist `REVIEW_INCOMPLETE`, preserve rejected coverage, emit no merge verdict, and do not proceed to Gate A. |
 | All reviewer outputs fail | Report degraded/blocked coverage; do not fabricate findings. |
 | Validator unavailable | Use controller-direct only for mechanically authoritative facts; otherwise record degraded self-audit or uncertainty. |
 | Validator rejects | Discard with `VALIDATOR_REJECTED`. |
