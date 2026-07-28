@@ -72,6 +72,9 @@ DISTRIBUTABLE_REQUIRED = {
 }
 MAINTAINER_SOURCE_REQUIRED = {
     ".agents/skills/material-review-evaluation/SKILL.md",
+    "EVALUATION.md",
+    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
+    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
     "evaluations/material-code-review/README.md",
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
     "evaluations/material-code-review/prompts/reviewer.md",
@@ -87,6 +90,10 @@ EVALUATOR_ASSET_ALLOWLIST = (
 EVALUATOR_ROOT_ANCHOR = (
     "Locate the repository root and confirm the invocation is running in a source checkout"
 )
+EVALUATOR_INITIAL_CLEAN_ATTESTATION = (
+    "Immediately capture the active material-review repository's `HEAD` and porcelain status. "
+    "Require an empty status."
+)
 EVALUATOR_ASSET_ALLOWLIST_START = "<!-- evaluator-asset-allowlist:start -->"
 EVALUATOR_ASSET_ALLOWLIST_END = "<!-- evaluator-asset-allowlist:end -->"
 EVALUATOR_NO_FALLBACK = (
@@ -98,6 +105,18 @@ EVALUATOR_DISPATCH_CONTRACT_END = "evaluator-dispatch-contract:end -->"
 EVALUATOR_CONTEXT_FREE_PROMPT_MARKER = (
     "The root dispatcher must provide zero inherited task history."
 )
+EVALUATOR_PREDISPATCH_REATTESTATION = (
+    "Immediately before each reviewer or judge dispatch, recapture the active material-review "
+    "repository's `HEAD` and porcelain status and require an exact match to the initial clean "
+    "attestation."
+)
+EVALUATOR_ROOT_DISPATCH_AUTHORITY = "Root-side verification is authoritative;"
+EVALUATOR_PROMPT_ROOT_DISPATCH_AUTHORITY = (
+    "Root-side verification of the empty-history host primitive and supplied allowlist is "
+    "authoritative; no private dispatch receipt or other private orchestration data is "
+    "worker-visible."
+)
+EVALUATOR_PRIVATE_RECEIPT_REQUIREMENT = "Do not proceed if the dispatch receipt"
 EVALUATOR_CONTEXT_FREE_DOC_MARKER = (
     "Every reviewer and judge dispatch uses a self-contained request with zero inherited task history."
 )
@@ -123,6 +142,24 @@ EVALUATOR_DISPOSITION_STATES = (
 )
 EVALUATOR_DISPOSITION_DOC_MARKER = (
     "Any rejection or deferral in either non-empty variant makes the comparison non-comparable."
+)
+EVALUATOR_REVIEWER_GATE_A_RETURN_HEADING = "### Gate-A pre-disposition return"
+EVALUATOR_REVIEWER_FINAL_RETURN_HEADING = "### Final return after dispositions"
+EVALUATOR_REVIEWER_HARD_BOUNDARIES_HEADING = "## Hard boundaries"
+EVALUATOR_REVIEWER_GATE_A_SECTIONS = (
+    "1. `Findings`",
+    "2. `Artifacts and hashes`",
+    "3. `Limitations`",
+    "4. `No-mutation attestation`",
+)
+EVALUATOR_REVIEWER_FINAL_SECTIONS = (
+    "1. `Findings`",
+    "2. `Disposition result`",
+    "3. `Limitations`",
+    "4. `No-mutation attestation`",
+)
+EVALUATOR_REVIEWER_FINAL_PLAN_RULE = (
+    "For `ALL_APPROVED_PLAN` only, also return `Plan`"
 )
 EVALUATOR_JUDGE_PROTOCOL_START = "<!-- evaluator-judge-protocol:start"
 EVALUATOR_JUDGE_PROTOCOL_END = "evaluator-judge-protocol:end -->"
@@ -242,6 +279,7 @@ def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
 
     text = skill_path.read_text(encoding="utf-8")
     anchor_index = text.find(EVALUATOR_ROOT_ANCHOR)
+    clean_attestation_index = text.find(EVALUATOR_INITIAL_CLEAN_ATTESTATION)
     start_index = text.find(EVALUATOR_ASSET_ALLOWLIST_START)
     end_index = text.find(EVALUATOR_ASSET_ALLOWLIST_END)
     if anchor_index < 0:
@@ -250,6 +288,13 @@ def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
     if start_index < 0 or end_index < start_index:
         fail(errors, "maintainer evaluator asset allowlist markers are incomplete")
         return
+    if clean_attestation_index < 0:
+        fail(errors, "maintainer evaluator lacks initial clean checkout attestation")
+    elif not anchor_index < clean_attestation_index < start_index:
+        fail(
+            errors,
+            "maintainer evaluator clean checkout attestation must precede asset resolution",
+        )
     if anchor_index > start_index:
         fail(errors, "maintainer evaluator asset allowlist precedes repository root attestation")
     if EVALUATOR_NO_FALLBACK not in text[start_index:]:
@@ -315,8 +360,9 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
     skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
     if not skill_path.is_file():
         return
+    skill_text = skill_path.read_text(encoding="utf-8")
     contract = parse_evaluator_contract(
-        skill_path.read_text(encoding="utf-8"),
+        skill_text,
         EVALUATOR_DISPATCH_CONTRACT_START,
         EVALUATOR_DISPATCH_CONTRACT_END,
         errors,
@@ -350,14 +396,31 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
     }
     if any(contract.get(key) != value for key, value in fixed_values.items()):
         fail(errors, "maintainer evaluator dispatch contract is incomplete")
+    if EVALUATOR_PREDISPATCH_REATTESTATION not in skill_text:
+        fail(
+            errors,
+            "maintainer evaluator must re-attest the active checkout before every dispatch",
+        )
+    if EVALUATOR_ROOT_DISPATCH_AUTHORITY not in skill_text:
+        fail(
+            errors,
+            "maintainer evaluator dispatch verification must remain root-authoritative",
+        )
 
     for relative, label in (
         ("evaluations/material-code-review/prompts/reviewer.md", "reviewer"),
         ("evaluations/material-code-review/prompts/judge.md", "judge"),
     ):
         prompt_path = root / relative
-        if prompt_path.is_file() and EVALUATOR_CONTEXT_FREE_PROMPT_MARKER not in prompt_path.read_text(encoding="utf-8"):
+        if not prompt_path.is_file():
+            continue
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        if EVALUATOR_CONTEXT_FREE_PROMPT_MARKER not in prompt_text:
             fail(errors, f"{label} prompt must require zero inherited task history")
+        if EVALUATOR_PROMPT_ROOT_DISPATCH_AUTHORITY not in prompt_text:
+            fail(errors, f"{label} prompt must keep dispatch verification root-side")
+        if EVALUATOR_PRIVATE_RECEIPT_REQUIREMENT in prompt_text:
+            fail(errors, f"{label} prompt must not require a private dispatch receipt")
 
     for relative in EVALUATOR_CONTEXT_FREE_DOCS:
         path = root / relative
@@ -418,6 +481,40 @@ def validate_maintainer_evaluator_dispositions(root: Path, errors: list[str]) ->
         path = root / relative
         if path.is_file() and EVALUATOR_DISPOSITION_DOC_MARKER not in path.read_text(encoding="utf-8"):
             fail(errors, f"{relative} must state the evaluator rejection and deferral policy")
+
+
+def validate_maintainer_evaluator_reviewer_returns(
+    root: Path,
+    errors: list[str],
+) -> None:
+    reviewer_path = root / "evaluations/material-code-review/prompts/reviewer.md"
+    if not reviewer_path.is_file():
+        return
+
+    text = reviewer_path.read_text(encoding="utf-8")
+    gate_a_index = text.find(EVALUATOR_REVIEWER_GATE_A_RETURN_HEADING)
+    final_index = text.find(EVALUATOR_REVIEWER_FINAL_RETURN_HEADING)
+    hard_boundaries_index = text.find(EVALUATOR_REVIEWER_HARD_BOUNDARIES_HEADING)
+    if gate_a_index < 0:
+        fail(errors, "reviewer prompt must define the Gate-A pre-disposition return")
+        return
+    if final_index < 0:
+        fail(errors, "reviewer prompt must define the final return after dispositions")
+        return
+    if hard_boundaries_index < final_index or final_index < gate_a_index:
+        fail(errors, "reviewer prompt return schemas are out of order")
+        return
+
+    gate_a_block = text[gate_a_index:final_index]
+    final_block = text[final_index:hard_boundaries_index]
+    if any(section not in gate_a_block for section in EVALUATOR_REVIEWER_GATE_A_SECTIONS):
+        fail(errors, "reviewer Gate-A pre-disposition return is incomplete")
+    if re.search(r"(?m)^\d+\. `Plan(?: hash)?`", gate_a_block):
+        fail(errors, "reviewer Gate-A pre-disposition return must not require a plan")
+    if any(section not in final_block for section in EVALUATOR_REVIEWER_FINAL_SECTIONS):
+        fail(errors, "reviewer final return after dispositions is incomplete")
+    if EVALUATOR_REVIEWER_FINAL_PLAN_RULE not in final_block:
+        fail(errors, "reviewer prompt must limit plan evidence to ALL_APPROVED_PLAN")
 
 
 def validate_maintainer_evaluator_judge_protocol(root: Path, errors: list[str]) -> None:
@@ -613,6 +710,7 @@ def check_source_package(
         validate_maintainer_evaluator_assets(root, errors)
         validate_maintainer_evaluator_dispatch(root, errors)
         validate_maintainer_evaluator_dispositions(root, errors)
+        validate_maintainer_evaluator_reviewer_returns(root, errors)
         validate_maintainer_evaluator_judge_protocol(root, errors)
 
     openai_yaml = root / "skills/material-code-review/agents/openai.yaml"

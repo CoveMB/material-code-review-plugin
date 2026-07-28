@@ -156,8 +156,8 @@ The initial reviewer request includes the maintainer's evaluation policy: all re
 The canonical material-review contract remains authoritative:
 
 - Gate A cannot be pre-approved before exact finding IDs exist.
-- If either reviewer stops at Gate A, the root task presents both exact finding sets together and asks the user for one short approval response.
-- After the user approves the exact retained IDs, each reviewer resumes and produces its exact repair plan.
+- If either reviewer stops at Gate A, the root task presents both exact finding sets together and asks once for every retained ID's approve, reject, or defer disposition and explicit acceptance of each empty ledger.
+- Each reviewer receives its complete disposition set and the exact user statement. Only an all-approved non-empty ledger proceeds to an exact repair plan; mixed and no-approved native results remain planless and non-comparable.
 - Reaching Gate B is sufficient evidence for plan comparison.
 - Gate B is never approved, because no repair will run.
 

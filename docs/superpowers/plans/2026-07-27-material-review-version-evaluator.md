@@ -252,10 +252,10 @@ Give each reviewer only its anonymous label, exact materialized skill path, exac
 Wait for both reviewers. If either needs Gate A:
 
 1. extract and display both variants' exact retained IDs and one-line finding titles/effects;
-2. distinguish a variant with an accepted empty ledger;
-3. ask the user once whether all displayed exact IDs are approved for planning;
-4. send each reviewer only its own approved IDs; and
-5. continue until each reviewer either reaches Gate B with an all-approved plan or reports an accepted-empty, mixed-disposition, or no-approved-findings native result.
+2. identify each zero-finding variant as awaiting explicit empty-ledger acceptance;
+3. ask the user once for an approve, reject, or defer disposition on every displayed ID and explicit acceptance of each displayed empty ledger;
+4. send each reviewer its complete disposition set, including every retained ID's status and the exact user statement, or explicit `--accept-empty` authority plus that statement; and
+5. use the complete native receipt and lifecycle evidence to classify each reviewer as reaching Gate B with an all-approved plan or reporting an accepted-empty, mixed-disposition, or no-approved-findings result.
 
 The initial request may state the maintainer intends to approve all retained findings for planning, but the evaluator must not fabricate approval. A user reply such as “approved all” applies only to the exact IDs displayed in the immediately preceding combined checkpoint.
 

@@ -28,6 +28,12 @@ PROMPT_DRIVEN_EVALUATOR_PATHS = (
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
 )
+MAINTAINER_EVALUATOR_PATHS = PROMPT_DRIVEN_EVALUATOR_PATHS + (
+    "EVALUATION.md",
+    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
+    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
+)
+# Split literals intentionally keep repo-wide legacy-token scans from matching this test file.
 LEGACY_EVALUATOR_PATHS = (
     "bin/material-review-" "evaluate",
     "scripts/evaluate_material_review.py",
@@ -590,6 +596,35 @@ class StandalonePackagingTests(unittest.TestCase):
                 ),
                 "maintainer evaluator asset path escapes the repository root",
             ),
+            (
+                "missing initial clean attestation",
+                lambda root: self.replace_once(
+                    root / ".agents/skills/material-review-evaluation/SKILL.md",
+                    "2. Immediately capture the active material-review repository's `HEAD` "
+                    "and porcelain status. Require an empty status.\n",
+                    "",
+                ),
+                "maintainer evaluator lacks initial clean checkout attestation",
+            ),
+            (
+                "late initial clean attestation",
+                lambda root: (
+                    self.replace_once(
+                        root / ".agents/skills/material-review-evaluation/SKILL.md",
+                        "2. Immediately capture the active material-review repository's `HEAD` "
+                        "and porcelain status. Require an empty status.\n",
+                        "",
+                    ),
+                    self.replace_once(
+                        root / ".agents/skills/material-review-evaluation/SKILL.md",
+                        "<!-- evaluator-asset-allowlist:end -->",
+                        "<!-- evaluator-asset-allowlist:end -->\n\n"
+                        "2. Immediately capture the active material-review repository's `HEAD` "
+                        "and porcelain status. Require an empty status.",
+                    ),
+                ),
+                "maintainer evaluator clean checkout attestation must precede asset resolution",
+            ),
         )
         for label, mutate, expected_error in mutations:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temp_directory:
@@ -640,6 +675,52 @@ class StandalonePackagingTests(unittest.TestCase):
                 "",
                 "judge prompt must require zero inherited task history",
             ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "Immediately before each reviewer or judge dispatch, recapture the active "
+                "material-review repository's `HEAD` and porcelain status and require an exact "
+                "match to the initial clean attestation.",
+                "",
+                "maintainer evaluator must re-attest the active checkout before every dispatch",
+            ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "Root-side verification is authoritative;",
+                "Dispatch verification is shared;",
+                "maintainer evaluator dispatch verification must remain root-authoritative",
+            ),
+            (
+                "evaluations/material-code-review/prompts/reviewer.md",
+                "Root-side verification of the empty-history host primitive and supplied "
+                "allowlist is authoritative; no private dispatch receipt or other private "
+                "orchestration data is worker-visible.",
+                "Do not proceed if the dispatch receipt does not attest an empty-history host "
+                "primitive.",
+                "reviewer prompt must keep dispatch verification root-side",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "Root-side verification of the empty-history host primitive and supplied "
+                "allowlist is authoritative; no private dispatch receipt or other private "
+                "orchestration data is worker-visible.",
+                "Do not proceed if the dispatch receipt does not attest an empty-history host "
+                "primitive.",
+                "judge prompt must keep dispatch verification root-side",
+            ),
+            (
+                "evaluations/material-code-review/prompts/reviewer.md",
+                "Never request or reconstruct parent-task context.",
+                "Do not proceed if the dispatch receipt is unavailable. Never request or "
+                "reconstruct parent-task context.",
+                "reviewer prompt must not require a private dispatch receipt",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "Never request or reconstruct parent-task context or a prior judge response.",
+                "Do not proceed if the dispatch receipt is unavailable. Never request or "
+                "reconstruct parent-task context or a prior judge response.",
+                "judge prompt must not require a private dispatch receipt",
+            ),
         )
         for relative, original, replacement, expected_error in mutations:
             with self.subTest(relative=relative, original=original), tempfile.TemporaryDirectory() as temp_directory:
@@ -647,6 +728,57 @@ class StandalonePackagingTests(unittest.TestCase):
                 path = fixture_root / relative
                 text = path.read_text(encoding="utf-8")
                 path.write_text(text.replace(original, replacement, 1), encoding="utf-8")
+
+                validation_result = self.run_package_validator(
+                    fixture_root,
+                    distribution_layout=False,
+                )
+
+                self.assertNotEqual(validation_result.returncode, 0)
+                self.assertIn(expected_error, validation_result.stderr)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_evaluator_reviewer_return_contract_separates_gate_a_and_final_results(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "### Gate-A pre-disposition return",
+                "### Pre-disposition return",
+                "reviewer prompt must define the Gate-A pre-disposition return",
+            ),
+            (
+                "4. `No-mutation attestation` — state that no product edit, repair, or "
+                "repository mutation was authorized or performed.\n\n"
+                "Do not require or fabricate a plan",
+                "4. `No-mutation attestation` — state that no product edit, repair, or "
+                "repository mutation was authorized or performed.\n"
+                "5. `Plan` — provide a repair plan.\n\n"
+                "Do not require or fabricate a plan",
+                "reviewer Gate-A pre-disposition return must not require a plan",
+            ),
+            (
+                "### Final return after dispositions",
+                "### Return after dispositions",
+                "reviewer prompt must define the final return after dispositions",
+            ),
+            (
+                "For `ALL_APPROVED_PLAN` only, also return `Plan`",
+                "For every outcome, also return `Plan`",
+                "reviewer prompt must limit plan evidence to ALL_APPROVED_PLAN",
+            ),
+        )
+        for original, replacement, expected_error in mutations:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                reviewer_prompt = (
+                    fixture_root
+                    / "evaluations/material-code-review/prompts/reviewer.md"
+                )
+                self.replace_once(reviewer_prompt, original, replacement)
 
                 validation_result = self.run_package_validator(
                     fixture_root,
@@ -923,7 +1055,7 @@ class StandalonePackagingTests(unittest.TestCase):
     def test_source_uses_only_prompt_driven_evaluation_surface(self) -> None:
         missing_prompt_sources = [
             relative
-            for relative in PROMPT_DRIVEN_EVALUATOR_PATHS
+            for relative in MAINTAINER_EVALUATOR_PATHS
             if not (REPOSITORY_ROOT / relative).is_file()
         ]
         present_legacy_paths = [
@@ -953,7 +1085,7 @@ class StandalonePackagingTests(unittest.TestCase):
         "maintainer evaluator is absent from distribution layouts",
     )
     def test_source_validator_requires_prompt_driven_evaluation_sources(self) -> None:
-        for relative in PROMPT_DRIVEN_EVALUATOR_PATHS:
+        for relative in MAINTAINER_EVALUATOR_PATHS:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temp_directory:
                 fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
                 (fixture_root / relative).unlink()
@@ -1153,12 +1285,12 @@ class StandalonePackagingTests(unittest.TestCase):
                 self.assertFalse((extracted_root / relative).exists(), relative)
 
             validation_result = subprocess.run(
-                ["make", "validate"],
+                ["make", "package-check"],
                 cwd=extracted_root,
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=300,
+                timeout=60,
             )
 
             self.assertEqual(
@@ -1170,7 +1302,26 @@ class StandalonePackagingTests(unittest.TestCase):
                 "material-code-review package 1.2.0 is structurally valid",
                 validation_result.stdout,
             )
-            combined_output = validation_result.stdout + validation_result.stderr
+            targeted_test_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "unittest",
+                    "scripts.tests.test_packaging.StandalonePackagingTests."
+                    "test_archive_validator_rejects_unsafe_and_incomplete_archives",
+                    "scripts.tests.test_packaging.StandalonePackagingTests."
+                    "test_source_validator_requires_prompt_driven_evaluation_sources",
+                    "-v",
+                ],
+                cwd=extracted_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            combined_output = targeted_test_result.stdout + targeted_test_result.stderr
+            self.assertEqual(targeted_test_result.returncode, 0, combined_output)
             self.assertIn(
                 "test_archive_validator_rejects_unsafe_and_incomplete_archives",
                 combined_output,

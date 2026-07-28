@@ -2,7 +2,7 @@
 
 Perform one full material review using only the anonymous inputs supplied by the evaluator root. Load the exact `material-code-review` skill from the supplied materialized skill directory and follow its canonical workflow faithfully.
 
-The root dispatcher must provide zero inherited task history. This prompt and the explicitly supplied anonymous inputs are self-contained. Do not proceed if the dispatch receipt does not attest an empty-history host primitive; on Codex that primitive is `fork_turns: "none"`. Never request or reconstruct parent-task context.
+The root dispatcher must provide zero inherited task history. This prompt and the explicitly supplied anonymous inputs are self-contained. Root-side verification of the empty-history host primitive and supplied allowlist is authoritative; no private dispatch receipt or other private orchestration data is worker-visible. Never request or reconstruct parent-task context.
 
 ## Review recipe
 
@@ -17,14 +17,31 @@ The root dispatcher must provide zero inherited task history. This prompt and th
 9. For `MIXED_DISPOSITIONS_NONCOMPARABLE` or `NO_APPROVED_FINDINGS`, do not request or fabricate a plan. Return the native hash-bound receipt and state so the evaluator can mark the comparison `DISPOSITION_NONCOMPARABLE` and require `INSUFFICIENT_EVIDENCE`.
 10. For `ACCEPTED_EMPTY_LEDGER`, do not invent a plan. Report the accepted empty ledger so the evaluator can record the controlled no-plan result. Never reinterpret `INVALID_OR_MISSING_EVIDENCE` as an empty or disposition result.
 
-## Required return
+## Required returns
 
-Return these sections:
+### Gate-A pre-disposition return
 
-1. `Findings` — the complete retained findings ledger and discarded findings when available, with native artifact paths and hashes.
-2. `Plan` — the complete validated Gate-B repair plan and exact plan hash, or the accepted empty-ledger result.
+At the first Gate-A pause, return only these sections:
+
+1. `Findings` — the complete retained findings ledger and discarded findings when available.
+2. `Artifacts and hashes` — the exact native artifact paths and hashes supporting the findings ledger.
 3. `Limitations` — degraded coverage, missing evidence, and other limitations.
 4. `No-mutation attestation` — state that no product edit, repair, or repository mutation was authorized or performed.
+
+Do not require or fabricate a plan, plan hash, Gate-A receipt, or final disposition state in this pre-disposition response.
+
+### Final return after dispositions
+
+After the native controller records Gate A, return these sections. If the result is `INVALID_OR_MISSING_EVIDENCE`, use the terminal exception below instead of fabricating a Gate-A result.
+
+1. `Findings` — the complete retained findings ledger and discarded findings when available, with native artifact paths and hashes.
+2. `Disposition result` — the exact classification, ledger hash, Gate-A receipt hash, disposition sets, lifecycle state, and applicable native no-plan artifact.
+3. `Limitations` — degraded coverage, missing evidence, and other limitations.
+4. `No-mutation attestation` — state that no product edit, repair, or repository mutation was authorized or performed.
+
+For `ALL_APPROVED_PLAN` only, also return `Plan` with the complete validated Gate-B repair plan and `Plan hash` with its exact native hash. Omit both fields for every no-plan outcome.
+
+For `INVALID_OR_MISSING_EVIDENCE`, which may terminate before Gate A, return the specific invalid or missing evidence, every available native artifact path and hash, and the lifecycle state actually reached. Do not invent a ledger hash, Gate-A receipt, disposition set, plan, or plan hash that the native controller did not produce.
 
 ## Hard boundaries
 

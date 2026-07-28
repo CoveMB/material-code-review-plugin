@@ -14,6 +14,7 @@ else
 PACKAGE_LAYOUT_ARGUMENT := --distribution-layout
 endif
 SHELL_WRAPPERS := bin/material-reviewctl
+JSON_CHECK = $(PYTHON) -c 'import json,pathlib; ignored={".evaluation-runs", ".superpowers"}; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json") if p.is_file() and (not p.parts or p.parts[0] not in ignored)]; print("JSON OK")'
 
 .PHONY: validate package package-simplification package-check test compile json shell clean
 
@@ -23,7 +24,7 @@ validate:
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
 	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
 	$(MAKE) clean
-	$(PYTHON) -c 'import json,pathlib; ignored={".evaluation-runs", ".superpowers"}; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json") if p.is_file() and (not p.parts or p.parts[0] not in ignored)]; print("JSON OK")'
+	$(JSON_CHECK)
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
@@ -51,7 +52,7 @@ compile:
 	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
 
 json:
-	$(PYTHON) -c 'import json,pathlib; ignored={".evaluation-runs", ".superpowers"}; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json") if p.is_file() and (not p.parts or p.parts[0] not in ignored)]; print("JSON OK")'
+	$(JSON_CHECK)
 
 shell:
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done

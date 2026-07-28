@@ -27,7 +27,8 @@ $material-review-evaluation base:<skill-ref> candidate:<skill-ref>
 ## 1. Resolve, attest, and load contracts before creating workers
 
 1. Locate the repository root and confirm the invocation is running in a source checkout, not a packaged distribution.
-2. From that attested repository root, resolve exactly this repository-root-relative evaluator asset allowlist:
+2. Immediately capture the active material-review repository's `HEAD` and porcelain status. Require an empty status.
+3. From that attested repository root, resolve exactly this repository-root-relative evaluator asset allowlist:
 
    <!-- evaluator-asset-allowlist:start -->
    - `evaluations/material-code-review/cases/discogs-custom-playlists.json`
@@ -37,15 +38,14 @@ $material-review-evaluation base:<skill-ref> candidate:<skill-ref>
    <!-- evaluator-asset-allowlist:end -->
 
    Before reading an asset, canonicalize its path, require it to remain beneath the attested repository root, and require a regular file. Stop on a missing, non-regular, or out-of-root asset. Do not search alternate directories, fall back to skill-relative resolution, or use parent traversal from the skill directory. Read all four contracts completely. The case JSON is the sole target-identity owner; do not replace its commits with the branch label or another revision.
-3. Resolve each selector once with Git's commit-peeling form:
+4. Resolve each selector once with Git's commit-peeling form:
 
    ```text
    git rev-parse --verify --end-of-options <selector>^{commit}
    ```
 
    Pass each selector as a separate argument, not interpolated shell syntax. Require exactly one lowercase 40-character SHA from each command. Record those SHAs and use them for every later operation; never resolve the supplied refs again.
-4. Reject identical SHAs immediately. Do not create a run directory or target clone for an invalid pair.
-5. Capture the active material-review repository's `HEAD` and porcelain status. Require an empty status.
+5. Reject identical SHAs immediately. Do not create a run directory or target clone for an invalid pair.
 6. Read the case JSON and require exactly:
    - base `361e1740fa164fafc590e7dc8903a87b069592cb`;
    - review commit `3050f047c4cb1a7b32237844ec7cf68a5675c957`;
@@ -67,7 +67,7 @@ These inputs provide logical separation, not hostile-code containment. Stop if t
 
 ### Context-free worker dispatch contract
 
-Before creating any reviewer or judge, verify that the host can dispatch a self-contained request with zero inherited task history. On Codex, every worker dispatch must set `fork_turns` to `none`; another host may use only a verifiably equivalent zero-history primitive. A bounded but non-empty history is not anonymous. Persist a private structured dispatch receipt for each worker role recording the zero-history mode and the exact allowlist supplied, without placing private orchestration data in the worker-visible request. Prohibit recursive worker fan-out.
+Before creating any reviewer or judge, verify that the host can dispatch a self-contained request with zero inherited task history. On Codex, every worker dispatch must set `fork_turns` to `none`; another host may use only a verifiably equivalent zero-history primitive. A bounded but non-empty history is not anonymous. Immediately before each reviewer or judge dispatch, recapture the active material-review repository's `HEAD` and porcelain status and require an exact match to the initial clean attestation. Persist a private structured dispatch receipt for each worker role recording the zero-history mode and the exact allowlist supplied. Root-side verification is authoritative; never require a worker to inspect the private receipt or place private orchestration data in a worker-visible request. Prohibit recursive worker fan-out.
 
 <!-- evaluator-dispatch-contract:start
 reviewers=2

@@ -2,7 +2,7 @@
 
 Compare only the supplied Variant A and Variant B findings, plans, and limitations under the supplied rubric. Independently verify material source claims against the read-only detached Discogs clone at `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`.
 
-The root dispatcher must provide zero inherited task history. This prompt and the explicitly supplied anonymous inputs are self-contained. Do not proceed if the dispatch receipt does not attest an empty-history host primitive; on Codex that primitive is `fork_turns: "none"`. Never request or reconstruct parent-task context or a prior judge response.
+The root dispatcher must provide zero inherited task history. This prompt and the explicitly supplied anonymous inputs are self-contained. Root-side verification of the empty-history host primitive and supplied allowlist is authoritative; no private dispatch receipt or other private orchestration data is worker-visible. Never request or reconstruct parent-task context or a prior judge response.
 
 The root accepts a response only after validating the complete judge protocol. Return exactly one public outcome, every required section exactly once in the stated order, resolvable citations to both anonymous artifacts and frozen source, and no identity-bearing data. Your response may be preserved privately as a raw attempt; it is not `judgment.md` until root validation succeeds.
 
