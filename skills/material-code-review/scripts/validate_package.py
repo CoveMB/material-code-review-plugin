@@ -24,6 +24,12 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Context cannot create eligibility.**",
     "**Fail closed before initialization.**",
 )
+DISCOVERY_CONTROL_MARKERS = (
+    "record-coverage",
+    "check-candidates",
+    "protocol_coherence",
+    "REVIEW_INCOMPLETE",
+)
 REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -31,10 +37,14 @@ REQUIRED = {
     "scripts/validate_package.py",
     "tests/test_reviewctl.py",
     "schemas/candidate-set.schema.json",
+    "schemas/candidate-preflight.schema.json",
+    "schemas/coverage-plan.schema.json",
+    "schemas/coverage-status.schema.json",
     "schemas/adjudication.schema.json",
     "schemas/fix-plan.schema.json",
     "schemas/verification.schema.json",
     "references/context-checklist.md",
+    "references/protocol-coherence-lens.md",
     "references/materiality-rubric.md",
     "references/remediation-rubric.md",
     "references/test-evidence-rubric.md",
@@ -104,6 +114,9 @@ def main() -> int:
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 errors.append(f"SKILL.md activation preflight missing marker: {marker}")
+        for marker in DISCOVERY_CONTROL_MARKERS:
+            if marker not in text:
+                errors.append(f"SKILL.md discovery contract missing marker: {marker}")
         for rel in sorted(set(re.findall(r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")

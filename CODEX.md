@@ -62,6 +62,8 @@ Explicit invocation:
 Use $material-code-review to review the current uncommitted changes for material issues only. Use scope:auto, depth:auto, and external-review:off. Do not edit code. Stop at Gate A and show every kept and discarded candidate.
 ```
 
+For a pull request, supply its repository-qualified identifier and exact read-only host base/head metadata. Use `scope:range` with matching PR provenance; never default to the head parent. New runs record the required lens roster and preflight each draft once. If a required lens cannot complete after its one declared sequential fallback, report `REVIEW_INCOMPLETE` without a merge verdict or Gate A.
+
 After Gate A approval:
 
 ```text
@@ -81,6 +83,8 @@ Apply the exact approved plan through the material-code-review controller. Keep 
 - Different persona names do not establish independent corroboration. Record the actual process/model boundary in `independence_group`.
 - Keep all mutation sequential, controller-authorized, and behind Gate B.
 - Never inspect a remote branch or pull-request diff using an unrelated local checkout.
+- Bind pull-request scope to the actual host base/head SHAs; a metadata lookup failure is a stop condition.
+- Keep low-value nitpicks outside Gate A unless concrete evidence establishes a material consequence.
 - Do not continue through Gate A or Gate B based on inferred consent.
 - External review is disabled by default and requires a separate source-code-egress disclosure and authorization.
 

@@ -1494,6 +1494,67 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(standalone_result.returncode, 0)
             self.assertIn("SKILL.md activation preflight missing marker", standalone_result.stderr)
 
+    def test_material_review_runtime_contracts_are_required(self) -> None:
+        required = {
+            "schemas/coverage-plan.schema.json",
+            "schemas/candidate-preflight.schema.json",
+            "schemas/coverage-status.schema.json",
+            "references/protocol-coherence-lens.md",
+        }
+        for relative in sorted(required):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                (fixture_root / "skills" / "material-code-review" / relative).unlink()
+
+                source_result = self.run_package_validator(fixture_root)
+                standalone_result = self.run_review_validator(fixture_root)
+
+                self.assertNotEqual(source_result.returncode, 0)
+                self.assertIn(
+                    f"missing required file: skills/material-code-review/{relative}",
+                    source_result.stderr,
+                )
+                self.assertNotEqual(standalone_result.returncode, 0)
+                self.assertIn(
+                    f"missing required skill file: {relative}", standalone_result.stderr
+                )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            full_output = temp_root / "full-plugin.zip"
+            standalone_output = temp_root / "material-review-standalone.zip"
+            packager = fixture_root / FULL_PACKAGER.relative_to(REPOSITORY_ROOT)
+            package_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(packager),
+                    "--package-root",
+                    str(fixture_root),
+                    "--output",
+                    str(full_output),
+                    "--standalone-output",
+                    str(standalone_output),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            with zipfile.ZipFile(standalone_output) as archive:
+                standalone_names = set(archive.namelist())
+            with zipfile.ZipFile(full_output) as archive:
+                full_names = set(archive.namelist())
+            self.assertTrue(required.issubset(standalone_names))
+            self.assertTrue(
+                {f"skills/material-code-review/{relative}" for relative in required}.issubset(
+                    full_names
+                )
+            )
+            self.assertIn("agents/protocol-reviewer.md", full_names)
+
     def test_source_validator_requires_aligned_activation_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             fixture_root = self.create_full_plugin_fixture(Path(temp_directory))

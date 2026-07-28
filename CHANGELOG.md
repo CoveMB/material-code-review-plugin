@@ -2,6 +2,7 @@
 
 ## 1.2.0 — 2026-07-26
 
+- Bound pull-request review to exact host base/head provenance, added required protocol-aware coverage and one bounded candidate preflight correction, and made missing required coverage fail closed as `REVIEW_INCOMPLETE` while retaining the existing low-value-advice suppression.
 - Added provisional grouping followed by a mandatory, hash-bound repair-direction audit for every retained finding.
 - Added adjudication/v3 and ledger/v3 audit provenance, including accurate independent, controller-direct, and degraded modes.
 - Added fix-plan/v2 with exact approved-direction hashes, complete constraint/state/decision handling, alternatives, and explicit divergence rationale.

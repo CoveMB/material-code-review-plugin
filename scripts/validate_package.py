@@ -34,6 +34,12 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Context cannot create eligibility.**",
     "**Fail closed before initialization.**",
 )
+DISCOVERY_CONTROL_MARKERS = (
+    "record-coverage",
+    "check-candidates",
+    "protocol_coherence",
+    "REVIEW_INCOMPLETE",
+)
 
 DISTRIBUTABLE_REQUIRED = {
     ".codex-plugin/plugin.json",
@@ -58,12 +64,17 @@ DISTRIBUTABLE_REQUIRED = {
     "skills/material-code-review/scripts/reviewctl.py",
     "skills/material-code-review/tests/test_reviewctl.py",
     "skills/material-code-review/schemas/candidate-set.schema.json",
+    "skills/material-code-review/schemas/candidate-preflight.schema.json",
+    "skills/material-code-review/schemas/coverage-plan.schema.json",
+    "skills/material-code-review/schemas/coverage-status.schema.json",
     "skills/material-code-review/schemas/adjudication.schema.json",
     "skills/material-code-review/schemas/fix-plan.schema.json",
     "skills/material-code-review/schemas/verification.schema.json",
     "skills/material-code-review/references/remediation-rubric.md",
     "skills/material-code-review/references/test-evidence-rubric.md",
     "skills/material-code-review/references/remediation-auditor-template.md",
+    "skills/material-code-review/references/protocol-coherence-lens.md",
+    "agents/protocol-reviewer.md",
     "examples/codex-project-config/.codex/config.toml",
     "examples/codex-project-config/.codex/agents/material_candidate.toml",
     "examples/codex-project-config/.codex/agents/material_validator.toml",
@@ -761,6 +772,9 @@ def check_source_package(
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 fail(errors, f"canonical skill activation preflight missing marker: {marker}")
+        for marker in DISCOVERY_CONTROL_MARKERS:
+            if marker not in text:
+                fail(errors, f"canonical skill discovery contract missing marker: {marker}")
 
     for path in sorted((root / "skills/material-code-review/schemas").glob("*.json")):
         data = load_json(path, errors)
@@ -853,7 +867,16 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                 if raw_name == canonical_name
             }
             required = (
-                {"SKILL.md", "agents/openai.yaml", "scripts/reviewctl.py", "schemas/candidate-set.schema.json"}
+                {
+                    "SKILL.md",
+                    "agents/openai.yaml",
+                    "scripts/reviewctl.py",
+                    "schemas/candidate-set.schema.json",
+                    "schemas/candidate-preflight.schema.json",
+                    "schemas/coverage-plan.schema.json",
+                    "schemas/coverage-status.schema.json",
+                    "references/protocol-coherence-lens.md",
+                }
                 if standalone
                 else {
                     "SKILL.md",
@@ -861,6 +884,11 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     ".agents/plugins/marketplace.json",
                     "skills/material-code-review/SKILL.md",
                     "skills/material-code-review/agents/openai.yaml",
+                    "skills/material-code-review/schemas/candidate-preflight.schema.json",
+                    "skills/material-code-review/schemas/coverage-plan.schema.json",
+                    "skills/material-code-review/schemas/coverage-status.schema.json",
+                    "skills/material-code-review/references/protocol-coherence-lens.md",
+                    "agents/protocol-reviewer.md",
                     "scripts/package_plugin.py",
                 }
             )

@@ -2,7 +2,7 @@
 
 `material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact scope, gathers repository context, captures candidates, independently validates them, and produces a complete kept/discarded ledger. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
+The package freezes the exact scope, gathers repository context, captures candidates, independently validates them, and produces a complete kept/discarded ledger. Pull-request reviews bind read-only host metadata for the exact base and head; they never guess from the head parent. New runs record required reviewer coverage and preflight each candidate draft with at most one mechanical correction. If a required lens remains unavailable, the run ends `REVIEW_INCOMPLETE` without a merge verdict or Gate A. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -172,6 +172,8 @@ python3 /path/to/material-code-review-plugin/skills/material-code-review/scripts
 
 `init` prints a run ID and artifact directory. Later commands accept `--run-id` or `MATERIAL_REVIEW_RUN_ID`.
 
+For a pull request, first obtain the exact base/head SHAs and repository-qualified PR identifier through a read-only host lookup, then initialize `scope:range` with the matching `--review-object-*` flags. If that lookup fails, stop rather than substituting the head parent. The canonical skill then records the required lens plan with `record-coverage` and preflights drafts with `check-candidates` before ingestion.
+
 ## Artifact location
 
 By default, run artifacts are stored below:
@@ -186,7 +188,7 @@ This keeps source snapshots, evidence, hashes, test logs, checkpoints, and user-
 
 ```text
 CONTEXT_FROZEN
-  -> CANDIDATES_CAPTURED
+  -> CANDIDATES_CAPTURED | REVIEW_INCOMPLETE (terminal, no merge verdict)
   -> ADJUDICATED
   -> Gate A: user dispositions for every kept finding
   -> FINDINGS_APPROVED
@@ -208,11 +210,14 @@ See `skills/material-code-review/references/workflow.md` for command and transit
 
 - No product mutation before Gate B.
 - Frozen source, diff, candidate, ledger, gate, plan, checkpoint, and fix-summary integrity checks.
+- Exact PR base/head provenance, root-owned required coverage, and hash-bound candidate preflight.
+- At most one mechanical candidate correction and one declared sequential fallback for a failed required lens.
 - Candidate generators cannot independently validate their own claims.
 - Adjudicators must account for every candidate and cannot invent findings.
 - Exact source-side evidence and checked counterevidence for high-confidence candidates.
 - Narrow treatment of pre-existing issues.
 - A stricter materiality bar for optional improvements than for demonstrated defects.
+- Low-value naming, explanatory-comment, harmless-duplication, generic DRY, and minor test-economy advice remains outside Gate A unless exact evidence proves a material consequence.
 - No semantic finding cap; concurrency and retries are bounded instead.
 - Exact file-or-symlink write permissions; directory-wide repair permissions are rejected.
 - Validation commands are exact Gate-B inputs and are expected to be non-mutating.
