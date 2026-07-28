@@ -83,6 +83,12 @@ class ReviewCtlTest(unittest.TestCase):
         )
         return self.load("state.json")["scope_hash"]
 
+    def committed_range(self) -> tuple[str, str]:
+        base = self.git("rev-parse", "HEAD")
+        self.git("add", "calc.py")
+        self.git("commit", "-qm", "change operator")
+        return base, self.git("rev-parse", "HEAD")
+
     def candidate_set(self, scope_hash: str, *, include_style: bool = True):
         findings = [
             {
@@ -483,6 +489,95 @@ class ReviewCtlTest(unittest.TestCase):
             expected=2,
         )
         self.assertTrue((self.run_dir / "scope-staleness.json").exists())
+
+    def test_pr_provenance_is_bound_to_scope_hash(self) -> None:
+        base, head = self.committed_range()
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "range",
+            "--base",
+            base,
+            "--head",
+            head,
+            "--run-id",
+            self.run_id,
+            "--review-object-kind",
+            "pull_request",
+            "--review-object-id",
+            "CoveMB/material-code-review-plugin#3",
+            "--review-base-sha",
+            base,
+            "--review-head-sha",
+            head,
+        )
+        scope = self.load("scope.json")
+        self.assertEqual(
+            scope["identity"]["review_object"],
+            {
+                "kind": "pull_request",
+                "identifier": "CoveMB/material-code-review-plugin#3",
+                "base_sha": base,
+                "head_sha": head,
+                "metadata_source": "read_only_host_lookup",
+            },
+        )
+        self.assertEqual(scope["scope_hash"], reviewctl.scope_identity_hash(scope["identity"]))
+        self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+
+    def test_pr_provenance_mismatch_fails_before_run_creation(self) -> None:
+        base, head = self.committed_range()
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "range",
+            "--base",
+            base,
+            "--head",
+            head,
+            "--run-id",
+            self.run_id,
+            "--review-object-kind",
+            "pull_request",
+            "--review-object-id",
+            "CoveMB/material-code-review-plugin#3",
+            "--review-base-sha",
+            head,
+            "--review-head-sha",
+            head,
+            expected=2,
+        )
+        self.assertFalse(self.run_dir.exists())
+
+    def test_pr_provenance_requires_complete_range_metadata(self) -> None:
+        base, head = self.committed_range()
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "range",
+            "--base",
+            base,
+            "--head",
+            head,
+            "--run-id",
+            self.run_id,
+            "--review-object-kind",
+            "pull_request",
+            "--review-object-id",
+            "CoveMB/material-code-review-plugin#3",
+            "--review-base-sha",
+            base,
+            expected=2,
+        )
+        self.assertFalse(self.run_dir.exists())
 
     def test_ledger_keeps_and_discards_every_candidate_and_gate_is_exact(self) -> None:
         self.reach_adjudicated(include_style=True)

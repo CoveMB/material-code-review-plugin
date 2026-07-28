@@ -545,6 +545,33 @@ def resolve_commit(repo: Path, ref: str) -> str:
     return git_text(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
 
 
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REVIEW_OBJECT_KINDS = {"pull_request"}
+
+
+def normalize_review_object(
+    *, kind: str, identifier: str, base_sha: str, head_sha: str, requested_scope: str
+) -> dict[str, str] | None:
+    values = (kind, identifier, base_sha, head_sha)
+    if not any(values):
+        return None
+    if not all(values):
+        raise ReviewError("PR review provenance requires kind, identifier, base SHA, and head SHA")
+    if requested_scope != "range":
+        raise ReviewError("PR review provenance is valid only with scope=range")
+    if kind not in REVIEW_OBJECT_KINDS:
+        raise ReviewError(f"Unsupported review-object kind: {kind}")
+    if not FULL_SHA_RE.fullmatch(base_sha) or not FULL_SHA_RE.fullmatch(head_sha):
+        raise ReviewError("PR review provenance requires exact lowercase 40-character SHAs")
+    return {
+        "kind": kind,
+        "identifier": identifier,
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "metadata_source": "read_only_host_lookup",
+    }
+
+
 def detect_default_base(repo: Path) -> str:
     candidates: list[str] = []
     symbolic = run_process(
@@ -595,6 +622,7 @@ def build_scope(
     base_ref: str | None,
     head_ref: str | None,
     include_untracked: bool,
+    review_object: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     head_sha = resolve_commit(repo, "HEAD")
     branch = current_branch(repo)
@@ -628,6 +656,18 @@ def build_scope(
         mutable = False
     else:
         raise ReviewError(f"Unsupported scope: {actual_scope}")
+
+    if review_object is not None:
+        if baseline_sha != review_object["base_sha"]:
+            raise ReviewError(
+                "PR review base SHA mismatch: "
+                f"expected {review_object['base_sha']}, actual {baseline_sha}"
+            )
+        if comparison_sha != review_object["head_sha"]:
+            raise ReviewError(
+                "PR review head SHA mismatch: "
+                f"expected {review_object['head_sha']}, actual {comparison_sha}"
+            )
 
     scope_base: dict[str, Any] = {
         "requested_scope": requested_scope,
@@ -712,6 +752,8 @@ def build_scope(
         "unstaged_patch_sha256": sha256_bytes(unstaged_patch),
         "files": normalized_entries,
     }
+    if review_object is not None:
+        identity["review_object"] = copy.deepcopy(review_object)
     if not normalized_entries:
         raise ReviewError("The resolved review scope contains no changed files")
 
@@ -963,10 +1005,18 @@ def write_source_bundle_files(run_dir: Path, scope: dict[str, Any], limitations:
         f"- Comparison: `{identity['comparison_reference']}` -> `{identity['comparison_sha']}`",
         f"- Mutable/aligned: `{str(identity['mutable']).lower()}`",
         f"- Include untracked: `{str(identity['include_untracked']).lower()}`",
-        "",
-        "## Files",
-        "",
     ]
+    if identity.get("review_object"):
+        review_object = identity["review_object"]
+        lines.extend(
+            [
+                f"- Review object: `{review_object['kind']}` `{review_object['identifier']}`",
+                f"- Review base SHA: `{review_object['base_sha']}`",
+                f"- Review head SHA: `{review_object['head_sha']}`",
+                f"- Review metadata source: `{review_object['metadata_source']}`",
+            ]
+        )
+    lines.extend(["", "## Files", ""])
     for entry in identity["files"]:
         rename = f" (from `{entry['old_path']}`)" if entry.get("old_path") else ""
         lines.append(f"- `{entry['status']}` `{entry['path']}`{rename}")
@@ -984,6 +1034,7 @@ def recompute_scope_from_state(repo: Path, state: dict[str, Any]) -> dict[str, A
         base_ref=params.get("base_reference"),
         head_ref=params.get("head_reference"),
         include_untracked=bool(params["include_untracked"]),
+        review_object=params.get("review_object"),
     )
 
 
@@ -2587,12 +2638,20 @@ def command_init(args: argparse.Namespace) -> int:
     # Freeze the Git scope before creating any artifact directory. This avoids
     # contaminating the scope when a caller supplies an invalid in-worktree
     # location and leaves no half-initialized run when scope resolution fails.
+    review_object = normalize_review_object(
+        kind=args.review_object_kind,
+        identifier=args.review_object_id,
+        base_sha=args.review_base_sha,
+        head_sha=args.review_head_sha,
+        requested_scope=args.scope,
+    )
     scope = build_scope(
         repo,
         requested_scope=args.scope,
         base_ref=args.base,
         head_ref=args.head,
         include_untracked=not args.exclude_untracked,
+        review_object=review_object,
     )
     runs_root.mkdir(parents=True, exist_ok=True)
     temp_run_dir = runs_root / f".{run_id}.initializing-{uuid.uuid4().hex[:8]}"
@@ -2622,6 +2681,7 @@ def command_init(args: argparse.Namespace) -> int:
                 "base_reference": identity["base_reference"],
                 "head_reference": identity.get("head_reference"),
                 "include_untracked": identity["include_untracked"],
+                "review_object": identity.get("review_object"),
             },
             "mutation_allowed": identity["mutable"],
             "hashes": {},
@@ -4241,6 +4301,10 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--scope", choices=["auto", "uncommitted", "branch", "range"], default="auto")
     init_parser.add_argument("--base", default="", help="Base ref for branch/range scope.")
     init_parser.add_argument("--head", default="", help="Head ref for range scope.")
+    init_parser.add_argument("--review-object-kind", choices=["pull_request"], default="")
+    init_parser.add_argument("--review-object-id", default="")
+    init_parser.add_argument("--review-base-sha", default="")
+    init_parser.add_argument("--review-head-sha", default="")
     init_parser.add_argument("--exclude-untracked", action="store_true", help="Explicitly exclude untracked files from working-tree scope.")
     init_parser.add_argument("--max-snapshot-file-bytes", type=int, default=2 * 1024 * 1024)
     init_parser.add_argument("--max-snapshot-total-bytes", type=int, default=25 * 1024 * 1024)
