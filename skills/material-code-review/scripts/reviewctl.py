@@ -10,6 +10,7 @@ It does not attempt to replace human or model judgment about code semantics.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import difflib
 import hashlib
@@ -25,7 +26,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 
 TOOL_VERSION = "1.2.0"
@@ -229,6 +230,35 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 def atomic_write_json(path: Path, value: Any) -> None:
     atomic_write_text(path, json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+
+@contextlib.contextmanager
+def exclusive_run_state_lock(run_dir: Path) -> Iterator[None]:
+    lock_path = run_dir / ".state.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def load_json(path: Path) -> Any:
@@ -3283,6 +3313,13 @@ def load_verified_coverage_status(
 def command_check_candidates(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
+    with exclusive_run_state_lock(run_dir):
+        return command_check_candidates_locked(args, repo=repo, run_dir=run_dir)
+
+
+def command_check_candidates_locked(
+    args: argparse.Namespace, *, repo: Path, run_dir: Path
+) -> int:
     state = load_state(run_dir)
     if state["phase"] != PHASE_CONTEXT:
         raise ReviewError(f"Cannot preflight candidates in phase {state['phase']}")

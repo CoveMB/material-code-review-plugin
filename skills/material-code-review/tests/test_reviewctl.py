@@ -7,8 +7,10 @@ import io
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "reviewctl.py"
@@ -805,6 +807,69 @@ class ReviewCtlTest(unittest.TestCase):
         receipt = self.load("candidate-preflight/correctness/attempt-1.json")
         self.assertEqual(receipt["verdict"], "valid")
         self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+
+    def test_concurrent_candidate_preflights_preserve_each_lens_receipt(self) -> None:
+        scope_hash = self.init_with_coverage()
+        candidate_paths = {
+            "correctness": self.write_json(
+                "concurrent-correctness.json",
+                self.empty_candidate_set(scope_hash, "correctness", "correctness"),
+            ),
+            "test_adequacy": self.write_json(
+                "concurrent-test-adequacy.json",
+                self.empty_candidate_set(scope_hash, "test-adequacy", "tests"),
+            ),
+        }
+        original_load_state = reviewctl.load_state
+        load_condition = threading.Condition()
+        load_count = 0
+
+        def synchronized_load_state(run_dir: Path):
+            nonlocal load_count
+            state = original_load_state(run_dir)
+            with load_condition:
+                load_count += 1
+                if load_count < 2:
+                    load_condition.wait_for(lambda: load_count >= 2, timeout=2)
+                else:
+                    load_condition.notify_all()
+            return state
+
+        results: list[int] = []
+
+        def preflight(lens_id: str) -> None:
+            results.append(
+                reviewctl.main(
+                    [
+                        "check-candidates",
+                        "--repo-root",
+                        str(self.repo),
+                        "--run-id",
+                        self.run_id,
+                        "--lens",
+                        lens_id,
+                        "--input",
+                        str(candidate_paths[lens_id]),
+                    ]
+                )
+            )
+
+        with mock.patch.object(reviewctl, "load_state", side_effect=synchronized_load_state):
+            threads = [
+                threading.Thread(target=preflight, args=(lens_id,))
+                for lens_id in candidate_paths
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(sorted(results), [0, 0])
+        preflight_state = self.load("state.json")["candidate_preflight"]
+        self.assertEqual(set(preflight_state), set(candidate_paths))
+        for lens_id in candidate_paths:
+            self.assertEqual(len(preflight_state[lens_id]), 1)
 
     def test_nonverbatim_quote_gets_one_correctable_candidate_preflight_receipt(self) -> None:
         scope_hash = self.init_with_coverage()
