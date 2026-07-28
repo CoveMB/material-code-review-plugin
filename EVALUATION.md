@@ -81,6 +81,22 @@ This separation is the main defense against both false-positive review output an
 - Host platforms expose different subagent, model-routing, and plugin APIs. The skill contains fallbacks, but exact parallelism and model identity remain host-dependent.
 - Workspace restoration assumes normal Git working-tree behavior. Exotic filters, submodules, sparse checkouts, filesystem races, and generated/ignored files require human review.
 
+## Bounded PR 3 discovery-recall confirmation
+
+The source tree contains a maintainer-only oracle at `evaluations/material-code-review/cases/pr-3-discovery-recall.json`. It is root-private evaluation evidence: never include its path, expected IDs, or low-value controls in a reviewer, lens, validator, or adjudicator request. Packaging excludes it from both full and standalone archives.
+
+Run the evaluation only from a fresh root-controlled material-review task against `CoveMB/material-code-review-plugin#3`, exact base `8ebeb7ae2a1f28acfe297c258f703865280c4fa4`, and exact head `c740131b0953a04a93cbe1c970dcbf36dae8bca1`. Initialize `scope:range` with matching pull-request provenance, use `depth:full` and `external-review:off`, require the complete lens roster, and stop at Gate A without edits. A PR lookup failure is terminal; never substitute the head parent.
+
+The execution budget is one baseline at most and one post-change confirmation at most. Preselect that budget before starting. Do not rerun mixed or inconsistent model-mediated results; record them as inconclusive. Same-model-family specialist passes or fallback validation must remain labeled degraded rather than independent.
+
+Only after Gate A may the root task read the private oracle and compare it with the immutable ledger, preflight receipts, and coverage status. Accept the confirmation only when:
+
+- all seven material IDs map to ingestible candidates and none is discarded without new exact counterevidence;
+- no candidate is lost after the one mechanical correction solely because of evidence formatting;
+- every required lens completes or the run ends `REVIEW_INCOMPLETE`;
+- the three low-value controls do not become kept Gate-A findings; and
+- same-model-family validation remains labeled degraded rather than independent.
+
 ## Maintainer-only skill-version evaluator
 
 The source repository includes a maintainer-only Codex skill for comparing two exact `material-code-review` commits. From a fresh task at the repository root, invoke:

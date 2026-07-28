@@ -405,6 +405,74 @@ class StandalonePackagingTests(unittest.TestCase):
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
+        "maintainer discovery-recall case is absent from distribution layouts",
+    )
+    def test_material_review_discovery_recall_case_is_frozen_and_maintainer_only(
+        self,
+    ) -> None:
+        relative = "evaluations/material-code-review/cases/pr-3-discovery-recall.json"
+        case_path = REPOSITORY_ROOT / relative
+        self.assertTrue(case_path.is_file(), f"missing frozen case: {case_path}")
+        case = json.loads(case_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(case["schema_version"], "material-review/discovery-recall-case/v1")
+        self.assertEqual(case["repository"], "CoveMB/material-code-review-plugin")
+        self.assertEqual(case["pull_request"], 3)
+        self.assertEqual(case["base_commit"], "8ebeb7ae2a1f28acfe297c258f703865280c4fa4")
+        self.assertEqual(case["head_commit"], "c740131b0953a04a93cbe1c970dcbf36dae8bca1")
+        self.assertEqual(
+            {item["id"] for item in case["expected_material_failure_modes"]},
+            {
+                "checkout-attestation-order",
+                "private-receipt-visibility",
+                "complete-disposition-propagation",
+                "phase-specific-return-schema",
+                "required-document-validation",
+                "casefolded-maintainer-archive-path",
+                "evaluator-entrypoint-root-boundary",
+            },
+        )
+        self.assertEqual(len(case["expected_material_failure_modes"]), 7)
+        self.assertEqual(
+            {item["id"] for item in case["low_value_controls"]},
+            {"make-json-deduplication", "split-literal-comment", "minor-test-economy"},
+        )
+        self.assertEqual(len(case["low_value_controls"]), 3)
+        self.assertEqual(
+            case["max_executions"], {"baseline": 1, "post_change_confirmation": 1}
+        )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            full_output = temp_root / "full-plugin.zip"
+            standalone_output = temp_root / "standalone.zip"
+            packager = fixture_root / FULL_PACKAGER.relative_to(REPOSITORY_ROOT)
+            package_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(packager),
+                    "--package-root",
+                    str(fixture_root),
+                    "--output",
+                    str(full_output),
+                    "--standalone-output",
+                    str(standalone_output),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+            with zipfile.ZipFile(full_output) as archive:
+                self.assertNotIn(relative, set(archive.namelist()))
+            with zipfile.ZipFile(standalone_output) as archive:
+                self.assertNotIn(relative, set(archive.namelist()))
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
     )
     def test_prompt_driven_evaluation_prompts_define_controlled_contract(self) -> None:

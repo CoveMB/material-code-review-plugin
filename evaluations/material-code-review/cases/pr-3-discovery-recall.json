@@ -1,0 +1,56 @@
+{
+  "schema_version": "material-review/discovery-recall-case/v1",
+  "repository": "CoveMB/material-code-review-plugin",
+  "pull_request": 3,
+  "base_commit": "8ebeb7ae2a1f28acfe297c258f703865280c4fa4",
+  "head_commit": "c740131b0953a04a93cbe1c970dcbf36dae8bca1",
+  "review_request": "Review the exact PR range with depth:full and external-review:off; stop at Gate A.",
+  "expected_material_failure_modes": [
+    {
+      "id": "checkout-attestation-order",
+      "primary_path": ".agents/skills/material-review-evaluation/SKILL.md"
+    },
+    {
+      "id": "private-receipt-visibility",
+      "primary_path": ".agents/skills/material-review-evaluation/SKILL.md"
+    },
+    {
+      "id": "complete-disposition-propagation",
+      "primary_path": "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md"
+    },
+    {
+      "id": "phase-specific-return-schema",
+      "primary_path": "evaluations/material-code-review/prompts/reviewer.md"
+    },
+    {
+      "id": "required-document-validation",
+      "primary_path": "scripts/validate_package.py"
+    },
+    {
+      "id": "casefolded-maintainer-archive-path",
+      "primary_path": "scripts/validate_package.py"
+    },
+    {
+      "id": "evaluator-entrypoint-root-boundary",
+      "primary_path": "scripts/validate_package.py"
+    }
+  ],
+  "low_value_controls": [
+    {
+      "id": "make-json-deduplication",
+      "primary_path": "Makefile"
+    },
+    {
+      "id": "split-literal-comment",
+      "primary_path": "scripts/tests/test_packaging.py"
+    },
+    {
+      "id": "minor-test-economy",
+      "primary_path": "scripts/tests/test_packaging.py"
+    }
+  ],
+  "max_executions": {
+    "baseline": 1,
+    "post_change_confirmation": 1
+  }
+}

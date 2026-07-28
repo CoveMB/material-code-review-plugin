@@ -88,6 +88,7 @@ MAINTAINER_SOURCE_REQUIRED = {
     "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
     "evaluations/material-code-review/README.md",
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/pr-3-discovery-recall.json",
     "evaluations/material-code-review/prompts/reviewer.md",
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
