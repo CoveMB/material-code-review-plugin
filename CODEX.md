@@ -84,7 +84,7 @@ Apply the exact approved plan through the material-code-review controller. Keep 
 - Keep all mutation sequential, controller-authorized, and behind Gate B.
 - Never inspect a remote branch or pull-request diff using an unrelated local checkout.
 - Bind pull-request scope to the actual host base/head SHAs; a metadata lookup failure is a stop condition.
-- Keep low-value nitpicks outside Gate A unless concrete evidence establishes a material consequence.
+- Gate A excludes low-value nitpicks unless concrete evidence establishes a material consequence.
 - Do not continue through Gate A or Gate B based on inferred consent.
 - External review is disabled by default and requires a separate source-code-egress disclosure and authorization.
 
