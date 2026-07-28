@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/coverage-plan.schema.json",
+  "title": "Material Code Review coverage plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "risk_signals",
+    "lenses",
+    "max_candidate_corrections"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/coverage-plan/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "risk_signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "rationale", "evidence_paths"],
+        "properties": {
+          "code": {
+            "enum": [
+              "multi_stage_lifecycle",
+              "cross_boundary_data",
+              "prompt_contract",
+              "conditional_validation",
+              "state_dependent_schema",
+              "trust_ordering",
+              "shared_schema"
+            ]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence_paths": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+            }
+          }
+        }
+      }
+    },
+    "lenses": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lens_id",
+          "required",
+          "reviewer_id",
+          "independence_group",
+          "review_mode",
+          "fallback"
+        ],
+        "properties": {
+          "lens_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "reviewer_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "independence_group": {
+            "type": "string",
+            "minLength": 1
+          },
+          "review_mode": {
+            "enum": ["subagent", "controller", "external"]
+          },
+          "fallback": {
+            "enum": ["sequential_degraded_self_audit", "none"]
+          }
+        }
+      }
+    },
+    "max_candidate_corrections": {
+      "const": 1
+    }
+  }
+}

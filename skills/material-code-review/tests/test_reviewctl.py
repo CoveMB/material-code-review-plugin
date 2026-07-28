@@ -89,6 +89,76 @@ class ReviewCtlTest(unittest.TestCase):
         self.git("commit", "-qm", "change operator")
         return base, self.git("rev-parse", "HEAD")
 
+    def coverage_plan(self, scope_hash: str, *, protocol: bool = False) -> dict:
+        signals = []
+        lenses = [
+            {
+                "lens_id": "correctness",
+                "required": True,
+                "reviewer_id": "correctness",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "sequential_degraded_self_audit",
+            },
+            {
+                "lens_id": "test_adequacy",
+                "required": True,
+                "reviewer_id": "test-adequacy",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "sequential_degraded_self_audit",
+            },
+            {
+                "lens_id": "standards_alignment",
+                "required": True,
+                "reviewer_id": "standards",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "sequential_degraded_self_audit",
+            },
+        ]
+        if protocol:
+            signals.append(
+                {
+                    "code": "state_dependent_schema",
+                    "rationale": "The response shape changes at Gate A.",
+                    "evidence_paths": ["calc.py"],
+                }
+            )
+            lenses.append(
+                {
+                    "lens_id": "protocol_coherence",
+                    "required": True,
+                    "reviewer_id": "protocol",
+                    "independence_group": "model-a",
+                    "review_mode": "subagent",
+                    "fallback": "sequential_degraded_self_audit",
+                }
+            )
+        return {
+            "schema_version": "material-review/coverage-plan/v1",
+            "scope_hash": scope_hash,
+            "risk_signals": signals,
+            "lenses": lenses,
+            "max_candidate_corrections": 1,
+        }
+
+    def init_with_coverage(self, *, protocol: bool = False) -> str:
+        scope_hash = self.init()
+        path = self.write_json(
+            "coverage-plan.json", self.coverage_plan(scope_hash, protocol=protocol)
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(path),
+        )
+        return scope_hash
+
     def candidate_set(self, scope_hash: str, *, include_style: bool = True):
         findings = [
             {
@@ -578,6 +648,87 @@ class ReviewCtlTest(unittest.TestCase):
             expected=2,
         )
         self.assertFalse(self.run_dir.exists())
+
+    def test_coverage_plan_is_recorded_and_hash_bound(self) -> None:
+        scope_hash = self.init_with_coverage(protocol=True)
+        plan = self.load("coverage-plan.json")
+        state = self.load("state.json")
+        self.assertEqual(plan["scope_hash"], scope_hash)
+        self.assertEqual(
+            state["hashes"]["coverage_plan_hash"], reviewctl.canonical_hash(plan)
+        )
+        self.assertTrue(state["coverage_required"])
+
+    def test_coverage_plan_rejects_stale_scope_hash(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["scope_hash"] = "0" * 64
+        path = self.write_json("stale-coverage-plan.json", plan)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(path),
+            expected=2,
+        )
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+
+    def test_coverage_plan_rejects_duplicate_lens_ids(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][1]["lens_id"] = "correctness"
+        path = self.write_json("duplicate-lens-coverage-plan.json", plan)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(path),
+            expected=2,
+        )
+
+    def test_coverage_plan_rejects_duplicate_reviewer_ids(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][1]["reviewer_id"] = "correctness"
+        path = self.write_json("duplicate-reviewer-coverage-plan.json", plan)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(path),
+            expected=2,
+        )
+
+    def test_coverage_plan_requires_protocol_lens_for_protocol_risk(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["risk_signals"] = [
+            {
+                "code": "state_dependent_schema",
+                "rationale": "The response shape changes at Gate A.",
+                "evidence_paths": ["calc.py"],
+            }
+        ]
+        path = self.write_json("missing-protocol-coverage-plan.json", plan)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(path),
+            expected=2,
+        )
 
     def test_ledger_keeps_and_discards_every_candidate_and_gate_is_exact(self) -> None:
         self.reach_adjudicated(include_style=True)

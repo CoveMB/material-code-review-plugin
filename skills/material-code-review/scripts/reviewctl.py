@@ -32,6 +32,7 @@ TOOL_VERSION = "1.2.0"
 STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
+COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
 LEDGER_SCHEMA = "material-review/ledger/v3"
@@ -86,6 +87,17 @@ EVIDENCE_SIDES = {"comparison", "baseline", "diff"}
 SCOPE_RELATIONS = {"primary", "secondary", "pre_existing"}
 FIX_RISKS = {"low", "medium", "high", "unknown"}
 REVIEW_MODES = {"subagent", "controller", "external"}
+COVERAGE_FALLBACKS = {"sequential_degraded_self_audit", "none"}
+CORE_LENSES = {"correctness", "test_adequacy", "standards_alignment"}
+PROTOCOL_RISK_SIGNALS = {
+    "multi_stage_lifecycle",
+    "cross_boundary_data",
+    "prompt_contract",
+    "conditional_validation",
+    "state_dependent_schema",
+    "trust_ordering",
+    "shared_schema",
+}
 VALIDATION_MODES = {"independent", "controller_direct", "degraded_self_audit"}
 VALIDATION_VERDICTS = {"confirmed", "rejected", "uncertain"}
 CAUSALITIES = {"introduced", "exposed", "pre_existing", "uncertain"}
@@ -427,6 +439,126 @@ def require_string_array(value: Any, context: str, *, unique: bool = True) -> li
     if unique and len(set(result)) != len(result):
         raise ReviewError(f"{context} must contain unique values")
     return result
+
+
+def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
+    context = "coverage plan"
+    obj = require_object(raw, context)
+    require_exact_keys(
+        obj,
+        {
+            "schema_version",
+            "scope_hash",
+            "risk_signals",
+            "lenses",
+            "max_candidate_corrections",
+        },
+        context,
+    )
+    if obj["schema_version"] != COVERAGE_PLAN_SCHEMA:
+        raise ReviewError("Unsupported coverage-plan schema_version")
+    scope_hash = require_sha256(obj["scope_hash"], "coverage plan.scope_hash")
+    if scope_hash != state["scope_hash"]:
+        raise ReviewError("coverage plan.scope_hash does not match the active frozen scope")
+
+    risk_signals: list[dict[str, Any]] = []
+    for index, raw_signal in enumerate(require_array(obj["risk_signals"], "coverage plan.risk_signals")):
+        signal_context = f"coverage plan.risk_signals[{index}]"
+        signal = require_object(raw_signal, signal_context)
+        require_exact_keys(signal, {"code", "rationale", "evidence_paths"}, signal_context)
+        code = require_string(signal["code"], f"{signal_context}.code")
+        if code not in PROTOCOL_RISK_SIGNALS:
+            raise ReviewError(
+                f"{signal_context}.code must be one of {sorted(PROTOCOL_RISK_SIGNALS)}"
+            )
+        risk_signals.append(
+            {
+                "code": code,
+                "rationale": require_string(signal["rationale"], f"{signal_context}.rationale"),
+                "evidence_paths": [
+                    normalize_repo_path(path)
+                    for path in require_string_array(
+                        signal["evidence_paths"], f"{signal_context}.evidence_paths"
+                    )
+                ],
+            }
+        )
+
+    lenses: list[dict[str, Any]] = []
+    lens_ids: set[str] = set()
+    reviewer_ids: set[str] = set()
+    for index, raw_lens in enumerate(require_array(obj["lenses"], "coverage plan.lenses")):
+        lens_context = f"coverage plan.lenses[{index}]"
+        lens = require_object(raw_lens, lens_context)
+        require_exact_keys(
+            lens,
+            {
+                "lens_id",
+                "required",
+                "reviewer_id",
+                "independence_group",
+                "review_mode",
+                "fallback",
+            },
+            lens_context,
+        )
+        lens_id = require_string(lens["lens_id"], f"{lens_context}.lens_id")
+        reviewer_id = require_string(lens["reviewer_id"], f"{lens_context}.reviewer_id")
+        if lens_id in lens_ids:
+            raise ReviewError(f"coverage plan has duplicate lens_id: {lens_id}")
+        if reviewer_id in reviewer_ids:
+            raise ReviewError(f"coverage plan has duplicate reviewer_id: {reviewer_id}")
+        lens_ids.add(lens_id)
+        reviewer_ids.add(reviewer_id)
+        review_mode = require_string(lens["review_mode"], f"{lens_context}.review_mode")
+        if review_mode not in REVIEW_MODES:
+            raise ReviewError(f"{lens_context}.review_mode must be one of {sorted(REVIEW_MODES)}")
+        fallback = require_string(lens["fallback"], f"{lens_context}.fallback")
+        if fallback not in COVERAGE_FALLBACKS:
+            raise ReviewError(f"{lens_context}.fallback must be one of {sorted(COVERAGE_FALLBACKS)}")
+        lenses.append(
+            {
+                "lens_id": lens_id,
+                "required": require_bool(lens["required"], f"{lens_context}.required"),
+                "reviewer_id": reviewer_id,
+                "independence_group": require_string(
+                    lens["independence_group"], f"{lens_context}.independence_group"
+                ),
+                "review_mode": review_mode,
+                "fallback": fallback,
+            }
+        )
+
+    lens_by_id = {lens["lens_id"]: lens for lens in lenses}
+    missing_core = sorted(
+        lens_id
+        for lens_id in CORE_LENSES
+        if lens_id not in lens_by_id or not lens_by_id[lens_id]["required"]
+    )
+    if missing_core:
+        raise ReviewError(
+            "coverage plan must require every core lens: " + ", ".join(missing_core)
+        )
+    if risk_signals and (
+        "protocol_coherence" not in lens_by_id
+        or not lens_by_id["protocol_coherence"]["required"]
+    ):
+        raise ReviewError(
+            "coverage plan must require protocol_coherence when protocol risk signals are present"
+        )
+    max_corrections = require_int(
+        obj["max_candidate_corrections"],
+        "coverage plan.max_candidate_corrections",
+        minimum=1,
+        maximum=1,
+    )
+    return {
+        "schema_version": COVERAGE_PLAN_SCHEMA,
+        "scope_hash": scope_hash,
+        "risk_signals": risk_signals,
+        "lenses": lenses,
+        "max_candidate_corrections": max_corrections,
+    }
 
 
 def parse_csv_ids(values: Sequence[str] | None) -> set[str]:
@@ -2683,6 +2815,8 @@ def command_init(args: argparse.Namespace) -> int:
                 "include_untracked": identity["include_untracked"],
                 "review_object": identity.get("review_object"),
             },
+            "coverage_required": True,
+            "candidate_preflight": {},
             "mutation_allowed": identity["mutable"],
             "hashes": {},
             "gates": {},
@@ -2723,6 +2857,32 @@ def command_check_scope(args: argparse.Namespace) -> int:
     current = check_scope_fresh(repo, run_dir, state)
     print(f"[OK] Scope is fresh: {current['scope_hash']}")
     print(f"Run ID: {state['run_id']}")
+    return 0
+
+
+def command_record_coverage(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_CONTEXT:
+        raise ReviewError(f"Cannot record coverage in phase {state['phase']}")
+    check_scope_fresh(repo, run_dir, state)
+    if state.get("hashes", {}).get("coverage_plan_hash"):
+        raise ReviewError("A coverage plan is already recorded for this run")
+    source = Path(args.input).expanduser().resolve()
+    plan = validate_coverage_plan(load_json(source), state)
+    plan_hash = canonical_hash(plan)
+    atomic_write_json(run_dir / "coverage-plan.json", plan)
+    state["hashes"]["coverage_plan_hash"] = plan_hash
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "coverage_plan_recorded",
+            "coverage_plan_hash": plan_hash,
+        }
+    )
+    save_state(run_dir, state)
+    print(f"[OK] Coverage plan recorded: {plan_hash}")
     return 0
 
 
@@ -4313,6 +4473,13 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check-scope", help="Recompute and compare the frozen scope hash.")
     add_common_run_options(check_parser)
     check_parser.set_defaults(func=command_check_scope)
+
+    coverage_parser = subparsers.add_parser(
+        "record-coverage", help="Validate and record the root-owned review coverage plan."
+    )
+    add_common_run_options(coverage_parser)
+    coverage_parser.add_argument("--input", required=True, help="Coverage-plan JSON path.")
+    coverage_parser.set_defaults(func=command_record_coverage)
 
     ingest_parser = subparsers.add_parser("ingest-candidates", help="Validate and normalize candidate reviewer JSON outputs.")
     add_common_run_options(ingest_parser)
