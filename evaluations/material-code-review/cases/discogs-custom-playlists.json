@@ -1,0 +1,11 @@
+{
+  "schema_version": "material-review-evaluation/case/v1",
+  "case_id": "discogs-custom-playlists",
+  "repository": "https://github.com/CoveMB/discogs-collection.git",
+  "branch_label": "custom-playlists",
+  "base_commit": "361e1740fa164fafc590e7dc8903a87b069592cb",
+  "review_commit": "3050f047c4cb1a7b32237844ec7cf68a5675c957",
+  "require_immediate_parent": true,
+  "review_mode": "range",
+  "posture": "immutable"
+}

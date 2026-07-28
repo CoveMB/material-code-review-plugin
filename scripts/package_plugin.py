@@ -27,26 +27,17 @@ EXCLUDED_PARTS = {
 }
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
 MAINTAINER_ONLY_PREFIXES = (
+    ".agents/skills/material-review-evaluation/",
     ".evaluation-runs/",
     ".superpowers/",
     "docs/superpowers/",
     "evaluations/",
-    "scripts/material_review_evaluation/",
-)
-MAINTAINER_ONLY_EXACT = frozenset(
-    {
-        "bin/material-review-evaluate",
-        "scripts/evaluate_material_review.py",
-        "scripts/tests/test_evaluate_material_review.py",
-    }
 )
 
 
 def is_maintainer_only_path(relative: Path) -> bool:
     archive_name = relative.as_posix()
-    return archive_name in MAINTAINER_ONLY_EXACT or archive_name.startswith(
-        MAINTAINER_ONLY_PREFIXES
-    )
+    return archive_name.startswith(MAINTAINER_ONLY_PREFIXES)
 
 
 def should_include(path: Path, root: Path, explicit_outputs: set[Path]) -> bool:

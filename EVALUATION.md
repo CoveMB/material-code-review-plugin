@@ -83,38 +83,25 @@ This separation is the main defense against both false-positive review output an
 
 ## Maintainer-only skill-version evaluator
 
-The source repository includes an explicitly invoked local harness for comparing two exact `material-code-review` commits on a frozen benchmark. It is maintainer tooling, not an installed-plugin capability, and packaging validation excludes the evaluator, benchmark oracle, evaluation runs, and design scratch paths from every full and standalone archive.
+The source repository includes a maintainer-only Codex skill for comparing two exact `material-code-review` commits. From a fresh task at the repository root, invoke:
 
-### Qualitative comparison rubric
+```text
+$material-review-evaluation base:<skill-ref> candidate:<skill-ref>
+```
 
-The blinded comparison judge does not calculate a numeric score or force a winner. It assigns `A_STRONGER`, `B_STRONGER`, `TIE`, or `UNKNOWN` to each dimension and cites concrete artifacts.
+The only target is the immutable Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`; `custom-playlists` is provenance, not runtime authority. One fresh anonymous reviewer runs per skill version and returns its finding ledger plus native Gate-A result. The initial approval wording expresses intent only. Both valid variants pause in one combined Gate-A checkpoint for every exact finding disposition and explicit acceptance of each empty ledger. Only an all-approved non-empty variant continues to a controller-validated plan at Gate B; a rejection or deferral invokes the non-comparable no-plan policy above. Gate B is never approved, no repair runs, and active repositories remain immutable inputs.
 
-The primary dimensions are:
+Every reviewer and judge dispatch uses a self-contained request with zero inherited task history. Codex maps this contract to `fork_turns: "none"`; unavailable, unverifiable, or bounded non-empty isolation fails closed before dispatch with `INSUFFICIENT_EVIDENCE` and no winner.
 
-1. finding validity and coverage, including known failures found or missed, additional valid findings, unsupported or duplicated findings, and complete candidate disposition;
-2. validation quality, including causal reproduction, counterevidence, safeguards, independence labels, and tests that cannot pass through empty output or generic failure;
-3. repair safety, including root-cause correction, preserved contracts and authority, rejected alternatives, causal regression tests, negative controls, rollback, and bounded paths.
+Any rejection or deferral in either non-empty variant makes the comparison non-comparable. The evaluator preserves the exact native Gate-A receipt and lifecycle result, produces no plan evidence for that disposition state, and requires `INSUFFICIENT_EVIDENCE` without changing controller behavior.
 
-The secondary dimensions are scope and gate integrity, evidence-to-plan traceability, machine validation and artifact completeness, consistency across trials, report clarity and copyability, and observed time, turns, token usage, and tool cost. Efficiency may break a quality tie; it cannot compensate for weaker correctness or unsafe remediation.
+Judge responses are accepted only after root-side protocol validation. One corrected zero-history replacement is allowed only for a first identity leak; every other invalid first result and every invalid or leaking replacement ends with a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment and private `judge-invalid` reason.
 
-The overall result is exactly `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. A variant is stronger only when it has a material advantage in at least one primary dimension without a material primary deficit, or equivalent primary quality plus a clear secondary advantage. Critical scope corruption, unauthorized mutation, fabricated evidence, or a materially unsafe plan can make a variant unsuitable regardless of other strengths.
+A fresh read-only judge checks anonymous artifacts against the frozen source and returns exactly `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. Invalid or missing required reviewer evidence is preserved as a limitation, never reconstructed, and yields `INSUFFICIENT_EVIDENCE`. Identities are revealed only after the judgment is written. The committed evaluator skill, reviewer prompt, judge prompt, and rubric own the detailed workflow and comparison semantics; this document only describes the boundary.
 
-### Oracle provenance and native artifacts
+The result is trusted-local, directional evidence, not a publication-grade benchmark. The workflow has no Docker containment, CI/CD trigger, automatic resume, numeric score, or automatic publication. An interrupted run is preserved locally and a later attempt requires a new invocation. Raw ignored `.evaluation-runs/` artifacts may contain machine paths and are not automatically sanitized. Packaging excludes the evaluator skill, evaluation assets, and local run data from every full and standalone archive.
 
-The committed oracle is non-exhaustive and fallible. Its three initial Discogs failure modes came from historical evaluation material where run two was non-blind and both validations were same-process degraded self-audits. The comparison judge must re-check source and causal evidence. An absent oracle entry does not invalidate a new finding, and an oracle entry earns no credit without supporting evidence in the current trials.
-
-The evaluator preserves each selected skill version's controller-native JSON byte for byte. It declares and validates the supported historical profiles—ledger v1 with fix-plan v1, ledger v2 with fix-plan v1, and ledger v3 with fix-plan v2—then writes a separate normalized comparison view. It never migrates an old native artifact to the newest schema or reconstructs missing JSON from prose.
-
-### Operational limitations
-
-- The initial catalog contains one frozen public Discogs benchmark. One case cannot establish general review quality.
-- Model output remains stochastic. Two materially similar trials increase evidence; they do not prove determinism. A third trial is conditional, not automatic.
-- The current Codex CLI adapter records logical blinding. It removes identity from role bundles and keeps the private mapping locked until judgment, but it does not claim a hermetic filesystem sandbox. Filesystem blinding requires a host that can expose only the declared workflow, target, and output roots.
-- The harness explicitly invokes each materialized skill. It is not a behavioral evaluation of implicit skill selection, which remains model-mediated.
-- Evaluation-only Gate A and Gate B approvals stop at planning evidence. The harness never begins repair, executes plan commands, publishes, or authorizes source egress.
-- Raw artifacts stay local and may contain machine paths. Only the separately rendered comparison report is sanitized for copying.
-- Live comparison is manual because it consumes model resources, depends on the local executor, and can be costly. It is intentionally absent from `make validate` and CI.
-- The oracle and qualitative judge reduce unsupported ranking, but neither can prove that an AI reviewer reasoned correctly. `MATERIAL_TIE` and `INSUFFICIENT_EVIDENCE` are valid outcomes.
+This explicit workflow invokes the selected materialized skill. It does not evaluate or prove implicit skill selection, which remains model-mediated. The full live comparison is manual because it consumes agent resources; `make validate` and CI exercise only source and package boundaries.
 
 ### Known macOS packaging fixture failure
 

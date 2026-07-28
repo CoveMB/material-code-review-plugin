@@ -15,7 +15,7 @@ try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10 fallback: use conservative key checks below.
     tomllib = None
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,52 +71,85 @@ DISTRIBUTABLE_REQUIRED = {
     "examples/codex-project-config/.codex/agents/material_postfix.toml",
 }
 MAINTAINER_SOURCE_REQUIRED = {
-    "bin/material-review-evaluate",
-    "scripts/evaluate_material_review.py",
-    "scripts/material_review_evaluation/__init__.py",
-    "scripts/material_review_evaluation/artifacts.py",
-    "scripts/material_review_evaluation/benchmark.py",
-    "scripts/material_review_evaluation/bundles.py",
-    "scripts/material_review_evaluation/cli.py",
-    "scripts/material_review_evaluation/controller.py",
-    "scripts/material_review_evaluation/executor.py",
-    "scripts/material_review_evaluation/model.py",
-    "scripts/material_review_evaluation/reporting.py",
-    "scripts/material_review_evaluation/workspace.py",
-    "scripts/tests/test_evaluate_material_review.py",
-    "evaluations/material-code-review/benchmarks/discogs-album-recovery/manifest.json",
-    "evaluations/material-code-review/benchmarks/discogs-album-recovery/judge-oracle.json",
-    "evaluations/material-code-review/benchmarks/discogs-album-recovery/review-request.md",
-    "evaluations/material-code-review/judge-rubric.md",
-    "evaluations/material-code-review/prompts/comparison-judge.md",
-    "evaluations/material-code-review/prompts/trial-agreement.md",
-    "evaluations/material-code-review/schemas/agreement.schema.json",
-    "evaluations/material-code-review/schemas/evaluation-run.schema.json",
-    "evaluations/material-code-review/schemas/judgment.schema.json",
+    ".agents/skills/material-review-evaluation/SKILL.md",
+    "evaluations/material-code-review/README.md",
+    "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/judge.md",
+    "evaluations/material-code-review/rubric.md",
 }
+EVALUATOR_ASSET_ALLOWLIST = (
+    "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/judge.md",
+    "evaluations/material-code-review/rubric.md",
+)
+EVALUATOR_ROOT_ANCHOR = (
+    "Locate the repository root and confirm the invocation is running in a source checkout"
+)
+EVALUATOR_ASSET_ALLOWLIST_START = "<!-- evaluator-asset-allowlist:start -->"
+EVALUATOR_ASSET_ALLOWLIST_END = "<!-- evaluator-asset-allowlist:end -->"
+EVALUATOR_NO_FALLBACK = (
+    "Do not search alternate directories, fall back to skill-relative resolution, "
+    "or use parent traversal from the skill directory."
+)
+EVALUATOR_DISPATCH_CONTRACT_START = "<!-- evaluator-dispatch-contract:start"
+EVALUATOR_DISPATCH_CONTRACT_END = "evaluator-dispatch-contract:end -->"
+EVALUATOR_CONTEXT_FREE_PROMPT_MARKER = (
+    "The root dispatcher must provide zero inherited task history."
+)
+EVALUATOR_CONTEXT_FREE_DOC_MARKER = (
+    "Every reviewer and judge dispatch uses a self-contained request with zero inherited task history."
+)
+EVALUATOR_CONTEXT_FREE_DOCS = (
+    "README.md",
+    "EVALUATION.md",
+    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
+    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
+    "evaluations/material-code-review/README.md",
+)
+EVALUATOR_GATE_DISPOSITION_CONTRACT_START = (
+    "<!-- evaluator-gate-disposition-contract:start"
+)
+EVALUATOR_GATE_DISPOSITION_CONTRACT_END = (
+    "evaluator-gate-disposition-contract:end -->"
+)
+EVALUATOR_DISPOSITION_STATES = (
+    "ALL_APPROVED_PLAN",
+    "MIXED_DISPOSITIONS_NONCOMPARABLE",
+    "NO_APPROVED_FINDINGS",
+    "ACCEPTED_EMPTY_LEDGER",
+    "INVALID_OR_MISSING_EVIDENCE",
+)
+EVALUATOR_DISPOSITION_DOC_MARKER = (
+    "Any rejection or deferral in either non-empty variant makes the comparison non-comparable."
+)
+EVALUATOR_JUDGE_PROTOCOL_START = "<!-- evaluator-judge-protocol:start"
+EVALUATOR_JUDGE_PROTOCOL_END = "evaluator-judge-protocol:end -->"
+EVALUATOR_JUDGE_PROMPT_MARKER = (
+    "The root accepts a response only after validating the complete judge protocol."
+)
+EVALUATOR_JUDGE_DOC_MARKER = (
+    "Judge responses are accepted only after root-side protocol validation."
+)
 
 FORBIDDEN_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
 MAINTAINER_ONLY_ARCHIVE_PREFIXES = (
+    ".agents/skills/material-review-evaluation/",
     ".evaluation-runs/",
     ".superpowers/",
     "docs/superpowers/",
     "evaluations/",
-    "scripts/material_review_evaluation/",
 )
-MAINTAINER_ONLY_ARCHIVE_EXACT = frozenset(
-    {
-        "bin/material-review-evaluate",
-        "scripts/evaluate_material_review.py",
-        "scripts/tests/test_evaluate_material_review.py",
-    }
+LOCAL_RUNTIME_JSON_PREFIXES = (
+    ".evaluation-runs/",
+    ".superpowers/",
 )
 
 
 def is_maintainer_only_archive_entry(name: str) -> bool:
-    return name in MAINTAINER_ONLY_ARCHIVE_EXACT or name.startswith(
-        MAINTAINER_ONLY_ARCHIVE_PREFIXES
-    )
+    return name.startswith(MAINTAINER_ONLY_ARCHIVE_PREFIXES)
 
 
 def fail(errors: list[str], message: str) -> None:
@@ -200,6 +233,242 @@ def validate_openai_activation_metadata(text: str, errors: list[str]) -> None:
     expected_short_description = f'  short_description: "{ACTIVATION_SHORT_DESCRIPTION}"'
     if short_description != [expected_short_description]:
         fail(errors, "openai.yaml short_description does not match the Git-change activation contract")
+
+
+def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
+    skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
+    if not skill_path.is_file():
+        return
+
+    text = skill_path.read_text(encoding="utf-8")
+    anchor_index = text.find(EVALUATOR_ROOT_ANCHOR)
+    start_index = text.find(EVALUATOR_ASSET_ALLOWLIST_START)
+    end_index = text.find(EVALUATOR_ASSET_ALLOWLIST_END)
+    if anchor_index < 0:
+        fail(errors, "maintainer evaluator lacks repository root attestation")
+        return
+    if start_index < 0 or end_index < start_index:
+        fail(errors, "maintainer evaluator asset allowlist markers are incomplete")
+        return
+    if anchor_index > start_index:
+        fail(errors, "maintainer evaluator asset allowlist precedes repository root attestation")
+    if EVALUATOR_NO_FALLBACK not in text[start_index:]:
+        fail(errors, "maintainer evaluator asset contract lacks the no-fallback rule")
+
+    block = text[start_index + len(EVALUATOR_ASSET_ALLOWLIST_START) : end_index]
+    entries = tuple(re.findall(r"(?m)^\s*- `([^`]+)`\s*$", block))
+    for entry in entries:
+        pure_path = PurePosixPath(entry)
+        if pure_path.is_absolute() or ".." in pure_path.parts:
+            fail(errors, "maintainer evaluator asset path escapes the repository root")
+    if entries != EVALUATOR_ASSET_ALLOWLIST:
+        fail(errors, "maintainer evaluator asset allowlist must match the repository-root contract")
+
+    resolved_root = root.resolve()
+    for relative in EVALUATOR_ASSET_ALLOWLIST:
+        reference_index = text.find(f"`{relative}`")
+        if 0 <= reference_index < anchor_index:
+            fail(errors, "maintainer evaluator asset referenced before repository root attestation")
+        asset_path = root / relative
+        if not asset_path.exists():
+            fail(errors, f"maintainer evaluator asset is missing: {relative}")
+            continue
+        if asset_path.is_symlink() or not asset_path.is_file():
+            fail(errors, f"maintainer evaluator asset is not a regular file: {relative}")
+            continue
+        resolved_asset = asset_path.resolve()
+        if resolved_asset != resolved_root and resolved_root not in resolved_asset.parents:
+            fail(errors, "maintainer evaluator asset path escapes the repository root")
+
+
+def parse_evaluator_contract(
+    text: str,
+    start_marker: str,
+    end_marker: str,
+    errors: list[str],
+    contract_name: str,
+) -> dict[str, str] | None:
+    start_index = text.find(start_marker)
+    end_index = text.find(end_marker)
+    if start_index < 0 or end_index < start_index:
+        fail(errors, f"maintainer evaluator {contract_name} markers are incomplete")
+        return None
+
+    contract: dict[str, str] = {}
+    block = text[start_index + len(start_marker) : end_index]
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "=" not in line:
+            fail(errors, f"maintainer evaluator {contract_name} contains a malformed entry")
+            continue
+        key, value = line.split("=", 1)
+        if not key or key in contract:
+            fail(errors, f"maintainer evaluator {contract_name} contains a duplicate entry")
+            continue
+        contract[key] = value
+    return contract
+
+
+def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> None:
+    skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
+    if not skill_path.is_file():
+        return
+    contract = parse_evaluator_contract(
+        skill_path.read_text(encoding="utf-8"),
+        EVALUATOR_DISPATCH_CONTRACT_START,
+        EVALUATOR_DISPATCH_CONTRACT_END,
+        errors,
+        "dispatch contract",
+    )
+    if contract is None:
+        return
+
+    required_values = (
+        ("reviewer_history", "none", "maintainer evaluator dispatch contract must require empty history for reviewers"),
+        ("initial_judge_history", "none", "maintainer evaluator dispatch contract must require empty history for the initial judge"),
+        ("replacement_judge_history", "none", "maintainer evaluator dispatch contract must require empty history for the replacement judge"),
+        ("isolation_unavailable_dispatch", "false", "maintainer evaluator isolation failure must not dispatch a worker"),
+        ("isolation_unverifiable_dispatch", "false", "maintainer evaluator unverifiable isolation must not dispatch a worker"),
+        ("bounded_nonempty_dispatch", "false", "maintainer evaluator bounded non-empty history must not dispatch a worker"),
+        ("isolation_failure_outcome", "INSUFFICIENT_EVIDENCE", "maintainer evaluator isolation failure must produce INSUFFICIENT_EVIDENCE"),
+        ("isolation_failure_winner", "none", "maintainer evaluator isolation failure must produce no winner"),
+        ("isolation_failure_gate_progression", "false", "maintainer evaluator isolation failure must not progress a user gate"),
+        ("isolation_failure_repair_publication_egress", "false", "maintainer evaluator isolation failure must not repair, publish, or egress source"),
+    )
+    for key, expected, error in required_values:
+        if contract.get(key) != expected:
+            fail(errors, error)
+
+    fixed_values = {
+        "reviewers": "2",
+        "codex_fork_turns": "none",
+        "worker_message": "self-contained-allowlist",
+        "private_dispatch_receipt": "true",
+        "recursive_fanout": "false",
+    }
+    if any(contract.get(key) != value for key, value in fixed_values.items()):
+        fail(errors, "maintainer evaluator dispatch contract is incomplete")
+
+    for relative, label in (
+        ("evaluations/material-code-review/prompts/reviewer.md", "reviewer"),
+        ("evaluations/material-code-review/prompts/judge.md", "judge"),
+    ):
+        prompt_path = root / relative
+        if prompt_path.is_file() and EVALUATOR_CONTEXT_FREE_PROMPT_MARKER not in prompt_path.read_text(encoding="utf-8"):
+            fail(errors, f"{label} prompt must require zero inherited task history")
+
+    for relative in EVALUATOR_CONTEXT_FREE_DOCS:
+        path = root / relative
+        if path.is_file() and EVALUATOR_CONTEXT_FREE_DOC_MARKER not in path.read_text(encoding="utf-8"):
+            fail(errors, f"{relative} must reference the context-free evaluator dispatch contract")
+
+
+def validate_maintainer_evaluator_dispositions(root: Path, errors: list[str]) -> None:
+    skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
+    if not skill_path.is_file():
+        return
+    contract = parse_evaluator_contract(
+        skill_path.read_text(encoding="utf-8"),
+        EVALUATOR_GATE_DISPOSITION_CONTRACT_START,
+        EVALUATOR_GATE_DISPOSITION_CONTRACT_END,
+        errors,
+        "Gate-A disposition contract",
+    )
+    if contract is None:
+        return
+
+    required_values = (
+        ("all_approved", "ALL_APPROVED_PLAN", "maintainer evaluator all-approved state must retain Gate-B plan capture"),
+        ("mixed_reject_or_defer", "MIXED_DISPOSITIONS_NONCOMPARABLE", "maintainer evaluator mixed dispositions must be non-comparable"),
+        ("zero_approved", "NO_APPROVED_FINDINGS", "maintainer evaluator zero-approved state must preserve native no-approved-findings completion"),
+        ("accepted_empty", "ACCEPTED_EMPTY_LEDGER", "maintainer evaluator accepted-empty state must remain distinct"),
+        ("invalid_or_missing", "INVALID_OR_MISSING_EVIDENCE", "maintainer evaluator invalid or missing evidence must remain distinct"),
+        ("reject_or_defer_policy", "DISPOSITION_NONCOMPARABLE", "maintainer evaluator rejection or deferral policy must fail closed"),
+        ("reject_or_defer_outcome", "INSUFFICIENT_EVIDENCE", "maintainer evaluator rejection or deferral must produce INSUFFICIENT_EVIDENCE"),
+        ("reject_or_defer_plan", "false", "maintainer evaluator rejection or deferral must not fabricate a plan"),
+        ("native_controller_change", "false", "maintainer evaluator disposition policy must not change the native controller"),
+    )
+    for key, expected, error in required_values:
+        if contract.get(key) != expected:
+            fail(errors, error)
+    fixed_values = {
+        "reject_or_defer_winner": "none",
+        "reject_or_defer_gate_b": "false",
+        "disposition_evidence": "ledger-hash,gate-receipt-hash,anonymous-dispositions,native-state",
+    }
+    if any(contract.get(key) != value for key, value in fixed_values.items()):
+        fail(errors, "maintainer evaluator Gate-A disposition contract is incomplete")
+
+    for relative in (
+        ".agents/skills/material-review-evaluation/SKILL.md",
+        "evaluations/material-code-review/prompts/reviewer.md",
+        "evaluations/material-code-review/prompts/judge.md",
+        "evaluations/material-code-review/rubric.md",
+    ):
+        path = root / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(state not in text for state in EVALUATOR_DISPOSITION_STATES) or "DISPOSITION_NONCOMPARABLE" not in text:
+            fail(errors, f"{relative} must define every evaluator disposition state")
+
+    for relative in EVALUATOR_CONTEXT_FREE_DOCS:
+        path = root / relative
+        if path.is_file() and EVALUATOR_DISPOSITION_DOC_MARKER not in path.read_text(encoding="utf-8"):
+            fail(errors, f"{relative} must state the evaluator rejection and deferral policy")
+
+
+def validate_maintainer_evaluator_judge_protocol(root: Path, errors: list[str]) -> None:
+    skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
+    if not skill_path.is_file():
+        return
+    contract = parse_evaluator_contract(
+        skill_path.read_text(encoding="utf-8"),
+        EVALUATOR_JUDGE_PROTOCOL_START,
+        EVALUATOR_JUDGE_PROTOCOL_END,
+        errors,
+        "judge protocol",
+    )
+    if contract is None:
+        return
+
+    required_values = (
+        ("public_outcomes", "VARIANT_A_STRONGER,VARIANT_B_STRONGER,MATERIAL_TIE,INSUFFICIENT_EVIDENCE", "maintainer evaluator judge protocol must preserve the four public outcomes"),
+        ("valid_outcome_count", "1", "maintainer evaluator must accept exactly one judge outcome"),
+        ("required_sections", "Outcome,Finding comparison,Repair-plan comparison,Limitations and uncertainty,Citations", "maintainer evaluator must validate every ordered judge section"),
+        ("citations", "anonymous-artifacts,frozen-source", "maintainer evaluator must validate anonymous artifact and frozen-source citations"),
+        ("identity_data", "forbidden", "maintainer evaluator must reject identity-bearing judgment data"),
+        ("judgment_before_mapping", "true", "maintainer evaluator must write judgment before revealing the private mapping"),
+        ("max_attempts", "2", "maintainer evaluator judge protocol must allow at most two attempts"),
+        ("attempt_2_trigger", "first-identity-leak-only", "maintainer evaluator second judge attempt must be limited to a first identity leak"),
+        ("other_invalid_first_replacement", "false", "maintainer evaluator must not retry other invalid first judgments"),
+        ("second_leak_replacement", "false", "maintainer evaluator must not retry a second identity leak"),
+        ("terminal_outcome", "INSUFFICIENT_EVIDENCE", "maintainer evaluator invalid judge terminal must produce INSUFFICIENT_EVIDENCE"),
+        ("terminal_winner", "none", "maintainer evaluator invalid judge terminal must produce no winner"),
+        ("private_terminal_reason", "judge-invalid", "maintainer evaluator judge-invalid reason must remain private"),
+        ("raw_attempts", "private-local", "maintainer evaluator raw judge attempts must remain private local evidence"),
+        ("interrupted_run", "preserve-and-new-invocation", "maintainer evaluator interrupted runs must not become judge retries"),
+        ("repair_publication_egress_resume", "false", "maintainer evaluator invalid judge terminal must not repair, publish, egress, or resume"),
+    )
+    for key, expected, error in required_values:
+        if contract.get(key) != expected:
+            fail(errors, error)
+
+    judge_prompt = root / "evaluations/material-code-review/prompts/judge.md"
+    if judge_prompt.is_file() and EVALUATOR_JUDGE_PROMPT_MARKER not in judge_prompt.read_text(encoding="utf-8"):
+        fail(errors, "judge prompt must require root-side protocol validation")
+    rubric = root / "evaluations/material-code-review/rubric.md"
+    if rubric.is_file():
+        rubric_text = rubric.read_text(encoding="utf-8")
+        if "private `judge-invalid` reason" not in rubric_text or "fifth public outcome" not in rubric_text:
+            fail(errors, "evaluator rubric must preserve bounded judge-invalid semantics")
+
+    for relative in EVALUATOR_CONTEXT_FREE_DOCS:
+        path = root / relative
+        if path.is_file() and EVALUATOR_JUDGE_DOC_MARKER not in path.read_text(encoding="utf-8"):
+            fail(errors, f"{relative} must state the bounded judge-validation protocol")
 
 
 def iter_files(root: Path) -> Iterable[Path]:
@@ -329,6 +598,23 @@ def check_source_package(
         if frontmatter.get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
             fail(errors, f"{rel} description does not match the Git-change activation contract")
 
+    evaluator_skill = root / ".agents/skills/material-review-evaluation/SKILL.md"
+    if not distribution_layout and evaluator_skill.is_file():
+        frontmatter = parse_frontmatter(evaluator_skill, errors)
+        if frontmatter.get("name") != "material-review-evaluation":
+            fail(errors, "maintainer evaluator skill has wrong name")
+        if not frontmatter.get("description", "").startswith("Use when "):
+            fail(errors, "maintainer evaluator skill description must start with 'Use when '")
+        if (
+            frontmatter.get("argument-hint")
+            != "base:<skill-ref> candidate:<skill-ref>"
+        ):
+            fail(errors, "maintainer evaluator skill has wrong argument hint")
+        validate_maintainer_evaluator_assets(root, errors)
+        validate_maintainer_evaluator_dispatch(root, errors)
+        validate_maintainer_evaluator_dispositions(root, errors)
+        validate_maintainer_evaluator_judge_protocol(root, errors)
+
     openai_yaml = root / "skills/material-code-review/agents/openai.yaml"
     if openai_yaml.is_file():
         text = openai_yaml.read_text(encoding="utf-8")
@@ -387,10 +673,15 @@ def check_source_package(
                 fail(errors, f"{path.relative_to(root)} must set additionalProperties=false")
 
     for path in iter_files(root):
-        if path.suffix.lower() == ".json" and path.is_file():
+        relative_path = path.relative_to(root).as_posix()
+        if (
+            path.suffix.lower() == ".json"
+            and path.is_file()
+            and not relative_path.startswith(LOCAL_RUNTIME_JSON_PREFIXES)
+        ):
             load_json(path, errors)
 
-    for relative_wrapper in ("bin/material-reviewctl", "bin/material-review-evaluate"):
+    for relative_wrapper in ("bin/material-reviewctl",):
         wrapper = root / relative_wrapper
         if (
             wrapper.exists()
@@ -436,20 +727,33 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
         return [f"archive not found: {path}"]
     try:
         with zipfile.ZipFile(path) as zf:
-            names = [name for name in zf.namelist() if not name.endswith("/")]
-            if len(names) != len(set(names)):
+            raw_names = [name for name in zf.namelist() if not name.endswith("/")]
+            archive_entries = []
+            for raw_name in raw_names:
+                canonical_name = PurePosixPath(raw_name.replace("\\", "/")).as_posix()
+                archive_entries.append((raw_name, canonical_name))
+                if raw_name != canonical_name:
+                    fail(errors, f"{path.name}: noncanonical archive path {raw_name}")
+
+            canonical_names = [canonical for _, canonical in archive_entries]
+            if len(canonical_names) != len(set(canonical_names)):
                 fail(errors, f"{path.name}: duplicate archive entries")
-            for name in names:
-                rel = Path(name)
+            for raw_name, canonical_name in archive_entries:
+                rel = PurePosixPath(canonical_name)
                 if rel.is_absolute() or ".." in rel.parts:
-                    fail(errors, f"{path.name}: unsafe archive path {name}")
+                    fail(errors, f"{path.name}: unsafe archive path {raw_name}")
                 if any(part in FORBIDDEN_PARTS for part in rel.parts) or rel.suffix in FORBIDDEN_SUFFIXES:
-                    fail(errors, f"{path.name}: forbidden archive entry {name}")
-                if is_maintainer_only_archive_entry(name):
+                    fail(errors, f"{path.name}: forbidden archive entry {raw_name}")
+                if is_maintainer_only_archive_entry(canonical_name):
                     fail(
                         errors,
-                        f"{path.name}: forbidden maintainer-only archive entry {name}",
+                        f"{path.name}: forbidden maintainer-only archive entry {raw_name}",
                     )
+            names = {
+                canonical_name
+                for raw_name, canonical_name in archive_entries
+                if raw_name == canonical_name
+            }
             required = (
                 {"SKILL.md", "agents/openai.yaml", "scripts/reviewctl.py", "schemas/candidate-set.schema.json"}
                 if standalone
@@ -462,7 +766,7 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     "scripts/package_plugin.py",
                 }
             )
-            for rel in sorted(required - set(names)):
+            for rel in sorted(required - names):
                 fail(errors, f"{path.name}: missing archive entry {rel}")
             bad_prefixes = {name.split("/", 1)[0] for name in names if name.startswith("material-code-review-plugin/")}
             if bad_prefixes:

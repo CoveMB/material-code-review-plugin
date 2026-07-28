@@ -10,24 +10,20 @@ SIMPLIFY_STANDALONE_ZIP := $(DIST_DIR)/material-code-simplification-codex-skill-
 
 ifneq ($(wildcard .git),)
 PACKAGE_LAYOUT_ARGUMENT :=
-EVALUATOR_PYTHON := scripts/evaluate_material_review.py scripts/material_review_evaluation/*.py
-EVALUATOR_WRAPPER := bin/material-review-evaluate
 else
 PACKAGE_LAYOUT_ARGUMENT := --distribution-layout
-EVALUATOR_PYTHON :=
-EVALUATOR_WRAPPER :=
 endif
-SHELL_WRAPPERS := bin/material-reviewctl $(EVALUATOR_WRAPPER)
+SHELL_WRAPPERS := bin/material-reviewctl
 
-.PHONY: validate package package-simplification package-check test compile json shell clean evaluate-review
+.PHONY: validate package package-simplification package-check test compile json shell clean
 
 validate:
 	$(MAKE) clean
 	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
-	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py $(EVALUATOR_PYTHON)
+	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
 	$(MAKE) clean
-	$(PYTHON) -c 'import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json")]; print("JSON OK")'
+	$(PYTHON) -c 'import json,pathlib; ignored={".evaluation-runs", ".superpowers"}; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json") if p.is_file() and (not p.parts or p.parts[0] not in ignored)]; print("JSON OK")'
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
 	$(PYTHON) -B -m unittest discover -s $(SIMPLIFY_SKILL_DIR)/tests -p 'test_*.py' -v
@@ -52,17 +48,13 @@ package-check:
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 
 compile:
-	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py $(EVALUATOR_PYTHON)
+	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
 
 json:
-	$(PYTHON) -c 'import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json")]; print("JSON OK")'
+	$(PYTHON) -c 'import json,pathlib; ignored={".evaluation-runs", ".superpowers"}; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json") if p.is_file() and (not p.parts or p.parts[0] not in ignored)]; print("JSON OK")'
 
 shell:
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
-
-evaluate-review:
-	@test -n "$(BASE_REF)" -a -n "$(CANDIDATE_REF)" -a -n "$(BENCHMARK)" -a -n "$(MODEL)" -a -n "$(REASONING_EFFORT)" || { echo "BASE_REF, CANDIDATE_REF, BENCHMARK, MODEL, and REASONING_EFFORT are required" >&2; exit 2; }
-	$(PYTHON) scripts/evaluate_material_review.py compare --base-ref "$(BASE_REF)" --candidate-ref "$(CANDIDATE_REF)" --benchmark "$(BENCHMARK)" --model "$(MODEL)" --reasoning-effort "$(REASONING_EFFORT)"
 
 test:
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v

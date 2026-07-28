@@ -249,50 +249,27 @@ The package includes lifecycle, boundary, restoration, direction-audit, plan-han
 
 ## Maintainer-only version evaluation
 
-Repository maintainers can explicitly compare two immutable `material-code-review` commits against the committed Discogs album-recovery benchmark:
+From a fresh Codex task opened at this repository root, invoke the repository-local evaluator skill with two distinct material-review refs:
 
-```bash
-make evaluate-review \
-  BASE_REF=origin/main \
-  CANDIDATE_REF=HEAD \
-  BENCHMARK=discogs-album-recovery \
-  MODEL=gpt-5.6-sol \
-  REASONING_EFFORT=high
+```text
+$material-review-evaluation base:<skill-ref> candidate:<skill-ref>
 ```
 
-There is deliberately no default model or reasoning effort. A complete comparison normally starts four reviewer trials, two agreement checks, and one comparison judgment; inconsistent results can add one trial and another agreement check per variant. It therefore consumes meaningful model tokens, time, and tool execution. Review the chosen model's current cost and availability before starting.
+Every reviewer and judge dispatch uses a self-contained request with zero inherited task history. Codex uses `fork_turns: "none"`; a host that cannot verify an equivalent zero-history primitive stops with `INSUFFICIENT_EVIDENCE` and no worker or winner.
 
-This evaluator is repository-maintainer tooling. It is excluded from the full plugin and every standalone skill archive, so the command is available only from a source checkout and is not part of an installed plugin. It explicitly tells every trial to use the selected materialized skill. It does not test or make any claim about implicit skill activation.
+Any rejection or deferral in either non-empty variant makes the comparison non-comparable. The evaluator preserves the native hash-bound disposition and lifecycle evidence, produces no comparison plan for that state, and requires `INSUFFICIENT_EVIDENCE` without changing the material-review controller.
 
-Raw evidence stays local under the Git-ignored `.evaluation-runs/<run-id>/` directory. That directory retains native controller artifacts, agent logs, trial evidence, agreement results, the locked judgment, and the private identity reveal. Raw artifacts can contain machine-specific paths and are not exported automatically. `comparison-report.md` is the separately sanitized, hash-bound report intended for copying or printing.
+Judge responses are accepted only after root-side protocol validation. The first identity leak permits one corrected zero-history replacement; every other invalid first response and every invalid or leaking replacement produces a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment, with raw attempts retained only in private local evidence.
 
-The current Codex CLI adapter records `logical_blinding`: prompts and semantic bundles remove identities and prohibit prior-run discovery, but the host is not claimed to provide a hermetic filesystem boundary. A future host that exposes only the trial workflow, target, and output roots may record `filesystem_blinding`. The distinction is part of every run's executor configuration.
+The workflow compares one anonymous reviewer trial per skill version against the frozen Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`. The `custom-playlists` branch name is provenance only; the exact commits remain authoritative.
 
-Evaluation-only policy automatically approves every retained Gate A finding for planning and approves the exact validated Gate B plan for comparison evidence. It never enters repair, executes a generated plan command, pushes, publishes, calls live Spotify APIs, or uses private Discogs data. The live Discogs smoke test is manual because it is costly and environment-dependent; `make validate` and CI run only deterministic fixtures and never start a live comparison.
+Each reviewer returns its complete finding ledger and native Gate-A result. The initial “approve all retained findings for planning” language is best-effort maintainer intent, not Gate-A approval. Both valid variants pause in one combined Gate-A interaction: Codex requests dispositions for every exact retained ID and explicit acceptance for each empty ledger. An all-approved non-empty variant continues to a controller-validated plan and stops at Gate B; any rejected or deferred ID uses the non-comparable no-plan policy above. Gate B is never approved and no repair runs.
 
-An interrupted exact-match comparison resumes its newest incomplete run by default. Pass `--new-run` to create a separate run instead:
+A fresh read-only judge compares anonymous findings, plans, and limitations against the frozen source and returns `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. Invalid or missing required reviewer evidence is recorded without reconstruction and yields `INSUFFICIENT_EVIDENCE`. The private A/B mapping is revealed only after `judgment.md` is written.
 
-```bash
-bin/material-review-evaluate compare \
-  --base-ref origin/main \
-  --candidate-ref HEAD \
-  --benchmark discogs-album-recovery \
-  --model gpt-5.6-sol \
-  --reasoning-effort high \
-  --new-run
-```
+This is trusted-local, directional evidence. It uses logical separation rather than Docker, has no CI/CD integration, automatic retry, automatic resume, or publication path, and makes no statistical claim. The explicit workflow invokes the selected materialized skill; it does not prove implicit skill selection.
 
-Inspect and retain results with the remaining explicit commands:
-
-```bash
-bin/material-review-evaluate status
-bin/material-review-evaluate status --run-id <run-id>
-bin/material-review-evaluate report --run-id <run-id>
-bin/material-review-evaluate report --run-id <run-id> --output /path/to/report.md
-bin/material-review-evaluate clean --run-id <run-id>
-```
-
-`report` refuses incomplete or unlocked runs and emits only the sanitized report. `clean` removes only exact controller-recorded clean workspaces; it preserves `run.json`, the private map, native evidence, judgment, reveal, and sanitized report.
+Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may contain machine-specific paths. It is not automatically sanitized or published. The evaluator skill and all evaluation assets are excluded from the full plugin and standalone archives. See `evaluations/material-code-review/README.md` for prerequisites, output layout, trust boundaries, and interruption handling.
 
 ## Distribution files
 
