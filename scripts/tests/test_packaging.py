@@ -855,6 +855,11 @@ class StandalonePackagingTests(unittest.TestCase):
     def test_packager_rejects_case_only_collision(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
+            case_sensitivity_probe = temp_root / "case-sensitivity-probe"
+            case_sensitivity_probe.touch()
+            if (temp_root / "CASE-SENSITIVITY-PROBE").exists():
+                self.skipTest("temporary filesystem is case-insensitive")
+
             fixture_root = self.create_repository_fixture(temp_root)
             skill_root = fixture_root / "skills" / "material-code-simplification"
             # Create a file that differs only in case from an existing file
