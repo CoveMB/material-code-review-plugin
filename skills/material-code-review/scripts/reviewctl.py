@@ -33,6 +33,7 @@ STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
+CANDIDATE_PREFLIGHT_SCHEMA = "material-review/candidate-preflight/v1"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
 LEDGER_SCHEMA = "material-review/ledger/v3"
@@ -97,6 +98,21 @@ PROTOCOL_RISK_SIGNALS = {
     "state_dependent_schema",
     "trust_ordering",
     "shared_schema",
+}
+EVIDENCE_ANCHOR_FIELDS = {
+    "file",
+    "line_start",
+    "line_end",
+    "evidence_side",
+    "evidence_quote",
+}
+CORRECTABLE_DIAGNOSTIC_CODES = {
+    "JSON_SYNTAX",
+    "TOP_LEVEL_METADATA",
+    "UNKNOWN_FIELD",
+    "EVIDENCE_NOT_FOUND",
+    "EVIDENCE_OUTSIDE_RANGE",
+    "DUPLICATE_LOCAL_ID",
 }
 VALIDATION_MODES = {"independent", "controller_direct", "degraded_self_audit"}
 VALIDATION_VERDICTS = {"confirmed", "rejected", "uncertain"}
@@ -559,6 +575,16 @@ def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
         "lenses": lenses,
         "max_candidate_corrections": max_corrections,
     }
+
+
+def candidate_semantic_hash(findings: list[dict[str, Any]]) -> str | None:
+    if not all(isinstance(item, dict) for item in findings):
+        return None
+    payload = [
+        {key: value for key, value in item.items() if key not in EVIDENCE_ANCHOR_FIELDS}
+        for item in findings
+    ]
+    return canonical_hash(payload)
 
 
 def parse_csv_ids(values: Sequence[str] | None) -> set[str]:
@@ -1567,7 +1593,7 @@ def render_checkpoint_diff(checkpoint_dir: Path, repo: Path, changed_paths: Iter
     return "\n".join(chunks)
 
 
-def validate_candidate_set(
+def _normalize_candidate_set(
     raw: Any,
     *,
     source_file: Path,
@@ -1753,6 +1779,76 @@ def validate_candidate_set(
         "findings": valid_findings,
     }
     return normalized_set, rejections
+
+
+def candidate_diagnostic(message: str, *, path: str = "$") -> dict[str, Any]:
+    lowered = message.lower()
+    finding_match = re.search(r"\.findings\[(\d+)\]", message)
+    diagnostic_path = f"findings[{finding_match.group(1)}]" if finding_match else path
+    if "invalid json" in lowered:
+        code = "JSON_SYNTAX"
+    elif "duplicated" in lowered and "local_id" in lowered:
+        code = "DUPLICATE_LOCAL_ID"
+    elif "not at lines" in lowered or "evidence line" in lowered:
+        code = "EVIDENCE_OUTSIDE_RANGE"
+    elif "evidence quote" in lowered and "not found" in lowered:
+        code = "EVIDENCE_NOT_FOUND"
+    elif "evidence source is missing" in lowered:
+        code = "EVIDENCE_NOT_FOUND"
+    elif "unexpected" in lowered:
+        code = "UNKNOWN_FIELD"
+    elif diagnostic_path == "$" and any(
+        marker in lowered
+        for marker in ("schema_version", "scope_hash", "reviewer_id", "review_mode", "coverage")
+    ):
+        code = "TOP_LEVEL_METADATA"
+    else:
+        code = "CANDIDATE_INVALID"
+    return {
+        "code": code,
+        "path": diagnostic_path,
+        "message": message,
+        "correctable": code in CORRECTABLE_DIAGNOSTIC_CODES,
+    }
+
+
+def inspect_candidate_set(
+    raw: Any,
+    *,
+    source_file: Path,
+    repo: Path,
+    run_dir: Path,
+    state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    try:
+        normalized_set, rejections = _normalize_candidate_set(
+            raw,
+            source_file=source_file,
+            repo=repo,
+            run_dir=run_dir,
+            state=state,
+        )
+    except ReviewError as exc:
+        return None, [candidate_diagnostic(str(exc))]
+    diagnostics = [candidate_diagnostic(item["reason"]) for item in rejections]
+    return normalized_set, diagnostics
+
+
+def validate_candidate_set(
+    raw: Any,
+    *,
+    source_file: Path,
+    repo: Path,
+    run_dir: Path,
+    state: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    return _normalize_candidate_set(
+        raw,
+        source_file=source_file,
+        repo=repo,
+        run_dir=run_dir,
+        state=state,
+    )
 
 
 def validate_validation_object(value: Any, context: str) -> dict[str, Any]:
@@ -2884,6 +2980,188 @@ def command_record_coverage(args: argparse.Namespace) -> int:
     save_state(run_dir, state)
     print(f"[OK] Coverage plan recorded: {plan_hash}")
     return 0
+
+
+def load_verified_coverage_plan(
+    run_dir: Path, state: dict[str, Any]
+) -> tuple[dict[str, Any], str]:
+    plan = validate_coverage_plan(load_json(run_dir / "coverage-plan.json"), state)
+    plan_hash = canonical_hash(plan)
+    require_state_hash(state, "coverage_plan_hash", plan_hash, "coverage plan")
+    return plan, plan_hash
+
+
+def load_candidate_preflight_receipt(
+    run_dir: Path, record: dict[str, Any]
+) -> dict[str, Any]:
+    relative_path = require_string(record.get("path"), "candidate preflight state path")
+    receipt = require_object(
+        load_json(run_dir / relative_path), f"candidate preflight receipt {relative_path}"
+    )
+    receipt_hash = verify_embedded_hash(
+        receipt,
+        hash_field="receipt_hash",
+        context=f"candidate preflight receipt {relative_path}",
+    )
+    expected_hash = require_sha256(
+        record.get("receipt_hash"), "candidate preflight state receipt_hash"
+    )
+    if receipt_hash != expected_hash:
+        raise ReviewError("Candidate preflight receipt does not match its state hash")
+    return receipt
+
+
+def command_check_candidates(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_CONTEXT:
+        raise ReviewError(f"Cannot preflight candidates in phase {state['phase']}")
+    check_scope_fresh(repo, run_dir, state)
+    coverage_plan, coverage_plan_hash = load_verified_coverage_plan(run_dir, state)
+    lens = next(
+        (item for item in coverage_plan["lenses"] if item["lens_id"] == args.lens),
+        None,
+    )
+    if lens is None:
+        raise ReviewError(f"Lens is not assigned by the coverage plan: {args.lens}")
+
+    preflight_state = state.setdefault("candidate_preflight", {})
+    records = preflight_state.setdefault(args.lens, [])
+    if len(records) >= 2:
+        raise ReviewError(f"Candidate preflight attempt limit reached for lens {args.lens}")
+    receipts = [load_candidate_preflight_receipt(run_dir, record) for record in records]
+    primary_receipts = [receipt for receipt in receipts if not receipt["fallback"]]
+    fallback_receipts = [receipt for receipt in receipts if receipt["fallback"]]
+
+    previous: dict[str, Any] | None = None
+    if args.fallback:
+        if not lens["required"] or lens["fallback"] != "sequential_degraded_self_audit":
+            raise ReviewError(f"Lens {args.lens} does not permit a required-lens fallback")
+        if fallback_receipts:
+            raise ReviewError(f"Lens {args.lens} already has a fallback preflight")
+        if not primary_receipts or primary_receipts[-1]["verdict"] == "valid":
+            raise ReviewError(
+                f"Lens {args.lens} fallback requires a failed primary preflight"
+            )
+        if args.supersedes:
+            raise ReviewError("A fallback is a separate review and may not supersede a primary receipt")
+    elif primary_receipts:
+        if fallback_receipts:
+            raise ReviewError(f"Lens {args.lens} cannot resume primary review after fallback")
+        previous = primary_receipts[-1]
+        if previous["verdict"] != "correctable":
+            raise ReviewError(
+                f"Lens {args.lens} has no correctable primary receipt to supersede"
+            )
+        if args.supersedes != previous["receipt_hash"]:
+            raise ReviewError("Second candidate attempt must supersede the exact prior receipt hash")
+    elif args.supersedes:
+        raise ReviewError("First candidate attempt may not supersede another receipt")
+
+    source = Path(args.input).expanduser().resolve()
+    try:
+        draft_bytes = source.read_bytes()
+    except FileNotFoundError as exc:
+        raise ReviewError(f"File not found: {source}") from exc
+    draft_hash = sha256_bytes(draft_bytes)
+    diagnostics: list[dict[str, Any]] = []
+    parsed: Any = None
+    try:
+        parsed = json.loads(draft_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        diagnostics.append(candidate_diagnostic(f"Invalid JSON in {source}: {exc}"))
+
+    semantic_hash: str | None = None
+    if parsed is not None:
+        findings = parsed.get("findings") if isinstance(parsed, dict) else None
+        if isinstance(findings, list):
+            semantic_hash = candidate_semantic_hash(findings)
+        _, inspection_diagnostics = inspect_candidate_set(
+            parsed,
+            source_file=source,
+            repo=repo,
+            run_dir=run_dir,
+            state=state,
+        )
+        diagnostics.extend(inspection_diagnostics)
+        if isinstance(parsed, dict):
+            assignments = {
+                "reviewer_id": lens["reviewer_id"],
+                "independence_group": lens["independence_group"],
+                "review_mode": lens["review_mode"],
+            }
+            for field, expected in assignments.items():
+                if parsed.get(field) != expected:
+                    diagnostics.append(
+                        {
+                            "code": "TOP_LEVEL_METADATA",
+                            "path": field,
+                            "message": f"{field} must match coverage-plan assignment {expected!r}",
+                            "correctable": True,
+                        }
+                    )
+
+    if previous is not None and previous["semantic_hash"] is not None:
+        if semantic_hash != previous["semantic_hash"]:
+            diagnostics.append(
+                {
+                    "code": "SUBSTANTIVE_DRIFT",
+                    "path": "findings",
+                    "message": "Second candidate attempt changed substantive finding fields",
+                    "correctable": False,
+                }
+            )
+
+    if diagnostics:
+        verdict = (
+            "correctable"
+            if all(item["code"] in CORRECTABLE_DIAGNOSTIC_CODES for item in diagnostics)
+            else "rejected"
+        )
+    else:
+        verdict = "valid"
+    attempt = len(records) + 1
+    receipt = {
+        "schema_version": CANDIDATE_PREFLIGHT_SCHEMA,
+        "scope_hash": state["scope_hash"],
+        "coverage_plan_hash": coverage_plan_hash,
+        "lens_id": args.lens,
+        "fallback": bool(args.fallback),
+        "attempt": attempt,
+        "draft_hash": draft_hash,
+        "semantic_hash": semantic_hash,
+        "supersedes_receipt_hash": args.supersedes,
+        "verdict": verdict,
+        "diagnostics": diagnostics,
+        "reviewer_id": lens["reviewer_id"],
+        "source_file": str(source),
+    }
+    receipt_hash = canonical_hash(receipt)
+    receipt["receipt_hash"] = receipt_hash
+    relative_path = f"candidate-preflight/{args.lens}/attempt-{attempt}.json"
+    atomic_write_json(run_dir / relative_path, receipt)
+    records.append(
+        {
+            "path": relative_path,
+            "receipt_hash": receipt_hash,
+        }
+    )
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "candidate_preflight_recorded",
+            "lens_id": args.lens,
+            "attempt": attempt,
+            "fallback": bool(args.fallback),
+            "verdict": verdict,
+            "receipt_hash": receipt_hash,
+        }
+    )
+    save_state(run_dir, state)
+    print(f"[{'OK' if verdict == 'valid' else 'FAIL'}] Candidate preflight: {verdict}")
+    print(f"Receipt: {run_dir / relative_path}")
+    return 0 if verdict == "valid" else 2
 
 
 def command_ingest_candidates(args: argparse.Namespace) -> int:
@@ -4480,6 +4758,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_run_options(coverage_parser)
     coverage_parser.add_argument("--input", required=True, help="Coverage-plan JSON path.")
     coverage_parser.set_defaults(func=command_record_coverage)
+
+    preflight_parser = subparsers.add_parser(
+        "check-candidates", help="Preflight one assigned candidate draft."
+    )
+    add_common_run_options(preflight_parser)
+    preflight_parser.add_argument("--lens", required=True, help="Coverage-plan lens ID.")
+    preflight_parser.add_argument("--input", required=True, help="Candidate-set JSON path.")
+    preflight_parser.add_argument("--fallback", action="store_true")
+    preflight_parser.add_argument("--supersedes", default=None, help="Exact prior receipt hash.")
+    preflight_parser.set_defaults(func=command_check_candidates)
 
     ingest_parser = subparsers.add_parser("ingest-candidates", help="Validate and normalize candidate reviewer JSON outputs.")
     add_common_run_options(ingest_parser)

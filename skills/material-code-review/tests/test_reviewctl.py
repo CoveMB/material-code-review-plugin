@@ -730,6 +730,187 @@ class ReviewCtlTest(unittest.TestCase):
             expected=2,
         )
 
+    def test_valid_candidate_preflight_does_not_advance_phase(self) -> None:
+        scope_hash = self.init_with_coverage()
+        path = self.write_json(
+            "candidate.json", self.candidate_set(scope_hash, include_style=False)
+        )
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(path),
+        )
+        receipt = self.load("candidate-preflight/correctness/attempt-1.json")
+        self.assertEqual(receipt["verdict"], "valid")
+        self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+
+    def test_nonverbatim_quote_gets_one_correctable_candidate_preflight_receipt(self) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash, include_style=False)
+        draft["findings"][0]["evidence_quote"] = "return something else"
+        path = self.write_json("bad-quote.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(path),
+            expected=2,
+        )
+        receipt = self.load("candidate-preflight/correctness/attempt-1.json")
+        self.assertEqual(receipt["verdict"], "correctable")
+        self.assertEqual(receipt["diagnostics"][0]["code"], "EVIDENCE_NOT_FOUND")
+
+    def test_second_candidate_preflight_attempt_cannot_change_substantive_fields(self) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash, include_style=False)
+        draft["findings"][0]["evidence_quote"] = "return something else"
+        first = self.write_json("first.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(first),
+            expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        draft["findings"][0]["evidence_quote"] = "    return a - b"
+        draft["findings"][0]["observable_consequence"] = "Changed substance."
+        second = self.write_json("second.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(second),
+            "--supersedes",
+            prior["receipt_hash"],
+            expected=2,
+        )
+        diagnostics = self.load("candidate-preflight/correctness/attempt-2.json")[
+            "diagnostics"
+        ]
+        self.assertIn("SUBSTANTIVE_DRIFT", {item["code"] for item in diagnostics})
+
+    def test_evidence_only_candidate_preflight_correction_succeeds(self) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash, include_style=False)
+        draft["findings"][0]["evidence_quote"] = "return something else"
+        first = self.write_json("first-evidence.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(first),
+            expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        draft["findings"][0]["evidence_quote"] = "    return a - b"
+        second = self.write_json("second-evidence.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(second),
+            "--supersedes",
+            prior["receipt_hash"],
+        )
+        receipt = self.load("candidate-preflight/correctness/attempt-2.json")
+        self.assertEqual(receipt["verdict"], "valid")
+
+    def test_third_candidate_preflight_attempt_is_refused(self) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash, include_style=False)
+        draft["findings"][0]["evidence_quote"] = "return something else"
+        first = self.write_json("first-third-attempt.json", draft)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(first), expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        draft["findings"][0]["evidence_quote"] = "    return a - b"
+        second = self.write_json("second-third-attempt.json", draft)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(second), "--supersedes",
+            prior["receipt_hash"],
+        )
+        corrected = self.load("candidate-preflight/correctness/attempt-2.json")
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(second), "--supersedes",
+            corrected["receipt_hash"], expected=2,
+        )
+        self.assertFalse(
+            (self.run_dir / "candidate-preflight/correctness/attempt-3.json").exists()
+        )
+
+    def test_stale_scope_refuses_candidate_preflight(self) -> None:
+        scope_hash = self.init_with_coverage()
+        path = self.write_json(
+            "stale-candidate.json", self.candidate_set(scope_hash, include_style=False)
+        )
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a * b\n", encoding="utf-8"
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(path), expected=2,
+        )
+        self.assertFalse((self.run_dir / "candidate-preflight").exists())
+
+    def test_unparseable_candidate_preflight_permits_one_syntax_correction(self) -> None:
+        scope_hash = self.init_with_coverage()
+        first = self.out / "invalid-candidate.json"
+        first.write_text("{not-json", encoding="utf-8")
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(first), expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        self.assertIsNone(prior["semantic_hash"])
+        self.assertEqual(prior["diagnostics"][0]["code"], "JSON_SYNTAX")
+        corrected = self.write_json(
+            "syntax-corrected.json", self.candidate_set(scope_hash, include_style=False)
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(corrected), "--supersedes",
+            prior["receipt_hash"],
+        )
+        self.assertEqual(
+            self.load("candidate-preflight/correctness/attempt-2.json")["verdict"], "valid"
+        )
+
     def test_ledger_keeps_and_discards_every_candidate_and_gate_is_exact(self) -> None:
         self.reach_adjudicated(include_style=True)
         ledger = self.load("ledger.json")
