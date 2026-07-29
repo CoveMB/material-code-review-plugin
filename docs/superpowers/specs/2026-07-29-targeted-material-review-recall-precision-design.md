@@ -1,6 +1,6 @@
 # Targeted Material-Review Recall and Precision Design
 
-**Status:** Approved design direction; pending written-spec review
+**Status:** Approved for implementation planning
 
 **Date:** 2026-07-29
 
