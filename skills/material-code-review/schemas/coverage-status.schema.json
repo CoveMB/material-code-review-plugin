@@ -50,6 +50,7 @@
           "fallback_trigger_kind",
           "fallback_trigger_hash",
           "degraded",
+          "evidence_handling",
           "reviewer_id",
           "independence_group",
           "review_mode",
@@ -100,6 +101,9 @@
           },
           "degraded": {
             "type": "boolean"
+          },
+          "evidence_handling": {
+            "enum": ["standard", "unparseable_origin_degraded"]
           },
           "reviewer_id": {
             "type": "string",

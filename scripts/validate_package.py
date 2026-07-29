@@ -48,6 +48,18 @@ RECOVERY_CONTROL_MARKERS = (
     "begin-pre-verification-repair",
     "latest failed or stale required test evidence",
 )
+EVIDENCE_HANDLING_MARKERS = (
+    "evidence_handling",
+    "unparseable_origin_degraded",
+)
+EVIDENCE_HANDLING_SURFACES = (
+    "skills/material-code-review/SKILL.md",
+    "skills/material-code-review/scripts/reviewctl.py",
+    "skills/material-code-review/schemas/candidate-preflight.schema.json",
+    "skills/material-code-review/schemas/coverage-status.schema.json",
+    "skills/material-code-review/references/workflow.md",
+    "skills/material-code-review/references/failure-model.md",
+)
 
 DISTRIBUTABLE_REQUIRED = {
     ".codex-plugin/plugin.json",
@@ -809,6 +821,18 @@ def check_source_package(
             if data.get("additionalProperties") is not False:
                 fail(errors, f"{path.relative_to(root)} must set additionalProperties=false")
 
+    for relative in EVIDENCE_HANDLING_SURFACES:
+        path = root / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in EVIDENCE_HANDLING_MARKERS:
+            if marker not in text:
+                fail(
+                    errors,
+                    f"evidence-handling contract missing {marker} in {relative}",
+                )
+
     for path in iter_files(root):
         relative_path = path.relative_to(root).as_posix()
         if (
@@ -912,6 +936,7 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     "SKILL.md",
                     ".codex-plugin/plugin.json",
                     ".agents/plugins/marketplace.json",
+                    "commands/material-review.md",
                     "skills/material-code-review/SKILL.md",
                     "skills/material-code-review/agents/openai.yaml",
                     "skills/material-code-review/schemas/candidate-preflight.schema.json",
@@ -926,6 +951,25 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
             )
             for rel in sorted(required - names):
                 fail(errors, f"{path.name}: missing archive entry {rel}")
+            contract_surfaces = (
+                tuple(
+                    relative.removeprefix("skills/material-code-review/")
+                    for relative in EVIDENCE_HANDLING_SURFACES
+                )
+                if standalone
+                else EVIDENCE_HANDLING_SURFACES
+            )
+            for relative in contract_surfaces:
+                if relative not in names:
+                    continue
+                text = zf.read(relative).decode("utf-8")
+                for marker in EVIDENCE_HANDLING_MARKERS:
+                    if marker not in text:
+                        fail(
+                            errors,
+                            f"{path.name}: evidence-handling contract missing "
+                            f"{marker} in {relative}",
+                        )
             bad_prefixes = {name.split("/", 1)[0] for name in names if name.startswith("material-code-review-plugin/")}
             if bad_prefixes:
                 fail(errors, f"{path.name}: archive has an unwanted wrapper directory")

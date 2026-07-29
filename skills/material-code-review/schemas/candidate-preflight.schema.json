@@ -21,6 +21,7 @@
     "review_mode",
     "fallback_assignment_hash",
     "degraded",
+    "evidence_handling",
     "source_file",
     "receipt_hash"
   ],
@@ -105,6 +106,9 @@
     },
     "degraded": {
       "type": "boolean"
+    },
+    "evidence_handling": {
+      "enum": ["standard", "unparseable_origin_degraded"]
     },
     "source_file": {
       "type": "string",

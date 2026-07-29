@@ -1392,6 +1392,57 @@ class StandalonePackagingTests(unittest.TestCase):
                     relative,
                 )
 
+    def test_full_archive_requires_material_review_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            complete_archive = temp_root / "full-plugin.zip"
+            package_result = self.run_full_packager(fixture_root, complete_archive)
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+
+            validator_arguments = [
+                sys.executable,
+                "-B",
+                str(PACKAGE_VALIDATOR),
+                "--package-root",
+                str(fixture_root),
+                *(["--distribution-layout"] if DISTRIBUTION_LAYOUT else []),
+                "--full-archive",
+            ]
+            complete_result = subprocess.run(
+                [*validator_arguments, str(complete_archive)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(complete_result.returncode, 0, complete_result.stderr)
+
+            incomplete_archive = temp_root / "full-plugin-missing-command.zip"
+            with zipfile.ZipFile(complete_archive) as source, zipfile.ZipFile(
+                incomplete_archive, "w"
+            ) as destination:
+                for member in source.infolist():
+                    if member.filename != "commands/material-review.md":
+                        destination.writestr(member, source.read(member.filename))
+
+            self.assertTrue(
+                (fixture_root / "commands/material-review.md").is_file(),
+                "the separately validated source fixture must remain intact",
+            )
+            incomplete_result = subprocess.run(
+                [*validator_arguments, str(incomplete_archive)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertNotEqual(incomplete_result.returncode, 0)
+            self.assertIn(
+                f"{incomplete_archive.name}: missing archive entry commands/material-review.md",
+                incomplete_result.stderr,
+            )
+
     def test_extracted_full_archive_runs_retained_validation_surface(self) -> None:
         if DISTRIBUTION_LAYOUT:
             for relative in (
@@ -1703,6 +1754,82 @@ class StandalonePackagingTests(unittest.TestCase):
                 )
             )
             self.assertIn("agents/protocol-reviewer.md", full_names)
+
+    def test_unparseable_origin_provenance_contract_is_shipped(self) -> None:
+        markers = ("evidence_handling", "unparseable_origin_degraded")
+        review_surfaces = (
+            "SKILL.md",
+            "scripts/reviewctl.py",
+            "schemas/candidate-preflight.schema.json",
+            "schemas/coverage-status.schema.json",
+            "references/workflow.md",
+            "references/failure-model.md",
+        )
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+
+            source_result = self.run_package_validator(fixture_root)
+            standalone_source_result = self.run_review_validator(fixture_root)
+            self.assertEqual(source_result.returncode, 0, source_result.stderr)
+            self.assertEqual(
+                standalone_source_result.returncode,
+                0,
+                standalone_source_result.stderr,
+            )
+
+            full_output = temp_root / "full-plugin.zip"
+            standalone_output = temp_root / "material-review-standalone.zip"
+            packager = fixture_root / FULL_PACKAGER.relative_to(REPOSITORY_ROOT)
+            package_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(packager),
+                    "--package-root",
+                    str(fixture_root),
+                    "--output",
+                    str(full_output),
+                    "--standalone-output",
+                    str(standalone_output),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+
+            simplification_output = temp_root / "material-simplification.zip"
+            simplification_result = self.run_packager(
+                fixture_root, simplification_output
+            )
+            self.assertEqual(
+                simplification_result.returncode,
+                0,
+                simplification_result.stderr,
+            )
+
+            archive_surfaces = {
+                full_output: tuple(
+                    f"skills/material-code-review/{relative}"
+                    for relative in review_surfaces
+                ),
+                standalone_output: review_surfaces,
+                simplification_output: (
+                    "core/reviewctl.py",
+                    "core/schemas/candidate-preflight.schema.json",
+                    "core/schemas/coverage-status.schema.json",
+                ),
+            }
+            for archive_path, surfaces in archive_surfaces.items():
+                with self.subTest(archive=archive_path.name), zipfile.ZipFile(
+                    archive_path
+                ) as archive:
+                    for relative in surfaces:
+                        text = archive.read(relative).decode("utf-8")
+                        for marker in markers:
+                            self.assertIn(marker, text, f"{relative} lacks {marker}")
 
     def test_source_validator_requires_aligned_activation_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:

@@ -1434,6 +1434,41 @@ class ReviewCtlTest(unittest.TestCase):
         receipt = self.load("candidate-preflight/correctness/primary/attempt-2.json")
         self.assertEqual(receipt["verdict"], "valid")
 
+    def test_evidence_outside_range_line_only_correction_preserves_semantic_hash(
+        self,
+    ) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash, include_style=False)
+        draft["findings"][0]["line_start"] = 1
+        draft["findings"][0]["line_end"] = 1
+        first_path = self.write_json("outside-range-first.json", draft)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(first_path), expected=2,
+        )
+        first = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        self.assertEqual(first["verdict"], "correctable")
+        self.assertEqual(
+            [diagnostic["code"] for diagnostic in first["diagnostics"]],
+            ["EVIDENCE_OUTSIDE_RANGE"],
+        )
+        self.assertIsNotNone(first["semantic_hash"])
+
+        draft["findings"][0]["line_start"] = 2
+        draft["findings"][0]["line_end"] = 2
+        second_path = self.write_json("outside-range-corrected.json", draft)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(second_path),
+            "--supersedes", first["receipt_hash"],
+        )
+        second = self.load("candidate-preflight/correctness/primary/attempt-2.json")
+        self.assertEqual(second["verdict"], "valid")
+        self.assertEqual(second["semantic_hash"], first["semantic_hash"])
+        self.assertEqual(second["supersedes_receipt_hash"], first["receipt_hash"])
+        self.assertEqual(second["evidence_handling"], "standard")
+        self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+
     def test_candidate_preflight_route_budget_allows_correction_then_fallback(self) -> None:
         scope_hash = self.init_with_coverage()
         first_draft = self.candidate_set(scope_hash, include_style=False)
@@ -1611,6 +1646,222 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(
             self.load("candidate-preflight/correctness/primary/attempt-2.json")["verdict"], "valid"
         )
+
+    def test_unparseable_candidate_correction_propagates_degraded_origin_provenance(
+        self,
+    ) -> None:
+        scope_hash = self.init_with_coverage()
+        first = self.out / "provenance-invalid-candidate.json"
+        first.write_text("{not-json", encoding="utf-8")
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(first), expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        self.assertEqual(prior["evidence_handling"], "standard")
+        self.assertIsNone(prior["semantic_hash"])
+
+        corrected = self.write_json(
+            "provenance-syntax-corrected.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(corrected),
+            "--supersedes", prior["receipt_hash"],
+        )
+        corrected_receipt = self.load(
+            "candidate-preflight/correctness/primary/attempt-2.json"
+        )
+        self.assertEqual(
+            corrected_receipt["evidence_handling"], "unparseable_origin_degraded"
+        )
+        self.assertFalse(corrected_receipt["degraded"])
+
+        paths = [corrected]
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"provenance-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+            paths.append(path)
+
+        self.ingest_candidate_paths(paths)
+        bundle = self.load("candidates.json")
+        correctness_status = next(
+            item for item in bundle["coverage"]["lenses"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(
+            correctness_status["evidence_handling"],
+            "unparseable_origin_degraded",
+        )
+        self.assertFalse(correctness_status["degraded"])
+        correctness_set = next(
+            item for item in bundle["reviewer_sets"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(
+            correctness_set["evidence_handling"], "unparseable_origin_degraded"
+        )
+        correctness_candidate = next(
+            item for item in bundle["candidates"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(
+            correctness_candidate["evidence_handling"],
+            "unparseable_origin_degraded",
+        )
+        self.assertIn(
+            "evidence handling `unparseable_origin_degraded`",
+            (self.run_dir / "candidates.md").read_text(encoding="utf-8"),
+        )
+        self.assertTrue(
+            any(
+                "unparseable draft" in limitation
+                for limitation in bundle["coverage"]["limitations"]
+            )
+        )
+
+    def test_unparseable_origin_provenance_rejects_missing_tampered_or_fallback_conflation(
+        self,
+    ) -> None:
+        scope_hash = self.init_with_coverage()
+        valid_path = self.write_json(
+            "missing-provenance-candidate.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(valid_path),
+        )
+        receipt_path = self.run_dir / "candidate-preflight/correctness/primary/attempt-1.json"
+        provisional = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        provisional.pop("evidence_handling")
+        provisional["receipt_hash"] = reviewctl.canonical_hash(
+            {key: value for key, value in provisional.items() if key != "receipt_hash"}
+        )
+        receipt_path.write_text(json.dumps(provisional, indent=2), encoding="utf-8")
+        state = self.load("state.json")
+        state["candidate_preflight"]["correctness"]["primary"][0]["receipt_hash"] = (
+            provisional["receipt_hash"]
+        )
+        (self.run_dir / "state.json").write_text(
+            json.dumps(state, indent=2), encoding="utf-8"
+        )
+        _, stderr = self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            expected=2,
+        )
+        self.assertIn("restart this run", stderr)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+
+        self.run_id = "fallback-provenance"
+        scope_hash = self.init_with_coverage()
+        invalid = self.out / "fallback-provenance-invalid.json"
+        invalid.write_text("{not-json", encoding="utf-8")
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(invalid), expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        rejected = self.candidate_set(scope_hash, include_style=False)
+        rejected["findings"][0]["category"] = "not-a-category"
+        rejected_path = self.write_json("fallback-provenance-rejected.json", rejected)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(rejected_path),
+            "--supersedes", prior["receipt_hash"], expected=2,
+        )
+        rejected_receipt = self.load(
+            "candidate-preflight/correctness/primary/attempt-2.json"
+        )
+        self.assertEqual(
+            rejected_receipt["evidence_handling"], "unparseable_origin_degraded"
+        )
+        self.assign_fallback()
+
+        fallback = self.candidate_set(scope_hash, include_style=False)
+        fallback["reviewer_id"] = "fallback-correctness"
+        fallback["independence_group"] = "model-b"
+        fallback_path = self.write_json("fallback-provenance-valid.json", fallback)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+        )
+        fallback_receipt_path = (
+            self.run_dir / "candidate-preflight/correctness/fallback/attempt-1.json"
+        )
+        fallback_receipt = self.load(
+            "candidate-preflight/correctness/fallback/attempt-1.json"
+        )
+        self.assertEqual(fallback_receipt["evidence_handling"], "standard")
+        self.assertTrue(fallback_receipt["degraded"])
+
+        paths = [fallback_path]
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"fallback-provenance-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+            paths.append(path)
+
+        tampered = copy.deepcopy(fallback_receipt)
+        tampered["evidence_handling"] = "unparseable_origin_degraded"
+        tampered["receipt_hash"] = reviewctl.canonical_hash(
+            {key: value for key, value in tampered.items() if key != "receipt_hash"}
+        )
+        fallback_receipt_path.write_text(json.dumps(tampered, indent=2), encoding="utf-8")
+        state = self.load("state.json")
+        state["candidate_preflight"]["correctness"]["fallback"][0]["receipt_hash"] = (
+            tampered["receipt_hash"]
+        )
+        (self.run_dir / "state.json").write_text(
+            json.dumps(state, indent=2), encoding="utf-8"
+        )
+        self.ingest_candidate_paths(paths, expected=2)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+
+        fallback_receipt_path.write_text(
+            json.dumps(fallback_receipt, indent=2), encoding="utf-8"
+        )
+        state["candidate_preflight"]["correctness"]["fallback"][0]["receipt_hash"] = (
+            fallback_receipt["receipt_hash"]
+        )
+        (self.run_dir / "state.json").write_text(
+            json.dumps(state, indent=2), encoding="utf-8"
+        )
+        self.ingest_candidate_paths(paths)
+        bundle = self.load("candidates.json")
+        correctness_status = next(
+            item for item in bundle["coverage"]["lenses"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertTrue(correctness_status["degraded"])
+        self.assertEqual(
+            correctness_status["evidence_handling"],
+            "unparseable_origin_degraded",
+        )
+        correctness_set = next(
+            item for item in bundle["reviewer_sets"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertTrue(correctness_set["degraded"])
+        self.assertEqual(correctness_set["evidence_handling"], "standard")
 
     def test_coverage_completion_rejects_input_bytes_not_bound_to_valid_receipt(self) -> None:
         scope_hash = self.init_with_coverage()
@@ -2084,6 +2335,245 @@ class ReviewCtlTest(unittest.TestCase):
             correctness_status["primary_receipt_hash"], primary_receipt["receipt_hash"]
         )
         for relative in ("candidates.json", "ledger.json", "gates/findings.json"):
+            self.assertFalse((self.run_dir / relative).exists())
+
+    def test_required_fallback_none_primary_failure_attestation_reaches_review_incomplete(
+        self,
+    ) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][0]["fallback"] = "none"
+        plan_path = self.write_json("fallback-none-attestation-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+
+        primary_failure = self.record_reviewer_failure()
+        assert primary_failure is not None
+        self.assertEqual(primary_failure["route"], "primary")
+        self.assertEqual(primary_failure["assignment_kind"], "coverage_plan")
+
+        state_after_primary = copy.deepcopy(self.load("state.json"))
+        self.record_reviewer_failure(route="fallback", expected=2)
+        self.run_tool(
+            "assign-fallback", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness",
+            "--failure-trigger-kind", "reviewer_failure_attestation",
+            "--failure-trigger-hash", primary_failure["attestation_hash"],
+            "--reviewer-id", "fallback-correctness",
+            "--independence-group", "model-b", "--review-mode", "subagent",
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_after_primary)
+
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"fallback-none-attestation-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], "REVIEW_INCOMPLETE")
+        status = self.load("coverage-status.json")
+        correctness = next(
+            item for item in status["lenses"] if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(
+            correctness["primary_attestation_hash"],
+            primary_failure["attestation_hash"],
+        )
+        self.assertIsNone(correctness["fallback_attestation_hash"])
+        self.assertIsNone(correctness["fallback_assignment_hash"])
+        for relative in ("candidates.json", "ledger.json", "gates/findings.json"):
+            self.assertFalse((self.run_dir / relative).exists())
+
+    def test_required_fallback_none_primary_attestation_rejects_tampering_and_overlap(
+        self,
+    ) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][0]["fallback"] = "none"
+        plan_path = self.write_json("fallback-none-integrity-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+        primary_failure = self.record_reviewer_failure()
+        assert primary_failure is not None
+
+        candidate_path = self.write_json(
+            "fallback-none-overlap.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        state_before_overlap = copy.deepcopy(self.load("state.json"))
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(candidate_path), expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before_overlap)
+        self.assertFalse((self.run_dir / "candidate-preflight/correctness").exists())
+
+        attestation_path = (
+            self.run_dir / "reviewer-failure-attestations/correctness/primary.json"
+        )
+        tampered = copy.deepcopy(primary_failure)
+        tampered["assignment_hash"] = "0" * 64
+        attestation_path.write_text(json.dumps(tampered, indent=2), encoding="utf-8")
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before_overlap)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+
+    def test_correctable_fallback_none_primary_cannot_finalize_before_attempt_two(
+        self,
+    ) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][0]["fallback"] = "none"
+        plan_path = self.write_json("correctable-fallback-none-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+
+        correctable = self.candidate_set(scope_hash, include_style=False)
+        correctable["findings"][0]["evidence_quote"] = "return something else"
+        correctable_path = self.write_json(
+            "correctable-fallback-none-primary.json", correctable
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(correctable_path), expected=2,
+        )
+        receipt = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        self.assertEqual(receipt["verdict"], "correctable")
+
+        state_before = copy.deepcopy(self.load("state.json"))
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+
+    def test_correctable_fallback_none_primary_cannot_terminalize_partial_ingest(
+        self,
+    ) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][0]["fallback"] = "none"
+        plan_path = self.write_json("correctable-partial-ingest-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+
+        correctable = self.candidate_set(scope_hash, include_style=False)
+        correctable["findings"][0]["evidence_quote"] = "return something else"
+        correctable_path = self.write_json(
+            "correctable-partial-ingest-primary.json", correctable
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(correctable_path), expected=2,
+        )
+
+        valid_paths: list[Path] = []
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"correctable-partial-ingest-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+            valid_paths.append(path)
+
+        state_before = copy.deepcopy(self.load("state.json"))
+        self.ingest_candidate_paths(valid_paths, expected=2)
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_terminal_incomplete_ingest_with_valid_required_inputs_is_fail_closed(
+        self,
+    ) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][0]["fallback"] = "none"
+        plan_path = self.write_json("terminal-partial-ingest-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+
+        rejected = self.candidate_set(scope_hash, include_style=False)
+        rejected["findings"][0]["category"] = "not-a-category"
+        rejected_path = self.write_json("terminal-partial-rejected.json", rejected)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(rejected_path), expected=2,
+        )
+        rejected_receipt = self.load(
+            "candidate-preflight/correctness/primary/attempt-1.json"
+        )
+        self.assertEqual(rejected_receipt["verdict"], "rejected")
+
+        valid_paths: list[Path] = []
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"terminal-partial-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+            valid_paths.append(path)
+
+        self.ingest_candidate_paths(valid_paths, expected=2)
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], "REVIEW_INCOMPLETE")
+        self.assertNotIn("candidate_bundle_hash", state["hashes"])
+        status = self.load("coverage-status.json")
+        self.assertEqual(status["status"], "incomplete")
+        self.assertEqual(status["coverage_status_hash"], state["hashes"]["coverage_status_hash"])
+        status_by_lens = {item["lens_id"]: item for item in status["lenses"]}
+        self.assertEqual(
+            status_by_lens["correctness"]["primary_receipt_hash"],
+            rejected_receipt["receipt_hash"],
+        )
+        self.assertFalse(status_by_lens["correctness"]["completed"])
+        self.assertTrue(status_by_lens["test_adequacy"]["completed"])
+        self.assertTrue(status_by_lens["standards_alignment"]["completed"])
+        for relative in (
+            "candidates.json",
+            "candidates.md",
+            "ledger.json",
+            "ledger.md",
+            "gates/findings.json",
+            "fix-plan.json",
+        ):
             self.assertFalse((self.run_dir / relative).exists())
 
     def test_reviewer_failure_attestation_authorizes_bound_fallback(self) -> None:
@@ -3144,6 +3634,57 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(state["finding_status"]["F001"]["status"], "fixed")
         self.assertEqual(state["repair_round"], 0)
 
+    def test_stale_passing_global_evidence_can_authorize_causal_recovery(self) -> None:
+        global_test = {
+            "id": "global-regression",
+            "command": "python3 -c 'raise SystemExit(0)'",
+            "working_directory": ".",
+            "required": True,
+            "timeout_seconds": 30,
+            "purpose": "Prove stale-only passing evidence can authorize bounded recovery.",
+        }
+        self.retain_fixed_finding(global_tests=[global_test])
+        self.run_tool(
+            "run-global-test", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--test", "global-regression",
+        )
+        result = self.load("state.json")["global_test_results"]["global-regression"][-1]
+        self.assertEqual(result["exit_code"], 0)
+        self.assertFalse(result["timed_out"])
+        self.assertEqual(result["changed_paths_by_test"], [])
+        self.assertEqual(result["control_mutations_by_test"], [])
+        self.assertEqual(result.get("boundary_violations", []), [])
+
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a + b\n\n# later retained approved edit\n",
+            encoding="utf-8",
+        )
+        state = self.load("state.json")
+        current_guard = reviewctl.workspace_guard(self.repo)
+        self.assertNotEqual(result["workspace_guard_hash"], current_guard["guard_hash"])
+        state["expected_workspace_guard_hash"] = current_guard["guard_hash"]
+        (self.run_dir / "state.json").write_text(
+            json.dumps(state, indent=2), encoding="utf-8"
+        )
+
+        self.run_tool(
+            "begin-pre-verification-repair", "--repo-root", str(self.repo),
+            "--run-id", self.run_id, "--finding", "F001",
+            "--evidence-kind", "global_test", "--evidence-id", "global-regression",
+            "--evidence-hash", result["result_hash"], "--reason",
+            "The later retained approved edit made this passing evidence causally stale.",
+        )
+        recovered = self.load("state.json")
+        self.assertEqual(recovered["repair_targets"], ["F001"])
+        self.assertEqual(recovered["finding_status"]["F001"]["status"], "repair_pending")
+        self.assertEqual(recovered["repair_round"], 1)
+        recovery = recovered["pre_verification_recovery_history"][-1]
+        self.assertEqual(recovery["targets"], ["F001"])
+        self.assertEqual(recovery["evidence"]["result_hash"], result["result_hash"])
+        self.assertEqual(
+            recovery["evidence_issues"], ["stale after a later workspace edit"]
+        )
+
     def test_pre_verification_recovery_refresh_restores_test_mutation(self) -> None:
         trigger = self.out / "mutate-refresh"
         command = (
@@ -3170,7 +3711,7 @@ class ReviewCtlTest(unittest.TestCase):
         result = self.load("state.json")["final_test_refresh_results"]["F001"]["unit-regression"][-1]
         self.assertTrue(result["restored_after_mutation"])
         self.assertEqual(result["changed_paths_by_test"], ["calc.py"])
-        self.run_tool(
+        _, stderr = self.run_tool(
             "begin-pre-verification-repair",
             "--repo-root",
             str(self.repo),
@@ -3187,13 +3728,256 @@ class ReviewCtlTest(unittest.TestCase):
             "--evidence-hash",
             result["result_hash"],
             "--reason",
-            "The mutating required command requires a bounded F001 repair attempt.",
+            "Mutation-bearing evidence must not authorize a repair attempt.",
+            expected=2,
+        )
+        self.assertIn("not valid recovery evidence", stderr)
+        state = self.load("state.json")
+        self.assertEqual(state["finding_status"]["F001"]["status"], "fixed")
+        self.assertEqual(state["repair_round"], 0)
+        self.assertEqual(state["pre_verification_recovery_history"], [])
+
+    def test_mutating_or_boundary_invalid_test_evidence_cannot_authorize_recovery(
+        self,
+    ) -> None:
+        global_test = {
+            "id": "global-regression",
+            "command": "printf 'def add(a, b):\\n    return 999\\n' > calc.py",
+            "working_directory": ".",
+            "required": True,
+            "timeout_seconds": 30,
+            "purpose": "Produce restored mutation evidence for recovery rejection.",
+        }
+        self.retain_fixed_finding(global_tests=[global_test])
+        self.run_tool(
+            "run-global-test", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--test", "global-regression", expected=2,
+        )
+        base_result = self.load("state.json")["global_test_results"][
+            "global-regression"
+        ][-1]
+        self.assertEqual(base_result["changed_paths_by_test"], ["calc.py"])
+
+        recovery_prefix = (
+            "begin-pre-verification-repair",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--evidence-kind",
+            "global_test",
+            "--evidence-id",
+            "global-regression",
+            "--reason",
+            "Invalid command evidence cannot causally authorize repair.",
+        )
+        variants = (
+            {},
+            {"exit_code": 1},
+            {
+                "changed_paths_by_test": [],
+                "control_mutations_by_test": ["Git index"],
+            },
+            {
+                "changed_paths_by_test": [],
+                "control_mutations_by_test": [],
+                "boundary_violations": ["outside.py"],
+            },
+        )
+        for index, changes in enumerate(variants):
+            with self.subTest(global_variant=index):
+                result = copy.deepcopy(base_result)
+                result.update(changes)
+                result.pop("result_hash", None)
+                result["result_hash"] = reviewctl.canonical_hash(result)
+                state = self.load("state.json")
+                state["global_test_results"]["global-regression"][-1] = result
+                (self.run_dir / "state.json").write_text(
+                    json.dumps(state, indent=2), encoding="utf-8"
+                )
+                _, stderr = self.run_tool(
+                    *recovery_prefix,
+                    "--evidence-hash",
+                    result["result_hash"],
+                    expected=2,
+                )
+                self.assertIn("not valid recovery evidence", stderr)
+                rejected = self.load("state.json")
+                self.assertEqual(
+                    rejected["finding_status"]["F001"]["status"], "fixed"
+                )
+                self.assertEqual(rejected["repair_round"], 0)
+
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a - b\n", encoding="utf-8"
+        )
+        self.run_id = "finding-invalid-evidence"
+        trigger = self.out / "finding-invalid-trigger"
+        command = (
+            f"if test -f {trigger}; then "
+            "printf 'def add(a, b):\\n    return 999\\n' > calc.py; "
+            "else grep -Fq 'return a + b' calc.py; fi"
+        )
+        self.retain_fixed_finding(test_command=command)
+        trigger.write_text("trigger\n", encoding="utf-8")
+        self.run_tool(
+            "refresh-finding-test", "--repo-root", str(self.repo),
+            "--run-id", self.run_id, "--finding", "F001",
+            "--test", "unit-regression", expected=2,
+        )
+        result = self.load("state.json")["final_test_refresh_results"]["F001"][
+            "unit-regression"
+        ][-1]
+        _, stderr = self.run_tool(
+            "begin-pre-verification-repair", "--repo-root", str(self.repo),
+            "--run-id", self.run_id, "--finding", "F001",
+            "--evidence-kind", "finding_test", "--evidence-finding", "F001",
+            "--evidence-id", "unit-regression", "--evidence-hash",
+            result["result_hash"], "--reason",
+            "Restored finding-test mutation is invalid recovery evidence.", expected=2,
+        )
+        self.assertIn("not valid recovery evidence", stderr)
+        rejected = self.load("state.json")
+        self.assertEqual(rejected["finding_status"]["F001"]["status"], "fixed")
+        self.assertEqual(rejected["repair_round"], 0)
+
+    def test_nonmutating_failed_timed_out_or_stale_evidence_can_authorize_recovery(
+        self,
+    ) -> None:
+        scenarios = (
+            (
+                "failed-global-evidence",
+                "python3 -c 'raise SystemExit(1)'",
+                30,
+                "failed",
+            ),
+            (
+                "timed-out-global-evidence",
+                "python3 -c 'import time; time.sleep(2)'",
+                1,
+                "timed out",
+            ),
+        )
+        for run_id, command, timeout_seconds, expected_issue in scenarios:
+            with self.subTest(run_id=run_id):
+                (self.repo / "calc.py").write_text(
+                    "def add(a, b):\n    return a - b\n", encoding="utf-8"
+                )
+                self.run_id = run_id
+                global_test = {
+                    "id": "global-regression",
+                    "command": command,
+                    "working_directory": ".",
+                    "required": True,
+                    "timeout_seconds": timeout_seconds,
+                    "purpose": "Provide causal nonmutating recovery evidence.",
+                }
+                self.retain_fixed_finding(global_tests=[global_test])
+                self.run_tool(
+                    "run-global-test", "--repo-root", str(self.repo),
+                    "--run-id", self.run_id, "--test", "global-regression", expected=1,
+                )
+                result = self.load("state.json")["global_test_results"][
+                    "global-regression"
+                ][-1]
+                self.assertEqual(result["changed_paths_by_test"], [])
+                self.assertEqual(result["control_mutations_by_test"], [])
+                self.run_tool(
+                    "begin-pre-verification-repair", "--repo-root", str(self.repo),
+                    "--run-id", self.run_id, "--finding", "F001",
+                    "--evidence-kind", "global_test", "--evidence-id",
+                    "global-regression", "--evidence-hash", result["result_hash"],
+                    "--reason", "The nonmutating result causally requires F001 repair.",
+                )
+                recovered = self.load("state.json")
+                self.assertEqual(
+                    recovered["finding_status"]["F001"]["status"], "repair_pending"
+                )
+                self.assertEqual(recovered["repair_round"], 1)
+                self.assertIn(
+                    expected_issue,
+                    recovered["pre_verification_recovery_history"][-1][
+                        "evidence_issues"
+                    ],
+                )
+
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a - b\n", encoding="utf-8"
+        )
+        self.run_id = "failed-finding-evidence"
+        trigger = self.out / "finding-failure-trigger"
+        command = (
+            f"if test -f {trigger}; then exit 1; "
+            "else grep -Fq 'return a + b' calc.py; fi"
+        )
+        self.retain_fixed_finding(test_command=command)
+        trigger.write_text("trigger\n", encoding="utf-8")
+        self.run_tool(
+            "refresh-finding-test", "--repo-root", str(self.repo),
+            "--run-id", self.run_id, "--finding", "F001",
+            "--test", "unit-regression", expected=1,
+        )
+        result = self.load("state.json")["final_test_refresh_results"]["F001"][
+            "unit-regression"
+        ][-1]
+        self.assertEqual(result["changed_paths_by_test"], [])
+        self.run_tool(
+            "begin-pre-verification-repair", "--repo-root", str(self.repo),
+            "--run-id", self.run_id, "--finding", "F001",
+            "--evidence-kind", "finding_test", "--evidence-finding", "F001",
+            "--evidence-id", "unit-regression", "--evidence-hash",
+            result["result_hash"], "--reason",
+            "The nonmutating failed refresh causally requires F001 repair.",
         )
         recovered = self.load("state.json")
-        self.assertEqual(recovered["finding_status"]["F001"]["status"], "repair_pending")
-        self.assertEqual(
-            recovered["pre_verification_recovery_history"][-1]["evidence"]["source"],
-            "final_test_refresh",
+        self.assertEqual(recovered["repair_targets"], ["F001"])
+        self.assertIn(
+            "failed",
+            recovered["pre_verification_recovery_history"][-1]["evidence_issues"],
+        )
+
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a - b\n", encoding="utf-8"
+        )
+        self.run_id = "stale-global-evidence"
+        global_test = {
+            "id": "global-regression",
+            "command": "python3 -c 'raise SystemExit(0)'",
+            "working_directory": ".",
+            "required": True,
+            "timeout_seconds": 30,
+            "purpose": "Provide passing evidence that a later approved edit makes stale.",
+        }
+        self.retain_fixed_finding(global_tests=[global_test])
+        self.run_tool(
+            "run-global-test", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--test", "global-regression",
+        )
+        result = self.load("state.json")["global_test_results"]["global-regression"][-1]
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a + b\n\n# later approved edit\n",
+            encoding="utf-8",
+        )
+        state = self.load("state.json")
+        state["expected_workspace_guard_hash"] = reviewctl.workspace_guard(self.repo)[
+            "guard_hash"
+        ]
+        (self.run_dir / "state.json").write_text(
+            json.dumps(state, indent=2), encoding="utf-8"
+        )
+        self.run_tool(
+            "begin-pre-verification-repair", "--repo-root", str(self.repo),
+            "--run-id", self.run_id, "--finding", "F001",
+            "--evidence-kind", "global_test", "--evidence-id", "global-regression",
+            "--evidence-hash", result["result_hash"], "--reason",
+            "The later retained edit made the passing global result causally stale.",
+        )
+        recovered = self.load("state.json")
+        self.assertIn(
+            "stale after a later workspace edit",
+            recovered["pre_verification_recovery_history"][-1]["evidence_issues"],
         )
 
     @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks unavailable")

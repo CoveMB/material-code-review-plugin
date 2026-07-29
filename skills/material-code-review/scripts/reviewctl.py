@@ -94,6 +94,7 @@ SCOPE_RELATIONS = {"primary", "secondary", "pre_existing"}
 FIX_RISKS = {"low", "medium", "high", "unknown"}
 REVIEW_MODES = {"subagent", "controller", "external"}
 COVERAGE_FALLBACKS = {"sequential_degraded_self_audit", "none"}
+EVIDENCE_HANDLING_VALUES = {"standard", "unparseable_origin_degraded"}
 PREFLIGHT_ROUTES = {"primary", "fallback"}
 FALLBACK_TRIGGER_KINDS = {
     "candidate_preflight_receipt",
@@ -2848,10 +2849,16 @@ def render_candidates_markdown(bundle: dict[str, Any], rejections: list[dict[str
     if not bundle["candidates"]:
         lines.append("- none")
     for candidate in bundle["candidates"]:
+        evidence_suffix = (
+            f", evidence handling `{candidate['evidence_handling']}`"
+            if candidate.get("evidence_handling") not in {None, "standard"}
+            else ""
+        )
         lines.append(
             f"- **{candidate['candidate_id']}** [{candidate['severity']}/{candidate['confidence']}] "
             f"`{candidate['file']}:{candidate['line_start']}` — {candidate['title']} "
-            f"(reviewer `{candidate['reviewer_id']}`, group `{candidate['independence_group']}`)"
+            f"(reviewer `{candidate['reviewer_id']}`, group `{candidate['independence_group']}`"
+            f"{evidence_suffix})"
         )
     lines.extend(["", "## Rejected reviewer output", ""])
     if not rejections:
@@ -3339,6 +3346,7 @@ def load_candidate_preflight_receipt(
         "review_mode",
         "fallback_assignment_hash",
         "degraded",
+        "evidence_handling",
     }
     if not final_v1_fields.issubset(receipt) or "fallback" in receipt:
         raise provisional_v1_restart("candidate-preflight receipt")
@@ -3361,6 +3369,7 @@ def load_candidate_preflight_receipt(
             "review_mode",
             "fallback_assignment_hash",
             "degraded",
+            "evidence_handling",
             "source_file",
             "receipt_hash",
         },
@@ -3412,6 +3421,11 @@ def load_candidate_preflight_receipt(
             f"{relative_path}.fallback_assignment_hash",
         )
     require_bool(receipt["degraded"], f"{relative_path}.degraded")
+    evidence_handling = require_string(
+        receipt["evidence_handling"], f"{relative_path}.evidence_handling"
+    )
+    if evidence_handling not in EVIDENCE_HANDLING_VALUES:
+        raise ReviewError(f"{relative_path}.evidence_handling is invalid")
     require_string(receipt["source_file"], f"{relative_path}.source_file")
     receipt_hash = verify_embedded_hash(
         receipt,
@@ -3509,6 +3523,18 @@ def load_all_candidate_preflight_receipts(
                         raise ReviewError(
                             f"Candidate preflight {field} does not match its active assignment"
                         )
+                expected_evidence_handling = (
+                    "unparseable_origin_degraded"
+                    if route == "primary"
+                    and index == 2
+                    and route_receipts[0]["semantic_hash"] is None
+                    else "standard"
+                )
+                if receipt["evidence_handling"] != expected_evidence_handling:
+                    raise ReviewError(
+                        "Candidate preflight evidence handling does not match its "
+                        f"controller-derived origin for lens {lens_id}"
+                    )
                 if receipt["receipt_hash"] in seen_hashes:
                     raise ReviewError(
                         "Candidate preflight state contains a duplicate receipt hash"
@@ -3581,7 +3607,7 @@ def load_reviewer_failure_attestations(
         if lens_id not in plan_lenses:
             raise ReviewError(f"Reviewer failure references unplanned lens {lens_id}")
         plan_lens = plan_lenses[lens_id]
-        if not plan_lens["required"] or plan_lens["fallback"] != "sequential_degraded_self_audit":
+        if not plan_lens["required"]:
             raise ReviewError(f"Reviewer failure is not permitted for lens {lens_id}")
         routes = require_object(
             raw_routes, f"state.reviewer_failure_attestations.{lens_id} routes"
@@ -3595,6 +3621,13 @@ def load_reviewer_failure_attestations(
             raw_record = routes[route]
             if raw_record is None:
                 continue
+            if (
+                route == "fallback"
+                and plan_lens["fallback"] != "sequential_degraded_self_audit"
+            ):
+                raise ReviewError(
+                    f"Reviewer failure fallback is not permitted for lens {lens_id}"
+                )
             record = require_object(
                 raw_record,
                 f"state.reviewer_failure_attestations.{lens_id}.{route}",
@@ -3876,6 +3909,19 @@ def build_coverage_status(
             limitations.append(
                 f"{lens['lens_id']}: {availability} review evidence is unavailable"
             )
+        evidence_handling = (
+            "unparseable_origin_degraded"
+            if any(
+                item["evidence_handling"] == "unparseable_origin_degraded"
+                for item in matching
+            )
+            else "standard"
+        )
+        if evidence_handling == "unparseable_origin_degraded":
+            limitations.append(
+                f"{lens['lens_id']}: primary evidence handling originated from an "
+                "unparseable draft and was syntax-corrected by the same reviewer"
+            )
         lens_results.append(
             {
                 "lens_id": lens["lens_id"],
@@ -3904,6 +3950,7 @@ def build_coverage_status(
                     assignment["failure_trigger_hash"] if assignment else None
                 ),
                 "degraded": assignment is not None,
+                "evidence_handling": evidence_handling,
                 "reviewer_id": active_identity["reviewer_id"],
                 "independence_group": active_identity["independence_group"],
                 "review_mode": active_identity["review_mode"],
@@ -3961,12 +4008,8 @@ def require_exhausted_incomplete_required_routes(
             raise ReviewError(
                 f"Required lens {lens['lens_id']} has valid candidate bytes that must be ingested"
             )
-        primary_receipt = next(
-            (item for item in lens_receipts if item["route"] == "primary"),
-            None,
-        )
-        primary_failed = (
-            primary_receipt is not None and primary_receipt["verdict"] != "valid"
+        primary_failed = primary_candidate_route_failed(
+            [item for item in lens_receipts if item["route"] == "primary"]
         ) or ((lens["lens_id"], "primary") in attestation_routes)
         if not primary_failed:
             raise ReviewError(
@@ -3996,6 +4039,7 @@ def validate_coverage_status(
     *,
     state: dict[str, Any],
     coverage_plan: dict[str, Any],
+    receipts: list[dict[str, Any]],
     fallback_assignments: dict[str, dict[str, Any]],
     attestations: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -4008,6 +4052,7 @@ def validate_coverage_status(
             "fallback_trigger_kind",
             "fallback_trigger_hash",
             "degraded",
+            "evidence_handling",
         }.issubset(item)
         for item in status.get("lenses", [])
         if isinstance(item, dict)
@@ -4064,6 +4109,7 @@ def validate_coverage_status(
                 "fallback_trigger_kind",
                 "fallback_trigger_hash",
                 "degraded",
+                "evidence_handling",
                 "reviewer_id",
                 "independence_group",
                 "review_mode",
@@ -4177,6 +4223,24 @@ def validate_coverage_status(
                 )
         if require_bool(lens["degraded"], f"{context}.degraded") != (assignment is not None):
             raise ReviewError(f"Coverage status degraded marker differs for lens {lens_id}")
+        evidence_handling = require_string(
+            lens["evidence_handling"], f"{context}.evidence_handling"
+        )
+        if evidence_handling not in EVIDENCE_HANDLING_VALUES:
+            raise ReviewError(f"{context}.evidence_handling is invalid")
+        expected_evidence_handling = (
+            "unparseable_origin_degraded"
+            if any(
+                item["lens_id"] == lens_id
+                and item["evidence_handling"] == "unparseable_origin_degraded"
+                for item in receipts
+            )
+            else "standard"
+        )
+        if evidence_handling != expected_evidence_handling:
+            raise ReviewError(
+                f"Coverage status evidence handling differs for lens {lens_id}"
+            )
         if completion_route == "fallback" and assignment is None:
             raise ReviewError(
                 f"Coverage status fallback completion lacks an assignment for lens {lens_id}"
@@ -4207,13 +4271,14 @@ def load_verified_coverage_status(
     coverage_plan_hash = require_sha256(
         state["hashes"]["coverage_plan_hash"], "state coverage-plan hash"
     )
-    _, fallback_assignments, attestations = load_review_evidence(
+    receipts, fallback_assignments, attestations = load_review_evidence(
         run_dir, state, coverage_plan, coverage_plan_hash
     )
     status = validate_coverage_status(
         raw,
         state=state,
         coverage_plan=coverage_plan,
+        receipts=receipts,
         fallback_assignments=fallback_assignments,
         attestations=attestations,
     )
@@ -4275,7 +4340,14 @@ def command_record_reviewer_failure(args: argparse.Namespace) -> int:
         )
         if lens is None:
             raise ReviewError(f"Lens is not assigned by the coverage plan: {args.lens}")
-        if not lens["required"] or lens["fallback"] != "sequential_degraded_self_audit":
+        if not lens["required"]:
+            raise ReviewError(
+                f"Lens {args.lens} does not permit reviewer-failure evidence"
+            )
+        if (
+            args.route == "fallback"
+            and lens["fallback"] != "sequential_degraded_self_audit"
+        ):
             raise ReviewError(
                 f"Lens {args.lens} does not permit reviewer-failure fallback evidence"
             )
@@ -4708,6 +4780,11 @@ def command_check_candidates_locked(
             active_identity["assignment_hash"] if args.fallback else None
         ),
         "degraded": args.fallback,
+        "evidence_handling": (
+            "unparseable_origin_degraded"
+            if previous is not None and previous["semantic_hash"] is None
+            else "standard"
+        ),
         "source_file": str(source),
     }
     receipt_hash = canonical_hash(receipt)
@@ -4811,6 +4888,7 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
                     "review_route": receipt["route"],
                     "fallback_assignment_hash": receipt["fallback_assignment_hash"],
                     "degraded": receipt["degraded"],
+                    "evidence_handling": receipt["evidence_handling"],
                 }
                 normalized_set.update(provenance)
                 for finding in normalized_set["findings"]:
@@ -5024,6 +5102,53 @@ def command_finalize_coverage(args: argparse.Namespace) -> int:
         return 0
 
 
+def validate_normalized_evidence_handling(candidates_bundle: dict[str, Any]) -> None:
+    collections: list[tuple[str, list[Any]]] = []
+    for name in ("reviewer_sets", "candidates"):
+        values = require_array(candidates_bundle.get(name), f"normalized candidates.{name}")
+        collections.append((name, values))
+        if any(
+            not isinstance(value, dict) or "evidence_handling" not in value
+            for value in values
+        ):
+            raise provisional_v1_restart("normalized candidates")
+        for index, value in enumerate(values):
+            evidence_handling = require_string(
+                value["evidence_handling"],
+                f"normalized candidates.{name}[{index}].evidence_handling",
+            )
+            if evidence_handling not in EVIDENCE_HANDLING_VALUES:
+                raise ReviewError(
+                    f"normalized candidates.{name}[{index}].evidence_handling is invalid"
+                )
+
+    reviewer_sets = collections[0][1]
+    for index, candidate in enumerate(collections[1][1]):
+        matching_sets = [
+            reviewer_set
+            for reviewer_set in reviewer_sets
+            if all(
+                candidate.get(field) == reviewer_set.get(field)
+                for field in (
+                    "reviewer_id",
+                    "independence_group",
+                    "lens_id",
+                    "review_route",
+                    "fallback_assignment_hash",
+                    "degraded",
+                )
+            )
+        ]
+        if not matching_sets or any(
+            reviewer_set["evidence_handling"] != candidate["evidence_handling"]
+            for reviewer_set in matching_sets
+        ):
+            raise ReviewError(
+                "Normalized candidate evidence handling differs from its reviewer set "
+                f"at index {index}"
+            )
+
+
 def command_compile_ledger(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -5042,6 +5167,7 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
     if state.get("coverage_required", False):
         coverage_plan, _ = load_verified_coverage_plan(run_dir, state)
         coverage_status = load_verified_coverage_status(run_dir, state, coverage_plan)
+        validate_normalized_evidence_handling(candidates_bundle)
         if coverage_status["status"] != "complete":
             raise ReviewError("Cannot compile ledger with incomplete required review coverage")
         if candidates_bundle.get("coverage") != coverage_status:
@@ -6669,18 +6795,26 @@ def resolve_pre_verification_recovery_evidence(
         for key in ("command", "working_directory", "timeout_seconds"):
             if result.get(key) != test[key]:
                 raise ReviewError("Latest global-test evidence does not match the Gate-B-approved test definition")
-        issues: list[str] = []
+        recoverable_issues: list[str] = []
         if result.get("timed_out"):
-            issues.append("timed out")
+            recoverable_issues.append("timed out")
         elif result.get("exit_code") != 0:
-            issues.append("failed")
+            recoverable_issues.append("failed")
+        invalid_issues: list[str] = []
         if result.get("changed_paths_by_test"):
-            issues.append("mutated workspace paths")
+            invalid_issues.append("mutated workspace paths")
         if result.get("control_mutations_by_test"):
-            issues.append("mutated repository control state")
+            invalid_issues.append("mutated repository control state")
+        if result.get("boundary_violations"):
+            invalid_issues.append("crossed the approved path boundary")
+        if invalid_issues:
+            raise ReviewError(
+                "Latest global-test evidence is not valid recovery evidence: "
+                + "; ".join(invalid_issues)
+            )
         if result.get("workspace_guard_hash") != current["guard_hash"]:
-            issues.append("stale after a later workspace edit")
-        if not issues:
+            recoverable_issues.append("stale after a later workspace edit")
+        if not recoverable_issues:
             raise ReviewError("Latest global-test evidence is current and passing; recovery authority is absent")
         return (
             {
@@ -6690,7 +6824,7 @@ def resolve_pre_verification_recovery_evidence(
                 "source": "global_test_results",
                 "result_hash": result_hash,
             },
-            issues,
+            recoverable_issues,
         )
 
     if evidence_kind != "finding_test":
@@ -6720,15 +6854,24 @@ def resolve_pre_verification_recovery_evidence(
         result=result,
         attempt=attempt,
     )
-    invalid_definition = [
+    invalid_evidence = [
         issue
         for issue in issues
-        if "does not match the approved" in issue
+        if issue
+        in {
+            "mutated workspace paths",
+            "mutated repository control state",
+            "crossed the approved path boundary",
+        }
+        or "does not match the approved" in issue
         or "different approved test definition" in issue
         or "superseded retained attempt" in issue
     ]
-    if invalid_definition:
-        raise ReviewError("Latest finding-test evidence is not valid recovery evidence: " + "; ".join(invalid_definition))
+    if invalid_evidence:
+        raise ReviewError(
+            "Latest finding-test evidence is not valid recovery evidence: "
+            + "; ".join(invalid_evidence)
+        )
     if not issues:
         raise ReviewError("Latest finding-test evidence is current and passing; recovery authority is absent")
     return (

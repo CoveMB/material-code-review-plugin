@@ -18,6 +18,7 @@
 | Required lens remains unavailable after every permitted route has terminal evidence | Run `finalize-coverage`; persist `REVIEW_INCOMPLETE`, preserve receipt/attestation provenance, emit no candidates or merge verdict, and do not proceed to Gate A. |
 | Required route lacks terminal evidence or retains unused correction/fallback authority | Refuse coverage finalization; do not infer failure from silence. |
 | All reviewer outputs fail | Report degraded/blocked coverage; do not fabricate findings. |
+| Unparseable primary draft is syntax-corrected on attempt 2 | Preserve the primary identity and fallback marker, but derive and propagate `evidence_handling=unparseable_origin_degraded`; missing or forged provenance requires restarting the provisional run. |
 | Validator unavailable | Use controller-direct only for mechanically authoritative facts; otherwise record degraded self-audit or uncertainty. |
 | Validator rejects | Discard with `VALIDATOR_REJECTED`. |
 | Validator uncertain | Keep only blocker/high with explicit required pre-fix verification; otherwise discard. |

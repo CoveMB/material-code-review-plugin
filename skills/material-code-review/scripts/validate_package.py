@@ -38,6 +38,18 @@ RECOVERY_CONTROL_MARKERS = (
     "begin-pre-verification-repair",
     "latest failed or stale required test evidence",
 )
+EVIDENCE_HANDLING_MARKERS = (
+    "evidence_handling",
+    "unparseable_origin_degraded",
+)
+EVIDENCE_HANDLING_SURFACES = (
+    "SKILL.md",
+    "scripts/reviewctl.py",
+    "schemas/candidate-preflight.schema.json",
+    "schemas/coverage-status.schema.json",
+    "references/workflow.md",
+    "references/failure-model.md",
+)
 REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -151,6 +163,16 @@ def main() -> int:
             continue
         if data.get("type") != "object" or data.get("additionalProperties") is not False:
             errors.append(f"schema must be object and fail closed: {path.name}")
+    for relative in EVIDENCE_HANDLING_SURFACES:
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in EVIDENCE_HANDLING_MARKERS:
+            if marker not in text:
+                errors.append(
+                    f"evidence-handling contract missing {marker} in {relative}"
+                )
     yaml = ROOT / "agents/openai.yaml"
     if yaml.is_file():
         text = yaml.read_text(encoding="utf-8")
