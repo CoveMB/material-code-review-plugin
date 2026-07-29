@@ -45,3 +45,5 @@ env/
 # Repository-maintainer evaluation state and local SDD scratch data
 .evaluation-runs/
 .superpowers/
+
+docs/superpowers/
