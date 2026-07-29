@@ -1651,6 +1651,39 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertIn("Run predates required coverage; start a new run.", stderr)
         self.assertEqual(self.load("state.json")["phase"], "ADJUDICATED")
 
+    def test_legacy_candidates_run_cannot_adjudicate_or_create_artifacts(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        self.ingest_candidate_paths(paths)
+        candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
+        adjudication_path = self.write_json(
+            "legacy-adjudication.json", self.adjudication(scope_hash, candidate_hash)
+        )
+        self.make_run_legacy()
+        before = self.load("state.json")
+        self.assertEqual(before["phase"], reviewctl.PHASE_CANDIDATES)
+        for artifact in ("adjudication.normalized.json", "adjudication.md", "ledger.json", "ledger.md"):
+            self.assertFalse((self.run_dir / artifact).exists())
+
+        _, stderr = self.run_tool(
+            "compile-ledger",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(adjudication_path),
+            expected=2,
+        )
+
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        after = self.load("state.json")
+        self.assertEqual(after["phase"], before["phase"])
+        self.assertEqual(after["hashes"], before["hashes"])
+        self.assertEqual(after["events"], before["events"])
+        for artifact in ("adjudication.normalized.json", "adjudication.md", "ledger.json", "ledger.md"):
+            self.assertFalse((self.run_dir / artifact).exists())
+
     def test_legacy_plan_approved_run_cannot_begin_fix(self) -> None:
         self.reach_plan_approved()
         self.make_run_legacy()
