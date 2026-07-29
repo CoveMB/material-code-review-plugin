@@ -413,6 +413,23 @@ def is_simplification_state(state: dict[str, Any]) -> bool:
     return state.get("profile") == SIMPLIFICATION_PROFILE
 
 
+LEGACY_ALLOWED_COMMANDS = frozenset({"status", "check-scope", "rollback-finding", "abort-fixes"})
+
+
+def enforce_command_compatibility(args: argparse.Namespace) -> None:
+    if args.command == "init":
+        return
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if is_simplification_state(state):
+        return
+    if state.get("coverage_required") is True and state.get("workflow_profile") == WORKFLOW_PROFILE_REVIEW:
+        return
+    if args.command not in LEGACY_ALLOWED_COMMANDS:
+        raise ReviewError("Run predates required coverage; start a new run.")
+
+
 def require_current_material_review_contract(state: dict[str, Any]) -> None:
     if is_simplification_state(state):
         raise ReviewError("Material-review coverage is not used for material simplification")
@@ -4737,6 +4754,7 @@ def main(
     if hasattr(args, "run_id") and args.run_id == "":
         args.run_id = None
     try:
+        enforce_command_compatibility(args)
         return int(args.func(args))
     except ReviewError as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)

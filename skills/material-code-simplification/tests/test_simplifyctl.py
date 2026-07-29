@@ -511,8 +511,8 @@ class SimplifyCtlTest(unittest.TestCase):
         self.assertEqual(len(ls_files_calls), 1)
         self.assertFalse(any(argument.startswith(":(literal)") for argument in ls_files_calls[0]))
 
-    def test_codebase_scope_completes_full_gated_repair_lifecycle(self) -> None:
-        self.init_src("--exclude-untracked")
+    def complete_full_gated_repair_lifecycle(self, *init_arguments: str) -> dict:
+        self.run_tool("init", "--repo-root", str(self.repo), "--run-id", self.run_id, *init_arguments)
         scope_hash = self.load("state.json")["scope_hash"]
         candidate = {
             "schema_version": "material-review/candidate-set/v1",
@@ -824,7 +824,6 @@ class SimplifyCtlTest(unittest.TestCase):
 
         state = self.load("state.json")
         self.assertEqual(state["phase"], "COMPLETE")
-        self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "codebase")
         self.assertEqual(self.load("ledger.json")["findings"][0]["finding_id"], "F001")
         self.assertEqual(plan["items"][0]["allowed_paths"], ["src/service.py"])
         self.assertEqual(fix_summary["changed_paths"], ["src/service.py"])
@@ -836,6 +835,45 @@ class SimplifyCtlTest(unittest.TestCase):
             0,
         )
         self.assertFalse((self.run_dir / "fix-plan.amended.json").exists())
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], "COMPLETE")
+        self.assertNotIn("coverage_plan_hash", state["hashes"])
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+        return state
+
+    def test_codebase_scope_completes_full_gated_repair_lifecycle(self) -> None:
+        state = self.complete_full_gated_repair_lifecycle(
+            "--scope", "codebase", "--path", "src", "--exclude-untracked"
+        )
+        self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "codebase")
+        self.assertEqual(state["profile"], "material-code-simplification")
+
+    def test_change_scope_completes_full_gated_repair_lifecycle(self) -> None:
+        (self.repo / "src" / "service.py").write_text(
+            "def value():\n    return 1\n# selected uncommitted change\n", encoding="utf-8"
+        )
+        state = self.complete_full_gated_repair_lifecycle("--scope", "uncommitted")
+        self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "uncommitted")
+        self.assertEqual(state["profile"], "material-code-simplification")
+
+    def test_unprofiled_delegated_legacy_state_must_restart(self) -> None:
+        self.init_src("--exclude-untracked")
+        state = self.load("state.json")
+        state.pop("profile", None)
+        (self.run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        _, stderr = self.run_tool(
+            "gate-findings",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--approve",
+            "F001",
+            "--user-statement",
+            "Attempt to advance an ambiguous delegated state.",
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
 
 
 if __name__ == "__main__":

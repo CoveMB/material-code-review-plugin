@@ -83,6 +83,19 @@ class ReviewCtlTest(unittest.TestCase):
         )
         return self.load("state.json")["scope_hash"]
 
+    def make_run_legacy(self) -> None:
+        state = self.load("state.json")
+        state.pop("coverage_required", None)
+        state.pop("workflow_profile", None)
+        (self.run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    def reach_plan_approved(self) -> None:
+        self.approve_and_plan()
+
+    def reach_fixing(self) -> None:
+        self.approve_and_plan()
+        self.run_tool("begin-fix", "--repo-root", str(self.repo), "--run-id", self.run_id)
+
     def coverage_plan(
         self,
         scope_hash: str,
@@ -1592,13 +1605,164 @@ class ReviewCtlTest(unittest.TestCase):
 
     def test_coverage_plan_rejects_pre_contract_state(self) -> None:
         scope_hash = self.init()
-        state = self.load("state.json")
-        state.pop("coverage_required", None)
-        state.pop("workflow_profile", None)
-        (self.run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        self.make_run_legacy()
         path = self.write_json("pre-contract-state.json", self.coverage_plan(scope_hash))
         _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
         self.assertIn("Run predates required coverage", stderr)
+
+    def test_legacy_context_run_cannot_record_coverage_or_ingest(self) -> None:
+        scope_hash = self.init()
+        self.make_run_legacy()
+        plan = self.write_json("legacy-plan.json", self.coverage_plan(scope_hash))
+        for command in (
+            ("record-coverage", "--input", str(plan)),
+            (
+                "ingest-candidates",
+                "--input",
+                str(self.write_json("legacy-candidate.json", self.candidate_set(scope_hash))),
+            ),
+        ):
+            _, stderr = self.run_tool(
+                command[0],
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                *command[1:],
+                expected=2,
+            )
+            self.assertIn("Run predates required coverage; start a new run.", stderr)
+
+    def test_legacy_adjudicated_run_cannot_advance_gate_a(self) -> None:
+        self.reach_adjudicated()
+        self.make_run_legacy()
+        _, stderr = self.run_tool(
+            "gate-findings",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--approve",
+            "F001",
+            "--user-statement",
+            "Attempt legacy approval.",
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertEqual(self.load("state.json")["phase"], "ADJUDICATED")
+
+    def test_legacy_plan_approved_run_cannot_begin_fix(self) -> None:
+        self.reach_plan_approved()
+        self.make_run_legacy()
+        _, stderr = self.run_tool(
+            "begin-fix", "--repo-root", str(self.repo), "--run-id", self.run_id, expected=2
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertFalse((self.run_dir / "checkpoints" / "pre-fix").exists())
+
+    def test_legacy_fixing_run_can_abort_and_restore(self) -> None:
+        self.reach_fixing()
+        original = (self.repo / "calc.py").read_text(encoding="utf-8")
+        (self.repo / "calc.py").write_text("def add(a, b):\n    return 999\n", encoding="utf-8")
+        self.make_run_legacy()
+        self.run_tool(
+            "abort-fixes",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--reason",
+            "Retire legacy run safely.",
+        )
+        self.assertEqual((self.repo / "calc.py").read_text(encoding="utf-8"), original)
+        self.assertEqual(self.load("state.json")["phase"], "ABORTED")
+
+    def test_legacy_run_preserves_allowed_observation_and_rollback_rules(self) -> None:
+        self.init()
+        self.make_run_legacy()
+        _, stderr = self.run_tool(
+            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
+        )
+        self.assertEqual(stderr, "")
+        _, stderr = self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        self.assertEqual(stderr, "")
+        _, stderr = self.run_tool(
+            "rollback-finding",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--reason",
+            "No active finding exists.",
+            expected=2,
+        )
+        self.assertIn("rollback-finding requires an active finding in FIXING phase", stderr)
+
+    def test_legacy_active_fixing_run_can_rollback_and_restore(self) -> None:
+        self.reach_fixing()
+        self.run_tool(
+            "start-finding",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+        )
+        original = (self.repo / "calc.py").read_text(encoding="utf-8")
+        (self.repo / "calc.py").write_text("def add(a, b):\n    return 999\n", encoding="utf-8")
+        self.make_run_legacy()
+        self.run_tool(
+            "rollback-finding",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--reason",
+            "Retire the legacy active finding safely.",
+        )
+        self.assertEqual((self.repo / "calc.py").read_text(encoding="utf-8"), original)
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], "FIXING")
+        self.assertIsNone(state["active_finding"])
+
+    def test_legacy_run_rejects_later_lifecycle_commands_before_mutation(self) -> None:
+        scope_hash = self.init()
+        self.make_run_legacy()
+        state_path = self.run_dir / "state.json"
+        initial_state = state_path.read_bytes()
+        initial_source = (self.repo / "calc.py").read_bytes()
+        plan = self.write_json("legacy-forward-plan.json", self.coverage_plan(scope_hash))
+        for command in (
+            ("compile-ledger", "--input", str(plan)),
+            ("validate-plan", "--input", str(plan)),
+            ("gate-plan", "--approve", "--user-statement", "Attempt legacy Gate B."),
+            ("start-finding", "--finding", "F001"),
+            ("run-test", "--finding", "F001", "--test", "unit-regression"),
+            ("finish-finding", "--finding", "F001", "--status", "fixed", "--note", "Attempt legacy completion."),
+            ("run-global-test", "--test", "global-regression"),
+            ("prepare-verification",),
+            ("record-verification", "--input", str(plan)),
+            ("begin-repair",),
+        ):
+            _, stderr = self.run_tool(
+                command[0],
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                *command[1:],
+                expected=2,
+            )
+            self.assertIn("Run predates required coverage; start a new run.", stderr)
+            self.assertEqual(state_path.read_bytes(), initial_state)
+            self.assertEqual((self.repo / "calc.py").read_bytes(), initial_source)
 
 
 if __name__ == "__main__":
