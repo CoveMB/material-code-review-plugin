@@ -32,6 +32,7 @@ TOOL_VERSION = "1.2.0"
 STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
+CANDIDATE_SCHEMA_REVIEW = "material-review/candidate-set/v2"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
 LEDGER_SCHEMA = "material-review/ledger/v3"
@@ -1538,6 +1539,11 @@ def validate_candidate_set(
     state: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     obj = require_object(raw, f"candidate set {source_file}")
+    material_review = not is_simplification_state(state)
+    expected_schema = CANDIDATE_SCHEMA_REVIEW if material_review else CANDIDATE_SCHEMA
+    schema_version = require_string(obj.get("schema_version"), f"{source_file}.schema_version")
+    if schema_version != expected_schema:
+        raise ReviewError(f"{source_file}: unsupported schema_version")
     expected_top = {
         "schema_version",
         "scope_hash",
@@ -1547,11 +1553,20 @@ def validate_candidate_set(
         "findings",
         "coverage",
     }
+    if material_review:
+        expected_top.update({"coverage_plan_hash", "lens_id"})
     require_exact_keys(obj, expected_top, f"candidate set {source_file}")
-    if obj["schema_version"] != CANDIDATE_SCHEMA:
-        raise ReviewError(f"{source_file}: unsupported schema_version")
     if obj["scope_hash"] != state["scope_hash"]:
         raise ReviewError(f"{source_file}: scope_hash does not match the active frozen scope")
+    coverage_plan_hash: str | None = None
+    lens_id: str | None = None
+    if material_review:
+        coverage_plan_hash = require_sha256(obj["coverage_plan_hash"], f"{source_file}.coverage_plan_hash")
+        if coverage_plan_hash != state["hashes"].get("coverage_plan_hash"):
+            raise ReviewError(f"{source_file}: coverage_plan_hash does not match the recorded coverage plan")
+        lens_id = require_string(obj["lens_id"], f"{source_file}.lens_id")
+        if re.fullmatch(r"[a-z][a-z0-9_]*", lens_id) is None:
+            raise ReviewError(f"{source_file}.lens_id has an invalid format")
     reviewer_id = require_string(obj["reviewer_id"], f"{source_file}.reviewer_id")
     independence_group = require_string(obj["independence_group"], f"{source_file}.independence_group")
     review_mode = require_string(obj["review_mode"], f"{source_file}.review_mode")
@@ -1702,6 +1717,10 @@ def validate_candidate_set(
         reasons = "; ".join(item["reason"] for item in rejections[:3])
         suffix = f": {reasons}" if reasons else ""
         raise ReviewError(f"{source_file}: every submitted finding failed validation{suffix}")
+    if material_review and rejections:
+        raise ReviewError(
+            f"{source_file}: candidate set includes invalid finding: {rejections[0]['reason']}"
+        )
 
     normalized_set = {
         "reviewer_id": reviewer_id,
@@ -1714,7 +1733,70 @@ def validate_candidate_set(
         },
         "findings": valid_findings,
     }
+    if material_review:
+        normalized_set["coverage_plan_hash"] = coverage_plan_hash
+        normalized_set["lens_id"] = lens_id
     return normalized_set, rejections
+
+
+def required_paths_by_lens(plan: dict[str, Any]) -> dict[str, set[str]]:
+    required: dict[str, set[str]] = {item["lens_id"]: set() for item in plan["lenses"]}
+    for assessment in plan["risk_assessments"]:
+        if not assessment["present"]:
+            continue
+        for lens_id in REQUIRED_LENSES_BY_RISK[assessment["code"]]:
+            required[lens_id].update(assessment["evidence_paths"])
+    return required
+
+
+def validate_candidate_wave_against_coverage(
+    plan: dict[str, Any], candidate_sets: list[dict[str, Any]]
+) -> None:
+    assignments = {item["lens_id"]: item for item in plan["lenses"]}
+    required_paths = required_paths_by_lens(plan)
+    seen: set[str] = set()
+    for candidate_set in candidate_sets:
+        lens_id = candidate_set["lens_id"]
+        if lens_id in seen:
+            raise ReviewError(f"Duplicate candidate lens_id: {lens_id}")
+        seen.add(lens_id)
+        assignment = assignments.get(lens_id)
+        if assignment is None:
+            raise ReviewError(f"Lens is absent from coverage plan: {lens_id}")
+        actual = (
+            candidate_set["reviewer_id"],
+            candidate_set["independence_group"],
+            candidate_set["review_mode"],
+        )
+        expected = (
+            assignment["reviewer_id"],
+            assignment["independence_group"],
+            assignment["review_mode"],
+        )
+        if actual != expected:
+            raise ReviewError(f"candidate identity does not match coverage assignment: {lens_id}")
+        missing_paths = required_paths[lens_id] - set(candidate_set["coverage"]["files_reviewed"])
+        if missing_paths:
+            raise ReviewError(
+                f"{lens_id} did not review required risk paths: " + ", ".join(sorted(missing_paths))
+            )
+    missing = sorted(
+        item["lens_id"] for item in plan["lenses"] if item["required"] and item["lens_id"] not in seen
+    )
+    if missing:
+        raise ReviewError("Missing required review coverage: " + ", ".join(missing))
+
+
+def validate_material_review_coverage_paths(
+    candidate_sets: list[dict[str, Any]], *, scope_paths: set[str]
+) -> None:
+    for candidate_set in candidate_sets:
+        out_of_scope = set(candidate_set["coverage"]["files_reviewed"]) - scope_paths
+        if out_of_scope:
+            raise ReviewError(
+                "coverage.files_reviewed contains a path outside the frozen scope: "
+                + ", ".join(sorted(out_of_scope))
+            )
 
 
 def validate_validation_object(value: Any, context: str) -> dict[str, Any]:
@@ -2852,6 +2934,93 @@ def command_check_scope(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_ingest_material_review_candidates(
+    args: argparse.Namespace, *, repo: Path, run_dir: Path, state: dict[str, Any]
+) -> int:
+    input_hashes = [sha256_file(Path(raw).expanduser().resolve()) for raw in args.input]
+    reviewer_sets: list[dict[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    try:
+        plan = load_recorded_coverage_plan(run_dir, state)
+        for raw_path in args.input:
+            source = Path(raw_path).expanduser().resolve()
+            try:
+                normalized_set, finding_rejections = validate_candidate_set(
+                    load_json(source), source_file=source, repo=repo, run_dir=run_dir, state=state
+                )
+                reviewer_sets.append(normalized_set)
+                rejections.extend(finding_rejections)
+            except ReviewError as exc:
+                rejections.append({"source_file": str(source), "reason": str(exc)})
+        if rejections:
+            raise ReviewError("Candidate ingestion failed: " + "; ".join(item["reason"] for item in rejections))
+        validate_candidate_wave_against_coverage(plan, reviewer_sets)
+        scope_paths = all_scope_paths(load_verified_scope(run_dir, state)["identity"])
+        validate_material_review_coverage_paths(reviewer_sets, scope_paths=scope_paths)
+    except ReviewError as exc:
+        if not rejections or rejections[-1].get("reason") != str(exc):
+            rejections.append({"reason": str(exc)})
+        failure = {
+            "schema_version": "material-review/candidate-ingestion-failure/v1",
+            "scope_hash": state["scope_hash"],
+            "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+            "input_hashes": input_hashes,
+            "rejections": rejections,
+        }
+        atomic_write_json(run_dir / "candidate-ingestion-failure.json", failure)
+        raise
+
+    candidates: list[dict[str, Any]] = []
+    for reviewer_set in reviewer_sets:
+        candidates.extend(reviewer_set.pop("findings"))
+    candidates.sort(
+        key=lambda item: (
+            item["reviewer_id"],
+            item["independence_group"],
+            item["local_id"],
+            item["file"],
+            item["line_start"],
+        )
+    )
+    for index, candidate in enumerate(candidates, start=1):
+        candidate["candidate_id"] = f"C{index:03d}"
+
+    payload = {
+        "schema_version": NORMALIZED_CANDIDATES_SCHEMA,
+        "scope_hash": state["scope_hash"],
+        "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+        "reviewer_sets": reviewer_sets,
+        "candidates": candidates,
+        "rejections": rejections,
+    }
+    bundle_hash = canonical_hash(payload)
+    payload["candidate_bundle_hash"] = bundle_hash
+    payload["generated_at"] = utc_now()
+    atomic_write_json(run_dir / "candidates.json", payload)
+    atomic_write_json(run_dir / "candidate-rejections.json", rejections)
+    atomic_write_text(run_dir / "candidates.md", render_candidates_markdown(payload, rejections))
+
+    state["phase"] = PHASE_CANDIDATES
+    state["hashes"]["candidate_bundle_hash"] = bundle_hash
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "candidates_ingested",
+            "reviewer_sets": len(reviewer_sets),
+            "candidates": len(candidates),
+            "rejections": len(rejections),
+            "candidate_bundle_hash": bundle_hash,
+        }
+    )
+    save_state(run_dir, state)
+    print(f"[OK] Candidate bundle written: {bundle_hash}")
+    print(f"Accepted reviewer sets: {len(reviewer_sets)}")
+    print(f"Accepted candidates: {len(candidates)}")
+    print(f"Rejected candidate/input records: {len(rejections)}")
+    print(f"Artifact: {run_dir / 'candidates.md'}")
+    return 0
+
+
 def command_ingest_candidates(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -2861,6 +3030,9 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
     check_scope_fresh(repo, run_dir, state)
     if not args.input:
         raise ReviewError("At least one --input candidate JSON file is required")
+    if not is_simplification_state(state):
+        require_current_material_review_contract(state)
+        return command_ingest_material_review_candidates(args, repo=repo, run_dir=run_dir, state=state)
 
     reviewer_sets: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
@@ -2935,6 +3107,10 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
     if state["phase"] not in {PHASE_CANDIDATES, PHASE_ADJUDICATED}:
         raise ReviewError(f"Cannot compile ledger in phase {state['phase']}")
     check_scope_fresh(repo, run_dir, state)
+    coverage_plan: dict[str, Any] | None = None
+    if not is_simplification_state(state):
+        require_current_material_review_contract(state)
+        coverage_plan = load_recorded_coverage_plan(run_dir, state)
     candidates_bundle = require_object(load_json(run_dir / "candidates.json"), "normalized candidates")
     candidate_hash = verify_embedded_hash(
         candidates_bundle,
@@ -2943,6 +3119,12 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
         unhashed_fields={"generated_at"},
     )
     require_state_hash(state, "candidate_bundle_hash", candidate_hash, "normalized candidates")
+    if coverage_plan is not None:
+        coverage_plan_hash = require_sha256(
+            candidates_bundle.get("coverage_plan_hash"), "normalized candidates.coverage_plan_hash"
+        )
+        if coverage_plan_hash != state["hashes"]["coverage_plan_hash"]:
+            raise ReviewError("Normalized candidates coverage_plan_hash does not match the recorded coverage plan")
     adjudication = validate_adjudication(load_json(Path(args.input).expanduser().resolve()), candidates_bundle=candidates_bundle, state=state)
     candidates_by_id = {item["candidate_id"]: item for item in candidates_bundle["candidates"]}
     kept_groups = [group for group in adjudication["groups"] if group["disposition"] == "keep"]

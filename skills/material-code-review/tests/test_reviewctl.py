@@ -193,11 +193,61 @@ class ReviewCtlTest(unittest.TestCase):
             "review_mode": "subagent",
             "findings": findings,
             "coverage": {
-                "files_reviewed": ["calc.py", "test_calc.py"],
+                "files_reviewed": ["calc.py"],
                 "areas": ["correctness", "standards"],
                 "limitations": [],
             },
         }
+
+    def empty_candidate_set_v2(self, scope_hash: str, coverage_hash: str, assignment: dict) -> dict:
+        return {
+            "schema_version": "material-review/candidate-set/v2",
+            "scope_hash": scope_hash,
+            "coverage_plan_hash": coverage_hash,
+            "lens_id": assignment["lens_id"],
+            "reviewer_id": assignment["reviewer_id"],
+            "independence_group": assignment["independence_group"],
+            "review_mode": assignment["review_mode"],
+            "findings": [],
+            "coverage": {"files_reviewed": ["calc.py"], "areas": [assignment["lens_id"]], "limitations": []},
+        }
+
+    def init_with_recorded_coverage(self) -> str:
+        scope_hash = self.init()
+        plan_path = self.write_json("coverage-input.json", self.coverage_plan(scope_hash))
+        self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(plan_path))
+        return scope_hash
+
+    def candidate_paths_for_coverage(
+        self,
+        scope_hash: str,
+        *,
+        primary_candidate: dict | None = None,
+        omit_lens: str | None = None,
+    ) -> list[Path]:
+        plan = self.load("coverage-plan.json")
+        coverage_hash = plan["coverage_plan_hash"]
+        paths: list[Path] = []
+        for assignment in plan["lenses"]:
+            lens_id = assignment["lens_id"]
+            if lens_id == omit_lens:
+                continue
+            if lens_id == "correctness":
+                payload = primary_candidate or self.candidate_set(scope_hash)
+                payload["schema_version"] = "material-review/candidate-set/v2"
+                payload["coverage_plan_hash"] = coverage_hash
+                payload["lens_id"] = lens_id
+                payload["reviewer_id"] = assignment["reviewer_id"]
+                payload["independence_group"] = assignment["independence_group"]
+                payload["review_mode"] = assignment["review_mode"]
+            else:
+                payload = self.empty_candidate_set_v2(scope_hash, coverage_hash, assignment)
+            paths.append(self.write_json(f"candidate-{lens_id}.json", payload))
+        return paths
+
+    def ingest_candidate_paths(self, paths: list[Path], *, expected: int = 0) -> tuple[str, str]:
+        input_args = [value for path in paths for value in ("--input", str(path))]
+        return self.run_tool("ingest-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, *input_args, expected=expected)
 
     def adjudication(self, scope_hash: str, candidate_hash: str, *, include_style: bool = True):
         groups = [
@@ -326,19 +376,11 @@ class ReviewCtlTest(unittest.TestCase):
         }
 
     def reach_adjudicated(self, *, include_style: bool = True) -> str:
-        scope_hash = self.init()
-        candidate_path = self.write_json(
-            "candidate.json", self.candidate_set(scope_hash, include_style=include_style)
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(
+            scope_hash, primary_candidate=self.candidate_set(scope_hash, include_style=include_style)
         )
-        self.run_tool(
-            "ingest-candidates",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(candidate_path),
-        )
+        self.ingest_candidate_paths(paths)
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication_path = self.write_json(
             "adjudication.json",
@@ -561,11 +603,10 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(self.load("state.json")["phase"], "FINDINGS_APPROVED")
 
     def test_ledger_uses_adjudicated_repair_direction(self) -> None:
-        scope_hash = self.init()
+        scope_hash = self.init_with_recorded_coverage()
         candidates = self.candidate_set(scope_hash, include_style=False)
         candidates["findings"][0]["proposed_resolution"] = "Unsafe candidate suggestion."
-        candidate_path = self.write_json("candidate-repair.json", candidates)
-        self.run_tool("ingest-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(candidate_path))
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage(scope_hash, primary_candidate=candidates))
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = self.adjudication(scope_hash, candidate_hash, include_style=False)
         adjudication["groups"][0]["repair_direction"]["smallest_safe_change"] = "Restore only the operator."
@@ -754,17 +795,8 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertNotIn("No material improvements recommended.", completion)
 
     def test_ready_verdict_is_rejected_when_a_finding_is_kept(self) -> None:
-        scope_hash = self.init()
-        candidate_path = self.write_json("candidate.json", self.candidate_set(scope_hash))
-        self.run_tool(
-            "ingest-candidates",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(candidate_path),
-        )
+        scope_hash = self.init_with_recorded_coverage()
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage(scope_hash))
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = self.adjudication(scope_hash, candidate_hash)
         adjudication["verdict"] = "READY"
@@ -995,30 +1027,23 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse((self.run_dir / "fix-plan.amended.json").exists())
 
     def test_empty_material_set_requires_explicit_gate_and_completes(self) -> None:
-        scope_hash = self.init()
+        scope_hash = self.init_with_recorded_coverage()
         candidate_set = {
-            "schema_version": "material-review/candidate-set/v1",
+            "schema_version": "material-review/candidate-set/v2",
             "scope_hash": scope_hash,
+            "coverage_plan_hash": self.load("coverage-plan.json")["coverage_plan_hash"],
+            "lens_id": "correctness",
             "reviewer_id": "correctness",
             "independence_group": "model-a",
             "review_mode": "subagent",
             "findings": [],
             "coverage": {
-                "files_reviewed": ["calc.py", "test_calc.py"],
+                "files_reviewed": ["calc.py"],
                 "areas": ["correctness"],
                 "limitations": [],
             },
         }
-        candidate_path = self.write_json("empty-candidate.json", candidate_set)
-        self.run_tool(
-            "ingest-candidates",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(candidate_path),
-        )
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage(scope_hash, primary_candidate=candidate_set))
         candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
         adjudication = {
             "schema_version": "material-review/adjudication/v3",
@@ -1216,23 +1241,13 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(self.load("state.json")["phase"], "PLAN_VALIDATED")
 
     def test_tampered_frozen_snapshot_is_rejected_during_ingestion(self) -> None:
-        scope_hash = self.init()
+        scope_hash = self.init_with_recorded_coverage()
         scope = self.load("scope.json")
         calc_entry = next(item for item in scope["identity"]["files"] if item["path"] == "calc.py")
         snapshot_rel = calc_entry["comparison_state"]["snapshot_path"]
         (self.run_dir / snapshot_rel).write_text("def add(a, b):\n    return 999\n", encoding="utf-8")
-        candidate_path = self.write_json("candidate.json", self.candidate_set(scope_hash))
-        self.run_tool(
-            "ingest-candidates",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(candidate_path),
-            expected=2,
-        )
-        rejection = self.load("candidate-rejections.json")[0]["reason"]
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage(scope_hash), expected=2)
+        rejection = self.load("candidate-ingestion-failure.json")["rejections"][0]["reason"]
         self.assertIn("failed its content hash check", rejection)
 
     def test_checkpoint_snapshot_tampering_blocks_restore_before_mutation(self) -> None:
@@ -1309,6 +1324,159 @@ class ReviewCtlTest(unittest.TestCase):
         replacement = self.write_json("replacement.json", original)
         _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(replacement), expected=2)
         self.assertIn("Coverage plan is already recorded", stderr)
+
+    def test_ingest_refuses_missing_required_lens_without_authoritative_artifacts(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash, omit_lens="migration_data_safety")
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+        self.assertIn("Missing required review coverage: migration_data_safety", stderr)
+        self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+        self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
+
+    def test_ingest_refuses_stale_plan_hash_and_wrong_lens(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        payload = json.loads(paths[0].read_text(encoding="utf-8"))
+        payload["coverage_plan_hash"] = "0" * 64
+        paths[0].write_text(json.dumps(payload), encoding="utf-8")
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+        self.assertIn("coverage_plan_hash does not match", stderr)
+
+    def test_required_lens_must_cover_risk_evidence_paths(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        migration = next(path for path in paths if "migration_data_safety" in path.name)
+        payload = json.loads(migration.read_text(encoding="utf-8"))
+        payload["coverage"]["files_reviewed"] = ["test_calc.py"]
+        migration.write_text(json.dumps(payload), encoding="utf-8")
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+        self.assertIn("did not review required risk paths: calc.py", stderr)
+
+    def test_complete_wave_binds_coverage_hash_and_retry_succeeds(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        incomplete = self.candidate_paths_for_coverage(scope_hash, omit_lens="reliability")
+        self.ingest_candidate_paths(incomplete, expected=2)
+        complete = self.candidate_paths_for_coverage(scope_hash)
+        self.ingest_candidate_paths(complete)
+        state = self.load("state.json")
+        candidates = self.load("candidates.json")
+        self.assertEqual(candidates["coverage_plan_hash"], state["hashes"]["coverage_plan_hash"])
+        self.assertEqual(state["phase"], "CANDIDATES_CAPTURED")
+
+    def test_ingest_rejects_duplicate_or_unassigned_lens_without_authoritative_write(self) -> None:
+        for name, mutation, expected_error in (
+            ("duplicate", lambda payload: payload.update({"lens_id": "correctness"}), "Duplicate candidate lens_id: correctness"),
+            ("unassigned", lambda payload: payload.update({"lens_id": "unassigned"}), "Lens is absent from coverage plan: unassigned"),
+        ):
+            with self.subTest(name=name):
+                self.run_id = f"test-run-{name}"
+                scope_hash = self.init_with_recorded_coverage()
+                paths = self.candidate_paths_for_coverage(scope_hash)
+                payload = json.loads(paths[1].read_text(encoding="utf-8"))
+                mutation(payload)
+                paths[1].write_text(json.dumps(payload), encoding="utf-8")
+                _, stderr = self.ingest_candidate_paths(paths, expected=2)
+                self.assertIn(expected_error, stderr)
+                self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_ingest_rejects_assignment_identity_mismatch(self) -> None:
+        for field in ("reviewer_id", "independence_group", "review_mode"):
+            with self.subTest(field=field):
+                self.run_id = f"test-run-{field}"
+                scope_hash = self.init_with_recorded_coverage()
+                paths = self.candidate_paths_for_coverage(scope_hash)
+                payload = json.loads(paths[0].read_text(encoding="utf-8"))
+                payload[field] = "controller" if field == "review_mode" else "wrong-identity"
+                paths[0].write_text(json.dumps(payload), encoding="utf-8")
+                _, stderr = self.ingest_candidate_paths(paths, expected=2)
+                self.assertIn("candidate identity does not match coverage assignment: correctness", stderr)
+
+    def test_ingest_rejects_out_of_scope_coverage_paths(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        payload = json.loads(paths[0].read_text(encoding="utf-8"))
+        payload["coverage"]["files_reviewed"].append("outside.py")
+        paths[0].write_text(json.dumps(payload), encoding="utf-8")
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+        self.assertIn("coverage.files_reviewed contains a path outside the frozen scope", stderr)
+
+    def test_material_review_rejects_v1_candidate_set(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        path = self.write_json("candidate-v1.json", self.candidate_set(scope_hash))
+        _, stderr = self.ingest_candidate_paths([path], expected=2)
+        self.assertIn("unsupported schema_version", stderr)
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_material_review_rejects_a_v2_set_with_any_invalid_finding(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        payload = json.loads(paths[0].read_text(encoding="utf-8"))
+        payload["findings"][0]["line_start"] = 0
+        paths[0].write_text(json.dumps(payload), encoding="utf-8")
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+        self.assertIn("candidate set includes invalid finding", stderr)
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_ingest_rejects_missing_or_tampered_recorded_coverage(self) -> None:
+        for name, mutate in (
+            ("missing", lambda: (self.run_dir / "coverage-plan.json").unlink()),
+            ("tampered", lambda: (self.run_dir / "coverage-plan.json").write_text("{}", encoding="utf-8")),
+        ):
+            with self.subTest(name=name):
+                self.run_id = f"test-run-{name}"
+                scope_hash = self.init_with_recorded_coverage()
+                paths = self.candidate_paths_for_coverage(scope_hash)
+                mutate()
+                self.ingest_candidate_paths(paths, expected=2)
+                self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
+                self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_invalid_retry_preserves_prior_authoritative_bundle(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage(scope_hash))
+        original = (self.run_dir / "candidates.json").read_text(encoding="utf-8")
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        payload = json.loads(paths[0].read_text(encoding="utf-8"))
+        payload["findings"][0]["line_start"] = 0
+        paths[0].write_text(json.dumps(payload), encoding="utf-8")
+        self.ingest_candidate_paths(paths, expected=2)
+        self.assertEqual((self.run_dir / "candidates.json").read_text(encoding="utf-8"), original)
+        self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
+        self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
+
+    def test_compile_ledger_rejects_deleted_tampered_or_stale_coverage_binding(self) -> None:
+        for name in ("deleted", "tampered", "stale-candidate"):
+            with self.subTest(name=name):
+                self.run_id = f"test-run-{name}"
+                scope_hash = self.init_with_recorded_coverage()
+                self.ingest_candidate_paths(self.candidate_paths_for_coverage(scope_hash))
+                candidate_hash = self.load("candidates.json")["candidate_bundle_hash"]
+                adjudication_path = self.write_json(
+                    f"adjudication-{name}.json", self.adjudication(scope_hash, candidate_hash)
+                )
+                if name == "deleted":
+                    (self.run_dir / "coverage-plan.json").unlink()
+                elif name == "tampered":
+                    artifact = self.load("coverage-plan.json")
+                    artifact["risk_assessments"][0]["rationale"] = "Tampered."
+                    (self.run_dir / "coverage-plan.json").write_text(json.dumps(artifact), encoding="utf-8")
+                else:
+                    bundle = self.load("candidates.json")
+                    bundle["coverage_plan_hash"] = "0" * 64
+                    bundle.pop("candidate_bundle_hash")
+                    unhashed = dict(bundle)
+                    unhashed.pop("generated_at")
+                    bundle["candidate_bundle_hash"] = reviewctl.canonical_hash(unhashed)
+                    (self.run_dir / "candidates.json").write_text(json.dumps(bundle), encoding="utf-8")
+                    state = self.load("state.json")
+                    state["hashes"]["candidate_bundle_hash"] = bundle["candidate_bundle_hash"]
+                    (self.run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+                _, stderr = self.run_tool(
+                    "compile-ledger", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                    "--input", str(adjudication_path), expected=2,
+                )
+                self.assertIn("coverage", stderr.lower())
 
     def test_coverage_plan_rejects_missing_assessment_code(self) -> None:
         scope_hash = self.init()
