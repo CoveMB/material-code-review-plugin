@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "scope_hash",
+    "workflow_profile",
     "risk_signals",
     "lenses",
     "max_candidate_corrections"
@@ -18,6 +19,9 @@
     "scope_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "workflow_profile": {
+      "enum": ["material_review", "material_simplification"]
     },
     "risk_signals": {
       "type": "array",
@@ -56,7 +60,7 @@
     },
     "lenses": {
       "type": "array",
-      "minItems": 3,
+      "minItems": 2,
       "items": {
         "type": "object",
         "additionalProperties": false,

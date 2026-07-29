@@ -4,11 +4,14 @@ The canonical skill defines simplification judgment. `simplifyctl.py` adds bound
 
 | State | Command | Result |
 |---|---|---|
-| new | `init --scope codebase --path ...` | selected current files frozen and hashed; `CONTEXT_FROZEN` |
-| new | `init --scope auto\|uncommitted\|branch ...` | delegated mutable Git-change scope |
-| new | `init --scope range --base ... --head ...` | delegated immutable review-only range; refreeze before mutation |
+| new | `init --scope codebase --path ...` | selected current files frozen and hashed under root-owned `material_simplification`; `CONTEXT_FROZEN` |
+| new | `init --scope auto\|uncommitted\|branch ...` | delegated mutable Git-change scope with the same simplification profile |
+| new | `init --scope range --base ... --head ...` | delegated immutable review-only range with the same simplification profile; refreeze before mutation |
 | context | `check-scope` | selected file/ref identity remains fresh |
-| context | `ingest-candidates --input ...` | strict shared candidate validation and normalization |
+| context | `record-coverage --input ...` | records required `architecture_structural` and `code_test` assignments plus optional extras |
+| context | `check-candidates --lens ... --input ...` | preflights exact profile-assigned candidate bytes |
+| context | `ingest-candidates --input ...` | normalizes exact preflighted bytes only after both required simplification lenses complete |
+| context | incomplete required simplification coverage | terminal `REVIEW_INCOMPLETE`; no candidate bundle, verdict, adjudication, or Gate A |
 | candidates | provisional grouping + inherited repair audit | complete partition plus behavior-preserving, hash-bound direction for every provisionally kept group |
 | audited provisional groups | `compile-ledger --input ...` | adjudication/v3 validation and stable `F###` IDs |
 | adjudicated | `gate-findings ...` | Gate A dispositions persisted against ledger hash |
@@ -19,7 +22,9 @@ The canonical skill defines simplification judgment. `simplifyctl.py` adds bound
 | fixing | `run-test --finding F### --test ID` | exact approved non-mutating test logged |
 | fixing | `finish-finding ...` | passing in-boundary delta retained |
 | fixing | `rollback-finding ...` | item checkpoint restored |
+| fixing, all fixed | `refresh-finding-test --finding F### --test ID` | exact required item test refreshed at final state without consuming repair budgets |
 | fixing | `run-global-test --test ID` | exact approved global check logged |
+| fixing, all fixed | `begin-pre-verification-repair ...` | latest failed or stale required test evidence bound to exact approved targets; one shared repair round consumed |
 | fixing | `prepare-verification` | fix-only verification bundle |
 | verifying | `record-verification --input ...` | pass, bounded repair, plan amendment, or block |
 | repair required | `begin-repair` | only causal in-plan IDs reopen within budget |
@@ -48,6 +53,8 @@ Always pass `--run-id` or set `MATERIAL_REVIEW_RUN_ID` when more than one review
 - plan repair rounds 0–2, normally 1;
 - post-fix review restricted to approved IDs and fix-caused regressions;
 - unrelated observations never reopen discovery.
+
+Final-state evidence refresh and mutation recovery remain separate. A refresh reuses only the exact approved required command and binds it to the latest retained attempt, item-path hash, workspace guard, and test definition; it changes no item status and consumes no budget. Pre-verification recovery requires the exact latest failed/stale evidence hash, causal rationale, exact approved target IDs, remaining attempts, and a remaining shared repair round. Neither command can expand paths, commands, strategy, or candidate scope.
 
 ## Inherited direction and plan contracts
 

@@ -192,6 +192,14 @@ Do not generate repository-wide “clean architecture” alternatives. The purpo
 
 Store the map with evidence paths and explicit uncertainty. It becomes shared read-only context for candidate reviewers, validators, and planners.
 
+Before candidate dispatch, record a scope-bound coverage plan whose root-owned `workflow_profile` is `material_simplification`. Every `codebase`, `auto`, `uncommitted`, `branch`, and `range` run requires both simplification-owned lenses: `architecture_structural` for Wave A and `code_test` for Wave B. Each required lens declares at most one `sequential_degraded_self_audit` fallback. Additional assignments may be optional only, with `fallback: none`; material-review's correctness/test/standards roster is not a substitute for these two waves.
+
+```bash
+python3 "$SKILL_DIR/scripts/simplifyctl.py" record-coverage \
+  --repo-root . \
+  --input /tmp/simplification-coverage-plan.json
+```
+
 ### Phase 2 — Generate simplification candidates
 
 Candidate generation is limited to two read-only waves. When subagents are unavailable, run the same lenses sequentially and record `degraded_self_audit` coverage.
@@ -254,7 +262,18 @@ For this skill, populate the shared fields as follows:
 
 A smell name, high complexity score, long file, repeated syntax, or AI-like wording is insufficient. Emit one candidate per supported root cause and transformation boundary, not one per repeated occurrence; cite a canonical location and list related selected files. An empty candidate set is valid.
 
-Ingest all reviewer outputs together:
+Preflight each exact returned draft under its assigned simplification lens before ingestion:
+
+```bash
+python3 "$SKILL_DIR/scripts/simplifyctl.py" check-candidates \
+  --repo-root . --lens architecture_structural \
+  --input /tmp/architecture-candidates.json
+python3 "$SKILL_DIR/scripts/simplifyctl.py" check-candidates \
+  --repo-root . --lens code_test \
+  --input /tmp/code-candidates.json
+```
+
+Ingest all reviewer outputs together only after both required waves have a valid primary or permitted fallback receipt:
 
 ```bash
 python3 "$SKILL_DIR/scripts/simplifyctl.py" ingest-candidates \
@@ -262,6 +281,8 @@ python3 "$SKILL_DIR/scripts/simplifyctl.py" ingest-candidates \
   --input /tmp/architecture-candidates.json \
   --input /tmp/code-candidates.json
 ```
+
+If either required wave remains unavailable, persist `REVIEW_INCOMPLETE`, write no candidate bundle or merge verdict, and do not proceed to validation, adjudication, or Gate A. An optional assignment with no valid receipt remains non-blocking only as an explicit coverage limitation.
 
 Do not seed reviewers with one another's outputs. Agreement from the same model/process is not independent corroboration.
 
@@ -492,6 +513,17 @@ python3 "$SKILL_DIR/scripts/simplifyctl.py" prepare-verification --repo-root .
 ```
 
 Omit the first line only when the validated plan contains no required global test.
+
+If a later approved transformation makes an earlier required item test stale, refresh only that exact approved command after every item is fixed:
+
+```bash
+python3 "$SKILL_DIR/scripts/simplifyctl.py" refresh-finding-test \
+  --repo-root . --finding F001 --test <approved-test-id>
+```
+
+This refresh is final-state evidence only: it binds to the latest retained attempt, current item-path hash, current workspace guard, and exact test definition without reopening the item or consuming an attempt or repair round. A later retained edit invalidates it.
+
+When the latest failed or stale required test evidence instead proves that code must change before verification, use `begin-pre-verification-repair` with the printed latest evidence hash, a non-empty causal rationale, and exact approved targets. The shared controller rejects current passing, nonlatest, unbound, optional, out-of-plan, wrong-ID, and exhausted-budget evidence; it marks only those targets `repair_pending` and consumes one existing shared repair round. This transition grants no new path, command, strategy, or simplification opportunity.
 
 Use a fresh read-only verifier and `references/postfix-verifier-template.md`. For each approved ID, verify:
 

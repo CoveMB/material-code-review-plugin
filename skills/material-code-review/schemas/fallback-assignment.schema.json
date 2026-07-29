@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/fallback-assignment.schema.json",
+  "title": "Material Code Review runtime fallback assignment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "coverage_plan_hash",
+    "workflow_profile",
+    "lens_id",
+    "route",
+    "failure_trigger_kind",
+    "failure_trigger_hash",
+    "reviewer_id",
+    "independence_group",
+    "review_mode",
+    "degraded",
+    "assignment_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/fallback-assignment/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "coverage_plan_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "workflow_profile": {
+      "enum": ["material_review", "material_simplification"]
+    },
+    "lens_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route": {
+      "const": "fallback"
+    },
+    "failure_trigger_kind": {
+      "enum": ["candidate_preflight_receipt", "reviewer_failure_attestation"]
+    },
+    "failure_trigger_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewer_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "independence_group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_mode": {
+      "enum": ["subagent", "controller", "external"]
+    },
+    "degraded": {
+      "const": true
+    },
+    "assignment_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

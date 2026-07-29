@@ -4,7 +4,7 @@
   "pull_request": 3,
   "base_commit": "8ebeb7ae2a1f28acfe297c258f703865280c4fa4",
   "head_commit": "c740131b0953a04a93cbe1c970dcbf36dae8bca1",
-  "review_request": "Review the exact PR range with depth:full and external-review:off; stop at Gate A.",
+  "review_request": "Review scope:pull_request with the exact host base/head provenance, depth:full, and external-review:off; stop at Gate A.",
   "expected_material_failure_modes": [
     {
       "id": "checkout-attestation-order",

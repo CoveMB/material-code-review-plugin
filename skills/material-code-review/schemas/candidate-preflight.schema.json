@@ -9,7 +9,7 @@
     "scope_hash",
     "coverage_plan_hash",
     "lens_id",
-    "fallback",
+    "route",
     "attempt",
     "draft_hash",
     "semantic_hash",
@@ -17,6 +17,10 @@
     "verdict",
     "diagnostics",
     "reviewer_id",
+    "independence_group",
+    "review_mode",
+    "fallback_assignment_hash",
+    "degraded",
     "source_file",
     "receipt_hash"
   ],
@@ -36,8 +40,8 @@
       "type": "string",
       "minLength": 1
     },
-    "fallback": {
-      "type": "boolean"
+    "route": {
+      "enum": ["primary", "fallback"]
     },
     "attempt": {
       "type": "integer",
@@ -87,6 +91,20 @@
     "reviewer_id": {
       "type": "string",
       "minLength": 1
+    },
+    "independence_group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_mode": {
+      "enum": ["subagent", "controller", "external"]
+    },
+    "fallback_assignment_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "degraded": {
+      "type": "boolean"
     },
     "source_file": {
       "type": "string",

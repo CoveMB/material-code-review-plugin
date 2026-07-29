@@ -2,7 +2,7 @@
 
 `material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact scope, gathers repository context, captures candidates, independently validates them, and produces a complete kept/discarded ledger. Pull-request reviews bind read-only host metadata for the exact base and head; they never guess from the head parent. New runs record required reviewer coverage and preflight each candidate draft with at most one mechanical correction. If a required lens remains unavailable, the run ends `REVIEW_INCOMPLETE` without a merge verdict or Gate A. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
+The package freezes the exact scope, gathers repository context, captures candidates, independently validates them, and produces a complete kept/discarded ledger. Pull-request reviews bind read-only host metadata for the exact base and head; they never guess from the head parent. New runs bind coverage to a root-owned workflow profile and preflight each candidate draft with at most one mechanical correction. A required reviewer that produces no readable draft is represented by a root-owned, hash-bound failure attestation rather than fabricated candidate data; an exhausted run can finalize as `REVIEW_INCOMPLETE` with no candidate bundle or merge verdict. Material review retains its correctness/test/standards roster; material simplification uses its own required architecture/structural and code/test waves for every supported selector. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -172,7 +172,7 @@ python3 /path/to/material-code-review-plugin/skills/material-code-review/scripts
 
 `init` prints a run ID and artifact directory. Later commands accept `--run-id` or `MATERIAL_REVIEW_RUN_ID`.
 
-For a pull request, first obtain the exact base/head SHAs and repository-qualified PR identifier through a read-only host lookup, then initialize `scope:range` with the matching `--review-object-*` flags. If that lookup fails, stop rather than substituting the head parent. The canonical skill then records the required lens plan with `record-coverage` and preflights drafts with `check-candidates` before ingestion.
+For a GitHub pull request, first obtain the exact host base/head SHAs and repository-qualified `owner/repository#number` through a read-only lookup, then initialize `scope:pull_request` with matching refs and `--review-object-*` flags. The controller verifies that host pair before creating the run and freezes the effective merge-base-to-head diff used by GitHub Files changed; ordinary `scope:range` remains a direct two-dot comparison. If lookup or verification fails, stop rather than substituting the head parent or a direct range. The canonical skill then records the `material_review` lens plan with `record-coverage` and preflights drafts with `check-candidates` before ingestion. The simplification adapter applies `material_simplification` consistently to `codebase`, `auto`, `uncommitted`, `branch`, and `range` and rejects the review-only pull-request selector.
 
 ## Artifact location
 
@@ -210,8 +210,10 @@ See `skills/material-code-review/references/workflow.md` for command and transit
 
 - No product mutation before Gate B.
 - Frozen source, diff, candidate, ledger, gate, plan, checkpoint, and fix-summary integrity checks.
-- Exact PR base/head provenance, root-owned required coverage, and hash-bound candidate preflight.
-- At most one mechanical candidate correction and one declared sequential fallback for a failed required lens.
+- Exact PR base/head provenance, root-owned workflow-profile coverage, and hash-bound candidate preflight.
+- Route-local budgets: primary attempt 1 plus at most one author-owned correction, then exactly one declared fallback only after a root-owned assignment binds the failed-primary trigger to the actual fallback identity.
+- Fallback receipts, normalized candidates, and coverage retain the assignment hash, actual independence group/mode, and degraded marker so same-family/controller evidence cannot masquerade as independent corroboration.
+- No-output reviewer failures use controlled root attestations with code-and-integer diagnostics only; zero-input finalization requires every incomplete required route to be fully evidenced and exhausted.
 - Candidate generators cannot independently validate their own claims.
 - Adjudicators must account for every candidate and cannot invent findings.
 - Exact source-side evidence and checked counterevidence for high-confidence candidates.
@@ -222,6 +224,8 @@ See `skills/material-code-review/references/workflow.md` for command and transit
 - Exact file-or-symlink write permissions; directory-wide repair permissions are rejected.
 - Validation commands are exact Gate-B inputs and are expected to be non-mutating.
 - Test-induced workspace mutation is detected and restored when automatic recovery remains safe.
+- Stale overlapping per-finding evidence can be refreshed only through its exact Gate-B-approved command, without reopening a finding or consuming repair budgets.
+- Pre-verification edits require the exact latest failed or stale required test evidence hash, causal approved target IDs, a rationale, and remaining attempt/repair-round budgets; there is no generic reopen command.
 - Repair attempts and post-fix repair rounds are finite.
 - Final verification cannot reopen broad review or unrelated improvements.
 - No push, PR, review comment, issue, ticket, or external-model egress without separate explicit authorization.

@@ -473,6 +473,85 @@ class StandalonePackagingTests(unittest.TestCase):
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
+        "maintainer discovery-recall case is absent from distribution layouts",
+    )
+    def test_pull_request_scope_contract_is_aligned_and_validated(self) -> None:
+        canonical_skill = REPOSITORY_ROOT / "skills/material-code-review/SKILL.md"
+        command = REPOSITORY_ROOT / "commands/material-review.md"
+        case_path = (
+            REPOSITORY_ROOT
+            / "evaluations/material-code-review/cases/pr-3-discovery-recall.json"
+        )
+        expected_hint = (
+            'argument-hint: "[scope:auto|uncommitted|branch|pull_request|range] '
+            '[base:<ref>] [head:<ref>] [depth:auto|full] [external-review:off|ask]"'
+        )
+        self.assertIn(expected_hint, canonical_skill.read_text(encoding="utf-8"))
+        self.assertIn(expected_hint, command.read_text(encoding="utf-8"))
+        case = json.loads(case_path.read_text(encoding="utf-8"))
+        self.assertIn("scope:pull_request", case["review_request"])
+
+        with tempfile.TemporaryDirectory() as temp:
+            fixture_root = self.create_full_plugin_fixture(Path(temp))
+            fixture_command = fixture_root / "commands/material-review.md"
+            fixture_command.write_text(
+                fixture_command.read_text(encoding="utf-8").replace(
+                    "branch|pull_request|range", "branch|range"
+                ),
+                encoding="utf-8",
+            )
+            validation_result = self.run_package_validator(
+                fixture_root, distribution_layout=False
+            )
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "command argument hint does not match canonical review skill",
+                validation_result.stderr,
+            )
+
+    def test_pre_verification_recovery_contract_is_packaged_and_validated(self) -> None:
+        markers = (
+            "refresh-finding-test",
+            "begin-pre-verification-repair",
+            "latest failed or stale required test evidence",
+        )
+        review_skill = REPOSITORY_ROOT / "skills/material-code-review/SKILL.md"
+        simplification_skill = (
+            REPOSITORY_ROOT / "skills/material-code-simplification/SKILL.md"
+        )
+        controller = (
+            REPOSITORY_ROOT
+            / "skills/material-code-review/scripts/reviewctl.py"
+        )
+        for path in (review_skill, simplification_skill):
+            text = path.read_text(encoding="utf-8")
+            for marker in markers:
+                self.assertIn(marker, text, f"missing recovery marker in {path}")
+        controller_text = controller.read_text(encoding="utf-8")
+        for marker in markers[:2]:
+            self.assertIn(marker, controller_text)
+
+        with tempfile.TemporaryDirectory() as temp:
+            fixture_root = self.create_full_plugin_fixture(Path(temp))
+            fixture_skill = fixture_root / "skills/material-code-review/SKILL.md"
+            fixture_skill.write_text(
+                fixture_skill.read_text(encoding="utf-8").replace(
+                    "latest failed or stale required test evidence",
+                    "failed evidence",
+                ),
+                encoding="utf-8",
+            )
+            validation_result = self.run_package_validator(
+                fixture_root, distribution_layout=False
+            )
+            self.assertNotEqual(validation_result.returncode, 0)
+            self.assertIn(
+                "canonical skill recovery contract missing marker",
+                validation_result.stderr,
+            )
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
     )
     def test_prompt_driven_evaluation_prompts_define_controlled_contract(self) -> None:
@@ -1566,6 +1645,8 @@ class StandalonePackagingTests(unittest.TestCase):
         required = {
             "schemas/coverage-plan.schema.json",
             "schemas/candidate-preflight.schema.json",
+            "schemas/fallback-assignment.schema.json",
+            "schemas/reviewer-failure-attestation.schema.json",
             "schemas/coverage-status.schema.json",
             "references/protocol-coherence-lens.md",
         }
@@ -1670,6 +1751,15 @@ class StandalonePackagingTests(unittest.TestCase):
                     "core/references/remediation-auditor-template.md",
                     "core/references/remediation-rubric.md",
                     "core/references/test-evidence-rubric.md",
+                }.issubset(names)
+            )
+            self.assertTrue(
+                {
+                    "core/schemas/coverage-plan.schema.json",
+                    "core/schemas/candidate-preflight.schema.json",
+                    "core/schemas/fallback-assignment.schema.json",
+                    "core/schemas/reviewer-failure-attestation.schema.json",
+                    "core/schemas/coverage-status.schema.json",
                 }.issubset(names)
             )
 

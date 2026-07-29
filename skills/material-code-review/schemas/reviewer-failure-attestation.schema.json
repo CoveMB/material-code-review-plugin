@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/material-code-review/reviewer-failure-attestation.schema.json",
+  "title": "Material Code Review reviewer no-output failure attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "coverage_plan_hash",
+    "workflow_profile",
+    "lens_id",
+    "route",
+    "assignment_kind",
+    "assignment_hash",
+    "reviewer_id",
+    "independence_group",
+    "review_mode",
+    "reason",
+    "diagnostics",
+    "observer_kind",
+    "observer_id",
+    "no_readable_draft",
+    "observed_at",
+    "attestation_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/reviewer-failure-attestation/v1"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "coverage_plan_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "workflow_profile": {
+      "enum": ["material_review", "material_simplification"]
+    },
+    "lens_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route": {
+      "enum": ["primary", "fallback"]
+    },
+    "assignment_kind": {
+      "enum": ["coverage_plan", "fallback_assignment"]
+    },
+    "assignment_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewer_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "independence_group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_mode": {
+      "enum": ["subagent", "controller", "external"]
+    },
+    "reason": {
+      "enum": [
+        "dispatch_failed",
+        "timeout",
+        "capacity_unavailable",
+        "execution_failed",
+        "external_route_failed"
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "value"],
+        "properties": {
+          "code": {
+            "enum": [
+              "attempt_number",
+              "elapsed_seconds",
+              "status_code",
+              "exit_code",
+              "signal_number"
+            ]
+          },
+          "value": {
+            "type": "integer",
+            "minimum": -255,
+            "maximum": 86400
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"code": {"const": "attempt_number"}}},
+            "then": {"properties": {"value": {"minimum": 1, "maximum": 2}}}
+          },
+          {
+            "if": {"properties": {"code": {"const": "elapsed_seconds"}}},
+            "then": {"properties": {"value": {"minimum": 0, "maximum": 86400}}}
+          },
+          {
+            "if": {"properties": {"code": {"const": "status_code"}}},
+            "then": {"properties": {"value": {"minimum": 100, "maximum": 599}}}
+          },
+          {
+            "if": {"properties": {"code": {"const": "exit_code"}}},
+            "then": {"properties": {"value": {"minimum": -255, "maximum": 255}}}
+          },
+          {
+            "if": {"properties": {"code": {"const": "signal_number"}}},
+            "then": {"properties": {"value": {"minimum": 1, "maximum": 255}}}
+          }
+        ]
+      }
+    },
+    "observer_kind": {
+      "enum": ["controller", "scheduler"]
+    },
+    "observer_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "no_readable_draft": {
+      "const": true
+    },
+    "observed_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "attestation_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

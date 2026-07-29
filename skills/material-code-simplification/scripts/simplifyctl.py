@@ -24,7 +24,9 @@ from typing import Any, Sequence
 
 ADAPTER_VERSION = "1.1.0"
 PROFILE_NAME = "material-code-simplification"
+WORKFLOW_PROFILE = "material_simplification"
 CODEBASE_SCOPE = "codebase"
+CHANGE_SCOPES = {"auto", "uncommitted", "branch", "range"}
 NO_BASELINE_SHA = "0" * 40
 DEFAULT_MAX_SELECTED_FILES = 5_000
 DEFAULT_MAX_SELECTED_BYTES = 512 * 1024 * 1024
@@ -116,7 +118,7 @@ def _require_core_surface() -> None:
         "write_source_bundle_files": {"run_dir", "scope", "limitations"},
         "save_state": {"run_dir", "state"},
         "recompute_scope_from_state": {"repo", "state"},
-        "main": {"argv"},
+        "main": {"argv", "workflow_profile"},
     }
     incompatible: list[str] = []
     for name, expected in expected_parameters.items():
@@ -489,6 +491,9 @@ def command_init_codebase(args: argparse.Namespace) -> int:
                 "max_selected_files": identity["max_selected_files"],
                 "max_selected_bytes": identity["max_selected_bytes"],
             },
+            "workflow_profile": WORKFLOW_PROFILE,
+            "coverage_required": True,
+            "candidate_preflight": {},
             "mutation_allowed": True,
             "hashes": {},
             "gates": {},
@@ -608,8 +613,8 @@ def _print_help() -> None:
         "Additional scope:\n"
         "  simplifyctl.py init --scope codebase [--path PATH]... "
         "[--exclude-path PATH]...\n\n"
-        "All other commands and change-scope init modes are delegated to the "
-        "material-code-review controller. Run:\n"
+        "Supported change-scope init modes are auto, uncommitted, branch, and range. "
+        "They and all other commands are delegated to the material-code-review controller. Run:\n"
         "  simplifyctl.py init --scope codebase --help\n"
         "  simplifyctl.py <core-command> --help\n"
     )
@@ -637,7 +642,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("[FAIL] Interrupted", file=sys.stderr)
             return 130
-    return int(core.main(values))
+    if values[0] == "init" and requested_scope not in CHANGE_SCOPES:
+        print(
+            f"[FAIL] Unsupported material-simplification scope: {requested_scope}",
+            file=sys.stderr,
+        )
+        return 2
+    return int(core.main(values, workflow_profile=WORKFLOW_PROFILE))
 
 
 if __name__ == "__main__":

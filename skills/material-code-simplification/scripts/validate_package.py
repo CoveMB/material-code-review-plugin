@@ -43,6 +43,11 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "SECURITY.md",
     "core/reviewctl.py",
     "core/schemas/candidate-set.schema.json",
+    "core/schemas/coverage-plan.schema.json",
+    "core/schemas/candidate-preflight.schema.json",
+    "core/schemas/fallback-assignment.schema.json",
+    "core/schemas/reviewer-failure-attestation.schema.json",
+    "core/schemas/coverage-status.schema.json",
     "core/schemas/adjudication.schema.json",
     "core/schemas/fix-plan.schema.json",
     "core/schemas/verification.schema.json",
@@ -64,6 +69,11 @@ ARCHIVE_FORBIDDEN_PARTS = {
 }
 ARCHIVE_FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
 ARCHIVE_COMMENT = f"material-code-simplification standalone Agent Skill {VERSION}".encode("utf-8")
+RECOVERY_CONTROL_MARKERS = (
+    "refresh-finding-test",
+    "begin-pre-verification-repair",
+    "latest failed or stale required test evidence",
+)
 
 
 def normalize_archive_member(name: str) -> str:
@@ -264,6 +274,11 @@ def main(argv: list[str] | None = None) -> int:
         layout, controller, schema_dir, core_reference_dir = core_layout
         for name in (
             "candidate-set.schema.json",
+            "coverage-plan.schema.json",
+            "candidate-preflight.schema.json",
+            "fallback-assignment.schema.json",
+            "reviewer-failure-attestation.schema.json",
+            "coverage-status.schema.json",
             "adjudication.schema.json",
             "fix-plan.schema.json",
             "verification.schema.json",
@@ -283,6 +298,9 @@ def main(argv: list[str] | None = None) -> int:
         text = skill.read_text(encoding="utf-8")
         if not text.startswith("---\n") or "name: material-code-simplification" not in text.split("---", 2)[1]:
             errors.append("SKILL.md frontmatter is missing or has the wrong name")
+        for marker in RECOVERY_CONTROL_MARKERS:
+            if marker not in text:
+                errors.append(f"SKILL.md recovery contract missing marker: {marker}")
         for rel in sorted(set(re.findall(r"`((?:references|examples)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")
@@ -300,6 +318,11 @@ def main(argv: list[str] | None = None) -> int:
     for path, label in ((ROOT / "scripts" / "simplifyctl.py", "simplifyctl.py"), (controller, "reviewctl.py")):
         if path.is_file() and not sys.platform.startswith("win") and not (path.stat().st_mode & stat.S_IXUSR):
             errors.append(f"{label} is not executable")
+    if controller.is_file():
+        controller_text = controller.read_text(encoding="utf-8")
+        for marker in RECOVERY_CONTROL_MARKERS[:2]:
+            if marker not in controller_text:
+                errors.append(f"reviewctl.py recovery surface missing marker: {marker}")
 
     yaml = ROOT / "agents" / "openai.yaml"
     if yaml.is_file():

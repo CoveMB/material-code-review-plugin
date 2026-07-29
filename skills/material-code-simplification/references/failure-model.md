@@ -10,7 +10,9 @@
 
 ## Review and adjudication
 
+- **Missing, stale, mismatched, or review-profile coverage plan**: reject before candidate dispatch. Every new scope uses `material_simplification` with required `architecture_structural` and `code_test` lenses.
 - **Malformed candidate output**: reject the input visibly. One formatting-only correction may be requested; do not repair substantive claims by guessing.
+- **Required simplification wave remains unavailable after its declared fallback**: persist `REVIEW_INCOMPLETE`; create no candidate bundle, verdict, adjudication, or Gate A.
 - **Every candidate rejected by schema/evidence checks**: coverage is invalid; regenerate within the same fixed discovery wave or stop.
 - **Subagent unavailable**: run sequentially and record degraded self-audit. Do not pretend persona separation is independence.
 - **Validator unavailable**: use controller-direct checks for mechanical facts and expose semantic uncertainty.
@@ -37,6 +39,9 @@
 - **Unapproved path changes**: reject the attempt and restore its checkpoint.
 - **Test command mutates**: controller restores it; treat the command as failed and revise only through a new Gate B if the command must change.
 - **Required test fails**: repair only inside the approved item and remaining attempt budget, otherwise restore/block.
+- **Earlier item test becomes stale after an overlapping approved transformation**: use `refresh-finding-test` for that exact required command after all items are fixed; consume no repair budget when no edit is needed.
+- **Latest failed or stale required test evidence requires another edit**: use `begin-pre-verification-repair` with its exact hash, causal approved targets, and rationale; consume the existing attempt and shared repair-round budgets.
+- **Recovery evidence is passing, nonlatest, optional, unbound, wrong-ID, out of plan, or exhausted**: reject the transition and preserve the fixed state.
 - **Necessary contract/data/security change discovered**: restore and return to Gate B planning.
 - **New simplification noticed**: record-only; never expand current repair.
 - **Old and new paths both remain unexpectedly**: unresolved; remove within plan or restore.

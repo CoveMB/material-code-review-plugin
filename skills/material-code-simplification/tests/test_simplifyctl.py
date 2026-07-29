@@ -83,6 +83,117 @@ class SimplifyCtlTest(unittest.TestCase):
         path.write_text(json.dumps(value, indent=2), encoding="utf-8")
         return path
 
+    def simplification_coverage_plan(self, scope_hash: str) -> dict:
+        return {
+            "schema_version": "material-review/coverage-plan/v1",
+            "scope_hash": scope_hash,
+            "workflow_profile": "material_simplification",
+            "risk_signals": [],
+            "lenses": [
+                {
+                    "lens_id": "architecture_structural",
+                    "required": True,
+                    "reviewer_id": "architecture-structural",
+                    "independence_group": "fixture-model",
+                    "review_mode": "subagent",
+                    "fallback": "sequential_degraded_self_audit",
+                },
+                {
+                    "lens_id": "code_test",
+                    "required": True,
+                    "reviewer_id": "code-test",
+                    "independence_group": "fixture-model",
+                    "review_mode": "subagent",
+                    "fallback": "sequential_degraded_self_audit",
+                },
+            ],
+            "max_candidate_corrections": 1,
+        }
+
+    def empty_simplification_candidate(
+        self, scope_hash: str, reviewer_id: str, area: str
+    ) -> dict:
+        return {
+            "schema_version": "material-review/candidate-set/v1",
+            "scope_hash": scope_hash,
+            "reviewer_id": reviewer_id,
+            "independence_group": "fixture-model",
+            "review_mode": "subagent",
+            "findings": [],
+            "coverage": {
+                "files_reviewed": ["src/service.py"],
+                "areas": [area],
+                "limitations": [],
+            },
+        }
+
+    def assert_simplification_coverage_profile_round_trip(
+        self, run_id: str, *init_arguments: str
+    ) -> None:
+        self.run_id = run_id
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            *init_arguments,
+            "--run-id",
+            run_id,
+        )
+        state = self.load("state.json")
+        self.assertTrue(state.get("coverage_required", False))
+        self.assertEqual(state.get("workflow_profile"), "material_simplification")
+        self.assertEqual(state.get("candidate_preflight"), {})
+
+        plan_path = self.write_json(
+            f"{run_id}-coverage.json",
+            self.simplification_coverage_plan(state["scope_hash"]),
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            run_id,
+            "--input",
+            str(plan_path),
+        )
+
+        candidate_paths: list[Path] = []
+        for lens_id, reviewer_id, area in (
+            ("architecture_structural", "architecture-structural", "architecture"),
+            ("code_test", "code-test", "code-and-tests"),
+        ):
+            candidate_path = self.write_json(
+                f"{run_id}-{lens_id}.json",
+                self.empty_simplification_candidate(state["scope_hash"], reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                run_id,
+                "--lens",
+                lens_id,
+                "--input",
+                str(candidate_path),
+            )
+            candidate_paths.append(candidate_path)
+
+        inputs = [value for path in candidate_paths for value in ("--input", str(path))]
+        self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            run_id,
+            *inputs,
+        )
+        self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
+        coverage_status = self.load("coverage-status.json")
+        self.assertEqual(coverage_status["workflow_profile"], "material_simplification")
+        self.assertEqual(coverage_status["status"], "complete")
+
     def init_src(self, *extra: str) -> None:
         self.run_tool(
             "init",
@@ -175,12 +286,13 @@ class SimplifyCtlTest(unittest.TestCase):
         )
         self.assertFalse(self.run_dir.exists())
 
-    def test_explicit_change_scope_delegates_to_core(self) -> None:
+    def test_coverage_profile_explicit_change_scope_delegates_to_core(self) -> None:
         captured: list[str] = []
         original = simplifyctl.core.main
 
-        def delegated(values):
+        def delegated(values, *, workflow_profile):
             captured.extend(values)
+            captured.extend(["--internal-workflow-profile", workflow_profile])
             return 37
 
         simplifyctl.core.main = delegated
@@ -197,6 +309,197 @@ class SimplifyCtlTest(unittest.TestCase):
             simplifyctl.core.main = original
         self.assertEqual(captured[0], "init")
         self.assertIn("auto", captured)
+        self.assertEqual(captured[-1], "material_simplification")
+
+    def test_pre_verification_recovery_commands_delegate_to_shared_controller(self) -> None:
+        delegated_calls: list[tuple[list[str], str]] = []
+        original = simplifyctl.core.main
+
+        def delegated(values, *, workflow_profile):
+            delegated_calls.append((list(values), workflow_profile))
+            return 0
+
+        simplifyctl.core.main = delegated
+        try:
+            self.run_tool(
+                "refresh-finding-test",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                "--finding",
+                "F001",
+                "--test",
+                "codebase-regression",
+            )
+            self.run_tool(
+                "begin-pre-verification-repair",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                "--finding",
+                "F001",
+                "--evidence-kind",
+                "global_test",
+                "--evidence-id",
+                "global-regression",
+                "--evidence-hash",
+                "1" * 64,
+                "--reason",
+                "Bound the codebase repair to the latest failed evidence.",
+            )
+        finally:
+            simplifyctl.core.main = original
+
+        self.assertEqual(
+            [call[0][0] for call in delegated_calls],
+            ["refresh-finding-test", "begin-pre-verification-repair"],
+        )
+        self.assertTrue(
+            all(profile == "material_simplification" for _, profile in delegated_calls)
+        )
+
+    def test_pull_request_scope_is_rejected_before_core_delegation(self) -> None:
+        delegated = False
+        original = simplifyctl.core.main
+
+        def unexpected_delegation(values, *, workflow_profile):
+            nonlocal delegated
+            delegated = True
+            return 0
+
+        simplifyctl.core.main = unexpected_delegation
+        try:
+            _, stderr = self.run_tool(
+                "init",
+                "--repo-root",
+                str(self.repo),
+                "--scope",
+                "pull_request",
+                expected=2,
+            )
+        finally:
+            simplifyctl.core.main = original
+        self.assertFalse(delegated)
+        self.assertIn("Unsupported material-simplification scope", stderr)
+        self.assertFalse(self.run_dir.exists())
+
+    def test_coverage_profile_reaches_candidate_capture_for_every_selector(self) -> None:
+        self.assert_simplification_coverage_profile_round_trip(
+            "profile-codebase",
+            "--scope",
+            "codebase",
+            "--path",
+            "src",
+            "--exclude-untracked",
+        )
+
+        (self.repo / "src" / "service.py").write_text(
+            "def value():\n    return 2\n", encoding="utf-8"
+        )
+        base = self.git("rev-parse", "HEAD")
+        for selector, arguments in (
+            ("auto", ("--scope", "auto")),
+            ("uncommitted", ("--scope", "uncommitted")),
+            ("branch", ("--scope", "branch", "--base", base)),
+        ):
+            with self.subTest(selector=selector):
+                self.assert_simplification_coverage_profile_round_trip(
+                    f"profile-{selector}", *arguments
+                )
+
+        self.git("add", "src/service.py")
+        self.git("commit", "-qm", "change service value")
+        head = self.git("rev-parse", "HEAD")
+        self.assert_simplification_coverage_profile_round_trip(
+            "profile-range",
+            "--scope",
+            "range",
+            "--base",
+            base,
+            "--head",
+            head,
+        )
+
+    def test_coverage_profile_rejects_review_lenses_for_simplification(self) -> None:
+        self.run_id = "profile-review-lenses"
+        self.init_src("--exclude-untracked")
+        state = self.load("state.json")
+        plan = self.simplification_coverage_plan(state["scope_hash"])
+        plan["lenses"] = [
+            {
+                "lens_id": lens_id,
+                "required": True,
+                "reviewer_id": lens_id,
+                "independence_group": "fixture-model",
+                "review_mode": "subagent",
+                "fallback": "sequential_degraded_self_audit",
+            }
+            for lens_id in ("correctness", "test_adequacy", "standards_alignment")
+        ]
+        plan_path = self.write_json("profile-review-lenses.json", plan)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(plan_path),
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+        self.assertNotIn("coverage_plan_hash", self.load("state.json")["hashes"])
+
+    def test_coverage_profile_missing_required_wave_stays_open_for_terminal_evidence(self) -> None:
+        self.run_id = "profile-incomplete"
+        self.init_src("--exclude-untracked")
+        state = self.load("state.json")
+        plan_path = self.write_json(
+            "profile-incomplete-plan.json",
+            self.simplification_coverage_plan(state["scope_hash"]),
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(plan_path),
+        )
+        architecture_path = self.write_json(
+            "profile-incomplete-architecture.json",
+            self.empty_simplification_candidate(
+                state["scope_hash"], "architecture-structural", "architecture"
+            ),
+        )
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "architecture_structural",
+            "--input",
+            str(architecture_path),
+        )
+        self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(architecture_path),
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+        self.assertFalse((self.run_dir / "candidates.json").exists())
 
     @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks unavailable")
     def test_selected_symlink_target_is_frozen_and_stales(self) -> None:
@@ -505,6 +808,28 @@ class SimplifyCtlTest(unittest.TestCase):
     def test_codebase_scope_completes_full_gated_repair_lifecycle(self) -> None:
         self.init_src("--exclude-untracked")
         scope_hash = self.load("state.json")["scope_hash"]
+        coverage_plan = self.simplification_coverage_plan(scope_hash)
+        code_lens = next(
+            lens for lens in coverage_plan["lenses"] if lens["lens_id"] == "code_test"
+        )
+        code_lens["reviewer_id"] = "codebase-correctness"
+        code_lens["independence_group"] = "fixture-reviewer"
+        coverage_plan_path = self.write_json("codebase-coverage-plan.json", coverage_plan)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(coverage_plan_path),
+        )
+        architecture_path = self.write_json(
+            "codebase-architecture.json",
+            self.empty_simplification_candidate(
+                scope_hash, "architecture-structural", "architecture"
+            ),
+        )
         candidate = {
             "schema_version": "material-review/candidate-set/v1",
             "scope_hash": scope_hash,
@@ -545,11 +870,35 @@ class SimplifyCtlTest(unittest.TestCase):
         }
         candidate_path = self.write_json("codebase-candidate.json", candidate)
         self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "architecture_structural",
+            "--input",
+            str(architecture_path),
+        )
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "code_test",
+            "--input",
+            str(candidate_path),
+        )
+        self.run_tool(
             "ingest-candidates",
             "--repo-root",
             str(self.repo),
             "--run-id",
             self.run_id,
+            "--input",
+            str(architecture_path),
             "--input",
             str(candidate_path),
         )

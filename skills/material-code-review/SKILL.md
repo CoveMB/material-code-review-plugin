@@ -1,7 +1,7 @@
 ---
 name: material-code-review
 description: 'Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.'
-argument-hint: "[scope:auto|uncommitted|branch|range] [base:<ref>] [head:<ref>] [depth:auto|full] [external-review:off|ask]"
+argument-hint: "[scope:auto|uncommitted|branch|pull_request|range] [base:<ref>] [head:<ref>] [depth:auto|full] [external-review:off|ask]"
 ---
 
 # Material Code Review
@@ -99,13 +99,14 @@ Recognize these optional selectors:
 - `scope:auto` — dirty tree -> uncommitted scope; clean tree -> current branch against a resolvable base.
 - `scope:uncommitted` — `HEAD` against the current working tree, including staged and unstaged changes and untracked files by default.
 - `scope:branch` — merge base with `base:<ref>` against the current working tree, including committed and uncommitted branch work.
+- `scope:pull_request` — exact read-only host base/head provenance, reviewed from their effective merge base to the host head; immutable and GitHub-specific.
 - `scope:range` — `base:<ref>..head:<ref>`; read-only unless the current workspace is later reinitialized as a mutable, aligned scope.
 - `depth:auto` — select conditional lenses from actual risk.
 - `depth:full` — use the full applicable reviewer roster; this does not lower materiality thresholds.
 - `external-review:off` — never route source to external models or CLIs.
 - `external-review:ask` — external review may be proposed, but disclose recipient/route/egress and get explicit permission before dispatch.
 
-Reject incompatible or incomplete selectors before reviewer dispatch. In particular, `scope:range` requires both `base:` and `head:`. Do not switch branches to satisfy a selector.
+Reject incompatible or incomplete selectors before reviewer dispatch. `scope:range` requires both `base:` and `head:` and remains a direct two-dot comparison. `scope:pull_request` additionally requires a repository-qualified `owner/repository#number`, exact lowercase host base/head SHAs, and refs resolving to that pair. PR provenance is invalid on every other scope. Do not switch branches to satisfy a selector.
 
 ## Workflow
 
@@ -133,7 +134,7 @@ Explicit examples:
 python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope uncommitted
 python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope branch --base origin/main
 python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope range --base origin/main --head refs/review/pr-123-head
-python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope range \
+python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope pull_request \
   --base <exact-base-sha> --head <exact-head-sha> \
   --review-object-kind pull_request --review-object-id owner/repository#123 \
   --review-base-sha <exact-base-sha> --review-head-sha <exact-head-sha>
@@ -163,7 +164,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .
 
 A mismatch means prior reviewer output is stale. Do not “adjust mentally”; reinitialize or regenerate affected artifacts.
 
-Derive a root-owned coverage plan from the frozen context before dispatch. Always require `correctness`, `test_adequacy`, and `standards_alignment`. Add required `protocol_coherence` whenever the context records `multi_stage_lifecycle`, `cross_boundary_data`, `prompt_contract`, `conditional_validation`, `state_dependent_schema`, `trust_ordering`, or `shared_schema`. Record actual reviewer IDs, process/model independence groups, modes, and bounded fallback policy; reviewers do not choose their own coverage authority.
+Derive a root-owned coverage plan from the frozen context before dispatch. The controller-owned `material_review` workflow profile always requires `correctness`, `test_adequacy`, and `standards_alignment`. Add required `protocol_coherence` whenever the context records `multi_stage_lifecycle`, `cross_boundary_data`, `prompt_contract`, `conditional_validation`, `state_dependent_schema`, `trust_ordering`, or `shared_schema`. Record the matching workflow profile, primary reviewer IDs, process/model independence groups, modes, and bounded fallback policy; reviewers and candidate drafts do not choose their own profile or coverage authority.
 
 ```bash
 python3 "$SKILL_DIR/scripts/reviewctl.py" record-coverage \
@@ -239,7 +240,9 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" check-candidates \
   --input /tmp/reviewer-correctness.json
 ```
 
-A `correctable` receipt permits at most one correction attempt by that draft's author, using `--supersedes <receipt-hash>`. The correction may repair JSON shape, top-level metadata, local IDs, or evidence anchors; it must preserve substantive finding fields. Do not let the controller or adjudicator rewrite a candidate's substance. If a required primary lens fails, its declared policy may permit one sequential `--fallback` review. Label same-model-family fallback honestly; it is degraded coverage, not independent corroboration.
+A `correctable` primary receipt permits at most one correction attempt by that draft's author, using `--supersedes <receipt-hash>`. The correction may repair JSON shape, top-level metadata, local IDs, or evidence anchors; it must preserve substantive finding fields. Primary attempts are stored under the `primary` route and stop after attempt 2. Do not let the controller or adjudicator rewrite a candidate's substance. If a required primary route fails, use `assign-fallback` to bind the exact failure trigger to the actual fallback `reviewer_id`, `independence_group`, and `review_mode` in a root-owned, hash-bound assignment. Only then may the declared policy permit one separate `check-candidates --fallback` attempt. The fallback draft must match that assignment; its receipt and normalized candidates retain the assignment hash and degraded marker. Fallback starts at attempt 1, never supersedes a primary receipt, accepts no correction or second fallback, and permanently closes primary dispatch. Same-controller or same-model-family fallback remains degraded coverage, not independent corroboration.
+
+When an assigned required reviewer returns no readable draft, the root controller or scheduler may use `record-reviewer-failure` instead of fabricating an empty candidate. The attestation binds the scope, coverage plan, workflow profile, lens, route, active assignment and identity, controlled reason, bounded code-and-integer diagnostics, observer authority, timestamp, and hash. It contains no candidate fields, free-form diagnostic text, secrets, or raw logs. Candidate bytes that exist always remain on `check-candidates`; an attestation cannot replace malformed or rejected readable output. A primary attestation may authorize the declared fallback assignment, and a fallback attestation may exhaust that already assigned route. After every incomplete required route has terminal receipt or attestation evidence and no fallback authority remains unused, `finalize-coverage` writes only incomplete coverage and transitions to `REVIEW_INCOMPLETE`; it creates no candidate bundle, merge verdict, adjudication, or gate.
 
 Save each return to a temporary JSON file, then ingest all returns together:
 
@@ -250,15 +253,18 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" ingest-candidates \
   --input /tmp/reviewer-testing.json
 ```
 
-The tool verifies each input's exact bytes against its latest valid preflight receipt, then verifies scope hashes, required fields, changed-path relation, source-side evidence, and ID uniqueness. Malformed or wholly rejected coverage remains visible. Ingest only after every required lens has a valid primary or permitted fallback receipt. Missing required coverage ends in `REVIEW_INCOMPLETE`; it has no merge verdict, produces no candidate bundle, and cannot proceed to validation, adjudication, or Gate A.
+The tool verifies each input's exact bytes against its latest valid preflight receipt, then verifies scope hashes, required fields, changed-path relation, source-side evidence, and ID uniqueness. Malformed or wholly rejected coverage remains visible. Ingest only after every required lens has a valid primary or permitted fallback receipt. Fully exhausted missing required coverage ends in `REVIEW_INCOMPLETE`; a pending correction, unobserved route, or unused fallback refuses finalization. An incomplete run has no merge verdict, produces no candidate bundle, and cannot proceed to validation, adjudication, or Gate A.
 
 The discovery sequence is:
 
 ```text
 read PR metadata -> init exact range with provenance -> record coverage plan ->
-dispatch one lens per reviewer -> preflight each draft -> at most one author-owned
-mechanical correction -> optional required-lens fallback -> ingest only with
-complete required coverage -> validate/adjudicate -> Gate A
+dispatch one lens per reviewer -> preflight primary attempt 1 -> optional author-owned
+primary correction attempt 2 OR root-attest no readable primary draft ->
+bind actual fallback assignment after verified primary failure -> optional one-attempt
+fallback receipt OR root-attested fallback no-output -> if coverage is complete, ingest ->
+validate/adjudicate -> Gate A; otherwise finalize fully exhausted required coverage as
+REVIEW_INCOMPLETE -> stop
 ```
 
 ### Phase 2 — Validate and adjudicate
@@ -519,6 +525,33 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" run-global-test \
 
 A green command is not conclusive proof for authorization, migrations, distributed effects, public contracts, or concurrency. Preserve those residual verification limits in the final report.
 
+#### 4.4 Final-state finding-test refresh and bounded recovery
+
+After every approved finding is fixed, an earlier required finding test can be stale because a later approved repair changed one of the same allowed paths. Refresh only that exact Gate-B-approved test; this records new evidence without reopening the finding, consuming an attempt, or consuming a repair round:
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" refresh-finding-test \
+  --repo-root . \
+  --finding F001 \
+  --test unit-regression
+```
+
+The command is available only in `FIXING` with no active finding, every approved finding fixed, a fresh workspace guard, and no aggregate out-of-plan change. It reuses the approved command and binds the result to the latest retained attempt, the current allowed-path hash, the current workspace guard, and the approved test definition. A later retained edit invalidates that refresh. A mutating command is rejected and restored under the same test controls.
+
+If the latest failed or stale required test evidence shows that another code change is necessary before verification, use the separate evidence-bound recovery transition. Supply the exact latest evidence hash printed by `run-test`, `refresh-finding-test`, or `run-global-test`, the approved repair targets, and a causal rationale:
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" begin-pre-verification-repair \
+  --repo-root . \
+  --finding F001 \
+  --evidence-kind global_test \
+  --evidence-id focused-suite \
+  --evidence-hash <latest-result-hash> \
+  --reason "The failing final-state check is causally owned by F001."
+```
+
+This is not a generic reopen. The controller rejects passing, nonlatest, unbound, optional, out-of-plan, wrong-ID, and exhausted-budget evidence; increments the shared repair-round counter once; and marks only the named approved targets `repair_pending`. Finding-test evidence must include its owner among the targets. Repeat the normal checkpointed per-finding cycle, then refresh any evidence invalidated by the retained repair.
+
 ### Phase 5 — Post-fix verification
 
 Prepare the bounded verification bundle:
@@ -527,7 +560,7 @@ Prepare the bounded verification bundle:
 python3 "$SKILL_DIR/scripts/reviewctl.py" prepare-verification --repo-root .
 ```
 
-This checks that all approved findings are marked fixed, global required tests passed, and the aggregate repair delta remains inside Gate-B paths. It writes a fix-only diff/snapshot summary.
+This checks that all approved findings are marked fixed, every required finding test has current retained-attempt or final-refresh evidence, global required tests passed at the current workspace guard, and the aggregate repair delta remains inside Gate-B paths. It writes a fix-only diff/snapshot summary, including refresh and pre-verification recovery history.
 
 Use `references/postfix-verifier-template.md` and `schemas/verification.schema.json`. In Codex, prefer a fresh read-only `explorer` subagent or installed project-scoped post-fix verifier that did not implement the repair. Record degraded self-audit when no fresh verifier is available. The verifier must evaluate:
 
@@ -591,7 +624,10 @@ Read `references/failure-model.md`. In summary:
 - unavailable or mismatched PR metadata -> stop; never fall back to the head parent;
 - missing or stale coverage plan -> stop before dispatch or ingestion;
 - correctable candidate draft -> permit one author-owned mechanical correction only;
-- missing required lens after its permitted fallback -> `REVIEW_INCOMPLETE` with no merge verdict;
+- missing, stale, or identity-mismatched fallback assignment -> stop before fallback preflight;
+- readable candidate bytes presented as no-output, forged/duplicate attestation, or free-form/raw diagnostics -> reject without authorizing fallback;
+- required route with no terminal evidence or unused fallback authority -> refuse `finalize-coverage`;
+- missing required lens after its permitted, explicitly assigned fallback -> `REVIEW_INCOMPLETE` with no merge verdict;
 - unavailable subagents -> same checklist, sequential/degraded self-audit;
 - validator infrastructure failure -> preserve high-impact uncertainty visibly;
 - user gate absent -> stop;

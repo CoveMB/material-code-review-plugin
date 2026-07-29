@@ -140,6 +140,7 @@ class ReviewCtlTest(unittest.TestCase):
         return {
             "schema_version": "material-review/coverage-plan/v1",
             "scope_hash": scope_hash,
+            "workflow_profile": "material_review",
             "risk_signals": signals,
             "lenses": lenses,
             "max_candidate_corrections": 1,
@@ -216,6 +217,83 @@ class ReviewCtlTest(unittest.TestCase):
             *input_args,
             expected=expected,
         )
+
+    def assign_fallback(
+        self,
+        *,
+        lens_id: str = "correctness",
+        reviewer_id: str = "fallback-correctness",
+        independence_group: str = "model-b",
+        review_mode: str = "subagent",
+        failure_trigger_kind: str = "candidate_preflight_receipt",
+        failure_trigger_hash: str | None = None,
+    ) -> dict:
+        state = self.load("state.json")
+        if failure_trigger_hash is None:
+            if failure_trigger_kind == "candidate_preflight_receipt":
+                route_state = state["candidate_preflight"][lens_id]
+                failure_trigger_hash = route_state["primary"][-1]["receipt_hash"]
+            else:
+                failure_trigger_hash = state["reviewer_failure_attestations"][lens_id][
+                    "primary"
+                ]["attestation_hash"]
+        self.run_tool(
+            "assign-fallback",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            lens_id,
+            "--failure-trigger-kind",
+            failure_trigger_kind,
+            "--failure-trigger-hash",
+            failure_trigger_hash,
+            "--reviewer-id",
+            reviewer_id,
+            "--independence-group",
+            independence_group,
+            "--review-mode",
+            review_mode,
+        )
+        return self.load(f"fallback-assignments/{lens_id}.json")
+
+    def record_reviewer_failure(
+        self,
+        *,
+        lens_id: str = "correctness",
+        route: str = "primary",
+        reason: str = "timeout",
+        observer_kind: str = "scheduler",
+        observer_id: str = "root-scheduler",
+        diagnostics: tuple[str, ...] = ("elapsed_seconds=300",),
+        expected: int = 0,
+    ) -> dict | None:
+        diagnostic_args = [
+            item for diagnostic in diagnostics for item in ("--diagnostic", diagnostic)
+        ]
+        self.run_tool(
+            "record-reviewer-failure",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            lens_id,
+            "--route",
+            route,
+            "--reason",
+            reason,
+            "--observer-kind",
+            observer_kind,
+            "--observer-id",
+            observer_id,
+            *diagnostic_args,
+            expected=expected,
+        )
+        if expected:
+            return None
+        return self.load(f"reviewer-failure-attestations/{lens_id}/{route}.json")
 
     def candidate_set(self, scope_hash: str, *, include_style: bool = True):
         findings = [
@@ -557,7 +635,26 @@ class ReviewCtlTest(unittest.TestCase):
         return scope_hash, self.load("fix-plan.json")
 
     def begin_fixed_and_prepare(self) -> tuple[str, dict, dict]:
-        scope_hash, plan = self.approve_and_plan()
+        scope_hash, plan = self.retain_fixed_finding()
+        self.run_tool(
+            "prepare-verification",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+        )
+        return scope_hash, plan, self.load("fix-summary.json")
+
+    def retain_fixed_finding(
+        self,
+        *,
+        test_command: str = "grep -Fq 'return a + b' calc.py",
+        global_tests: list[dict] | None = None,
+    ) -> tuple[str, dict]:
+        scope_hash, plan = self.approve_and_plan(
+            test_command=test_command,
+            global_tests=global_tests,
+        )
         self.run_tool("begin-fix", "--repo-root", str(self.repo), "--run-id", self.run_id)
         self.run_tool(
             "start-finding",
@@ -593,14 +690,7 @@ class ReviewCtlTest(unittest.TestCase):
             "--note",
             "Restored addition.",
         )
-        self.run_tool(
-            "prepare-verification",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-        )
-        return scope_hash, plan, self.load("fix-summary.json")
+        return scope_hash, plan
 
     def test_scope_includes_untracked_and_detects_staleness(self) -> None:
         (self.repo / "new_module.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -618,14 +708,153 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertTrue((self.run_dir / "scope-staleness.json").exists())
 
-    def test_pr_provenance_is_bound_to_scope_hash(self) -> None:
-        base, head = self.committed_range()
+    def test_pull_request_scope_uses_merge_base_while_range_stays_direct(self) -> None:
+        merge_base = self.git("rev-parse", "HEAD")
+        self.git("switch", "-qc", "feature")
+        self.git("add", "calc.py")
+        self.git("commit", "-qm", "feature change")
+        feature_head = self.git("rev-parse", "HEAD")
+
+        self.git("switch", "-qc", "base", merge_base)
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a * b\n", encoding="utf-8"
+        )
+        (self.repo / "base_only.py").write_text("BASE_ONLY = True\n", encoding="utf-8")
+        self.git("add", "calc.py", "base_only.py")
+        self.git("commit", "-qm", "advance base")
+        host_base = self.git("rev-parse", "HEAD")
+
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "pull_request",
+            "--base",
+            "base",
+            "--head",
+            "feature",
+            "--run-id",
+            self.run_id,
+            "--review-object-kind",
+            "pull_request",
+            "--review-object-id",
+            "CoveMB/material-code-review-plugin#3",
+            "--review-base-sha",
+            host_base,
+            "--review-head-sha",
+            feature_head,
+        )
+        scope = self.load("scope.json")
+        identity = scope["identity"]
+        state = self.load("state.json")
+        expected_patch = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--binary",
+                "--full-index",
+                "--find-renames",
+                f"{merge_base}..{feature_head}",
+                "--",
+            ],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+        ).stdout
+        direct_patch = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--binary",
+                "--full-index",
+                "--find-renames",
+                f"{host_base}..{feature_head}",
+                "--",
+            ],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+        ).stdout
+
+        self.assertEqual(identity["actual_scope"], "pull_request")
+        self.assertEqual(identity["comparison_kind"], "merge_base_to_head")
+        self.assertEqual(identity["effective_merge_base"], merge_base)
+        self.assertEqual(identity["baseline_sha"], merge_base)
+        self.assertEqual(identity["comparison_sha"], feature_head)
+        self.assertEqual(
+            identity["review_object"],
+            {
+                "kind": "pull_request",
+                "identifier": "CoveMB/material-code-review-plugin#3",
+                "base_sha": host_base,
+                "head_sha": feature_head,
+                "metadata_source": "read_only_host_lookup",
+            },
+        )
+        self.assertEqual(scope["scope_hash"], reviewctl.scope_identity_hash(identity))
+        self.assertEqual(
+            state["scope_params"]["review_object"], identity["review_object"]
+        )
+        self.assertEqual((self.run_dir / "scope.patch").read_bytes(), expected_patch)
+        self.assertNotEqual(expected_patch, direct_patch)
+        self.assertEqual(
+            {entry["path"] for entry in self.load("files.json")}, {"calc.py"}
+        )
+        self.assertEqual(
+            (self.run_dir / "sources" / "baseline" / "calc.py").read_text(
+                encoding="utf-8"
+            ),
+            "def add(a, b):\n    return a + b\n",
+        )
+        self.assertEqual(
+            (self.run_dir / "sources" / "comparison" / "calc.py").read_text(
+                encoding="utf-8"
+            ),
+            "def add(a, b):\n    return a - b\n",
+        )
+        self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+
+        range_run_id = "range-run"
         self.run_tool(
             "init",
             "--repo-root",
             str(self.repo),
             "--scope",
             "range",
+            "--base",
+            "base",
+            "--head",
+            "feature",
+            "--run-id",
+            range_run_id,
+        )
+        range_run_dir = self.run_dir.parent / range_run_id
+        range_scope = json.loads(
+            (range_run_dir / "scope.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(range_scope["identity"]["actual_scope"], "range")
+        self.assertEqual(range_scope["identity"]["comparison_kind"], "commit")
+        self.assertNotIn("effective_merge_base", range_scope["identity"])
+        self.assertEqual((range_run_dir / "scope.patch").read_bytes(), direct_patch)
+        self.run_tool(
+            "check-scope",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            range_run_id,
+        )
+
+    def test_pull_request_scope_provenance_is_bound_to_scope_hash(self) -> None:
+        base, head = self.committed_range()
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "pull_request",
             "--base",
             base,
             "--head",
@@ -657,55 +886,112 @@ class ReviewCtlTest(unittest.TestCase):
             "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
         )
 
-    def test_pr_provenance_mismatch_fails_before_run_creation(self) -> None:
+    def test_pull_request_scope_invalid_inputs_fail_before_run_creation(self) -> None:
         base, head = self.committed_range()
-        self.run_tool(
-            "init",
+        common = [
             "--repo-root",
             str(self.repo),
-            "--scope",
-            "range",
             "--base",
             base,
             "--head",
             head,
-            "--run-id",
-            self.run_id,
             "--review-object-kind",
             "pull_request",
             "--review-object-id",
             "CoveMB/material-code-review-plugin#3",
             "--review-base-sha",
-            head,
+            base,
             "--review-head-sha",
             head,
+        ]
+        cases = {
+            "absent-provenance": [
+                "--repo-root",
+                str(self.repo),
+                "--base",
+                base,
+                "--head",
+                head,
+            ],
+            "partial-provenance": common[:-2],
+            "unqualified-identity": [
+                *common[:9],
+                "3",
+                *common[10:],
+            ],
+            "base-mismatch": [
+                *common[:11],
+                head,
+                *common[12:],
+            ],
+            "missing-base-ref": [
+                item
+                for index, item in enumerate(common)
+                if index not in {2, 3}
+            ],
+        }
+        for label, arguments in cases.items():
+            with self.subTest(label=label):
+                run_id = f"invalid-{label}"
+                self.run_tool(
+                    "init",
+                    *arguments,
+                    "--scope",
+                    "pull_request",
+                    "--run-id",
+                    run_id,
+                    expected=2,
+                )
+                self.assertFalse((self.run_dir.parent / run_id).exists())
+
+        self.run_tool(
+            "init",
+            *common,
+            "--scope",
+            "range",
+            "--run-id",
+            self.run_id,
             expected=2,
         )
         self.assertFalse(self.run_dir.exists())
 
-    def test_pr_provenance_requires_complete_range_metadata(self) -> None:
+    def test_pull_request_mutable_scope_guard_rejects_matching_metadata_before_artifacts(
+        self,
+    ) -> None:
         base, head = self.committed_range()
-        self.run_tool(
+        (self.repo / "test_calc.py").write_text(
+            "from calc import add\nassert add(1, 2) == 3\n# later workspace-only change\n",
+            encoding="utf-8",
+        )
+        run_id = "mutable-pr-branch"
+
+        _, stderr = self.run_tool(
             "init",
             "--repo-root",
             str(self.repo),
             "--scope",
-            "range",
+            "branch",
             "--base",
             base,
-            "--head",
-            head,
             "--run-id",
-            self.run_id,
+            run_id,
             "--review-object-kind",
             "pull_request",
             "--review-object-id",
             "CoveMB/material-code-review-plugin#3",
             "--review-base-sha",
             base,
+            "--review-head-sha",
+            head,
             expected=2,
         )
-        self.assertFalse(self.run_dir.exists())
+
+        self.assertIn(
+            "PR review provenance is valid only with scope=pull_request", stderr
+        )
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertTrue(self.git("diff", "--", "test_calc.py"))
+        self.assertFalse((self.run_dir.parent / run_id).exists())
 
     def test_coverage_plan_is_recorded_and_hash_bound(self) -> None:
         scope_hash = self.init_with_coverage(protocol=True)
@@ -716,6 +1002,104 @@ class ReviewCtlTest(unittest.TestCase):
             state["hashes"]["coverage_plan_hash"], reviewctl.canonical_hash(plan)
         )
         self.assertTrue(state["coverage_required"])
+
+    def test_coverage_profile_is_root_owned_and_review_defaults_are_preserved(self) -> None:
+        scope_hash = self.init()
+        state = self.load("state.json")
+        self.assertEqual(state.get("workflow_profile"), "material_review")
+
+        mismatched = self.coverage_plan(scope_hash)
+        mismatched["workflow_profile"] = "material_simplification"
+        mismatched_path = self.write_json("mismatched-profile.json", mismatched)
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(mismatched_path),
+            expected=2,
+        )
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+        self.assertNotIn("coverage_plan_hash", self.load("state.json")["hashes"])
+
+        plan_path = self.write_json("review-profile.json", self.coverage_plan(scope_hash))
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(plan_path),
+        )
+        recorded = self.load("coverage-plan.json")
+        self.assertEqual(recorded["workflow_profile"], "material_review")
+        self.assertEqual(
+            {lens["lens_id"] for lens in recorded["lenses"]},
+            {"correctness", "test_adequacy", "standards_alignment"},
+        )
+
+    def test_material_review_core_lens_requiredness_is_fail_closed(self) -> None:
+        core_lenses = ("correctness", "test_adequacy", "standards_alignment")
+        for mode in ("absent", "not-required"):
+            for lens_id in core_lenses:
+                with self.subTest(mode=mode, lens_id=lens_id):
+                    self.run_id = f"core-{mode}-{lens_id}"
+                    scope_hash = self.init()
+                    plan = self.coverage_plan(scope_hash)
+                    if mode == "absent":
+                        plan["lenses"] = [
+                            lens for lens in plan["lenses"] if lens["lens_id"] != lens_id
+                        ]
+                    else:
+                        next(
+                            lens for lens in plan["lenses"] if lens["lens_id"] == lens_id
+                        )["required"] = False
+                    plan_path = self.write_json(
+                        f"core-{mode}-{lens_id}.json", plan
+                    )
+
+                    self.run_tool(
+                        "record-coverage",
+                        "--repo-root",
+                        str(self.repo),
+                        "--run-id",
+                        self.run_id,
+                        "--input",
+                        str(plan_path),
+                        expected=2,
+                    )
+
+                    state = self.load("state.json")
+                    self.assertEqual(state["phase"], "CONTEXT_FROZEN")
+                    self.assertNotIn("coverage_plan_hash", state["hashes"])
+                    self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+
+        self.run_id = "core-valid"
+        scope_hash = self.init()
+        plan_path = self.write_json(
+            "core-valid.json", self.coverage_plan(scope_hash)
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(plan_path),
+        )
+        recorded = self.load("coverage-plan.json")
+        self.assertEqual(
+            {
+                lens["lens_id"]
+                for lens in recorded["lenses"]
+                if lens["required"]
+            },
+            set(core_lenses),
+        )
 
     def test_coverage_plan_rejects_stale_scope_hash(self) -> None:
         scope_hash = self.init()
@@ -804,7 +1188,7 @@ class ReviewCtlTest(unittest.TestCase):
             "--input",
             str(path),
         )
-        receipt = self.load("candidate-preflight/correctness/attempt-1.json")
+        receipt = self.load("candidate-preflight/correctness/primary/attempt-1.json")
         self.assertEqual(receipt["verdict"], "valid")
         self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
 
@@ -869,7 +1253,9 @@ class ReviewCtlTest(unittest.TestCase):
         preflight_state = self.load("state.json")["candidate_preflight"]
         self.assertEqual(set(preflight_state), set(candidate_paths))
         for lens_id in candidate_paths:
-            self.assertEqual(len(preflight_state[lens_id]), 1)
+            self.assertEqual(set(preflight_state[lens_id]), {"primary", "fallback"})
+            self.assertEqual(len(preflight_state[lens_id]["primary"]), 1)
+            self.assertEqual(preflight_state[lens_id]["fallback"], [])
 
     def test_nonverbatim_quote_gets_one_correctable_candidate_preflight_receipt(self) -> None:
         scope_hash = self.init_with_coverage()
@@ -888,11 +1274,11 @@ class ReviewCtlTest(unittest.TestCase):
             str(path),
             expected=2,
         )
-        receipt = self.load("candidate-preflight/correctness/attempt-1.json")
+        receipt = self.load("candidate-preflight/correctness/primary/attempt-1.json")
         self.assertEqual(receipt["verdict"], "correctable")
         self.assertEqual(receipt["diagnostics"][0]["code"], "EVIDENCE_NOT_FOUND")
 
-    def test_second_candidate_preflight_attempt_cannot_change_substantive_fields(self) -> None:
+    def test_mechanical_correction_semantic_hash_rejects_substantive_drift(self) -> None:
         scope_hash = self.init_with_coverage()
         draft = self.candidate_set(scope_hash, include_style=False)
         draft["findings"][0]["evidence_quote"] = "return something else"
@@ -909,7 +1295,7 @@ class ReviewCtlTest(unittest.TestCase):
             str(first),
             expected=2,
         )
-        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
         draft["findings"][0]["evidence_quote"] = "    return a - b"
         draft["findings"][0]["observable_consequence"] = "Changed substance."
         second = self.write_json("second.json", draft)
@@ -927,10 +1313,90 @@ class ReviewCtlTest(unittest.TestCase):
             prior["receipt_hash"],
             expected=2,
         )
-        diagnostics = self.load("candidate-preflight/correctness/attempt-2.json")[
+        diagnostics = self.load("candidate-preflight/correctness/primary/attempt-2.json")[
             "diagnostics"
         ]
         self.assertIn("SUBSTANTIVE_DRIFT", {item["code"] for item in diagnostics})
+
+    def test_mechanical_correction_semantic_hash_accepts_local_id_repair(self) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash)
+        draft["findings"][1]["local_id"] = draft["findings"][0]["local_id"]
+        first = self.write_json("duplicate-local-id.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(first),
+            expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        self.assertIn(
+            "DUPLICATE_LOCAL_ID", {item["code"] for item in prior["diagnostics"]}
+        )
+
+        draft["findings"][1]["local_id"] = "b-rename"
+        corrected = self.write_json("corrected-local-id.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(corrected),
+            "--supersedes",
+            prior["receipt_hash"],
+        )
+        receipt = self.load("candidate-preflight/correctness/primary/attempt-2.json")
+        self.assertEqual(receipt["verdict"], "valid")
+        self.assertEqual(receipt["semantic_hash"], prior["semantic_hash"])
+
+    def test_mechanical_correction_semantic_hash_accepts_unknown_key_removal(self) -> None:
+        scope_hash = self.init_with_coverage()
+        draft = self.candidate_set(scope_hash, include_style=False)
+        draft["findings"][0]["unexpected_key"] = "remove me"
+        first = self.write_json("unknown-key.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(first),
+            expected=2,
+        )
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+        self.assertIn("UNKNOWN_FIELD", {item["code"] for item in prior["diagnostics"]})
+
+        del draft["findings"][0]["unexpected_key"]
+        corrected = self.write_json("removed-unknown-key.json", draft)
+        self.run_tool(
+            "check-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--lens",
+            "correctness",
+            "--input",
+            str(corrected),
+            "--supersedes",
+            prior["receipt_hash"],
+        )
+        receipt = self.load("candidate-preflight/correctness/primary/attempt-2.json")
+        self.assertEqual(receipt["verdict"], "valid")
+        self.assertEqual(receipt["semantic_hash"], prior["semantic_hash"])
 
     def test_evidence_only_candidate_preflight_correction_succeeds(self) -> None:
         scope_hash = self.init_with_coverage()
@@ -949,7 +1415,7 @@ class ReviewCtlTest(unittest.TestCase):
             str(first),
             expected=2,
         )
-        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
         draft["findings"][0]["evidence_quote"] = "    return a - b"
         second = self.write_json("second-evidence.json", draft)
         self.run_tool(
@@ -965,8 +1431,122 @@ class ReviewCtlTest(unittest.TestCase):
             "--supersedes",
             prior["receipt_hash"],
         )
-        receipt = self.load("candidate-preflight/correctness/attempt-2.json")
+        receipt = self.load("candidate-preflight/correctness/primary/attempt-2.json")
         self.assertEqual(receipt["verdict"], "valid")
+
+    def test_candidate_preflight_route_budget_allows_correction_then_fallback(self) -> None:
+        scope_hash = self.init_with_coverage()
+        first_draft = self.candidate_set(scope_hash, include_style=False)
+        first_draft["findings"][0]["evidence_quote"] = "return something else"
+        first_path = self.write_json("route-primary-1.json", first_draft)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(first_path), expected=2,
+        )
+        first = self.load(
+            "candidate-preflight/correctness/primary/attempt-1.json"
+        )
+
+        second_draft = self.candidate_set(scope_hash, include_style=False)
+        second_draft["findings"][0]["observable_consequence"] = "Changed substance."
+        second_path = self.write_json("route-primary-2.json", second_draft)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(second_path),
+            "--supersedes", first["receipt_hash"], expected=2,
+        )
+        second = self.load(
+            "candidate-preflight/correctness/primary/attempt-2.json"
+        )
+        self.assertEqual(second["verdict"], "rejected")
+        self.assign_fallback(
+            reviewer_id="correctness", independence_group="model-a"
+        )
+
+        fallback_path = self.write_json(
+            "route-fallback-1.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+        )
+        fallback = self.load(
+            "candidate-preflight/correctness/fallback/attempt-1.json"
+        )
+        self.assertEqual(fallback["route"], "fallback")
+        self.assertEqual(fallback["attempt"], 1)
+        self.assertIsNone(fallback["supersedes_receipt_hash"])
+
+        route_state = self.load("state.json")["candidate_preflight"]["correctness"]
+        self.assertEqual(set(route_state), {"primary", "fallback"})
+        self.assertEqual(len(route_state["primary"]), 2)
+        self.assertEqual(len(route_state["fallback"]), 1)
+        state_before_rejections = copy.deepcopy(route_state)
+
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), expected=2,
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+            expected=2,
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+            "--supersedes", fallback["receipt_hash"], expected=2,
+        )
+        self.assertEqual(
+            self.load("state.json")["candidate_preflight"]["correctness"],
+            state_before_rejections,
+        )
+        self.assertFalse(
+            (self.run_dir / "candidate-preflight/correctness/primary/attempt-3.json").exists()
+        )
+        self.assertFalse(
+            (self.run_dir / "candidate-preflight/correctness/fallback/attempt-2.json").exists()
+        )
+
+        paths = [fallback_path]
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"route-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+            paths.append(path)
+        self.ingest_candidate_paths(paths)
+        correctness = next(
+            item for item in self.load("coverage-status.json")["lenses"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(correctness["completion_route"], "fallback")
+
+    def test_candidate_preflight_route_budget_rejects_fallback_after_valid_primary(self) -> None:
+        scope_hash = self.init_with_coverage()
+        path = self.write_json(
+            "valid-primary-route.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(path),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(path), "--fallback", expected=2,
+        )
+        route_state = self.load("state.json")["candidate_preflight"]["correctness"]
+        self.assertEqual(len(route_state["primary"]), 1)
+        self.assertEqual(route_state["fallback"], [])
 
     def test_third_candidate_preflight_attempt_is_refused(self) -> None:
         scope_hash = self.init_with_coverage()
@@ -977,7 +1557,7 @@ class ReviewCtlTest(unittest.TestCase):
             "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
             "--lens", "correctness", "--input", str(first), expected=2,
         )
-        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
         draft["findings"][0]["evidence_quote"] = "    return a - b"
         second = self.write_json("second-third-attempt.json", draft)
         self.run_tool(
@@ -985,14 +1565,14 @@ class ReviewCtlTest(unittest.TestCase):
             "--lens", "correctness", "--input", str(second), "--supersedes",
             prior["receipt_hash"],
         )
-        corrected = self.load("candidate-preflight/correctness/attempt-2.json")
+        corrected = self.load("candidate-preflight/correctness/primary/attempt-2.json")
         self.run_tool(
             "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
             "--lens", "correctness", "--input", str(second), "--supersedes",
             corrected["receipt_hash"], expected=2,
         )
         self.assertFalse(
-            (self.run_dir / "candidate-preflight/correctness/attempt-3.json").exists()
+            (self.run_dir / "candidate-preflight/correctness/primary/attempt-3.json").exists()
         )
 
     def test_stale_scope_refuses_candidate_preflight(self) -> None:
@@ -1017,7 +1597,7 @@ class ReviewCtlTest(unittest.TestCase):
             "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
             "--lens", "correctness", "--input", str(first), expected=2,
         )
-        prior = self.load("candidate-preflight/correctness/attempt-1.json")
+        prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
         self.assertIsNone(prior["semantic_hash"])
         self.assertEqual(prior["diagnostics"][0]["code"], "JSON_SYNTAX")
         corrected = self.write_json(
@@ -1029,7 +1609,7 @@ class ReviewCtlTest(unittest.TestCase):
             prior["receipt_hash"],
         )
         self.assertEqual(
-            self.load("candidate-preflight/correctness/attempt-2.json")["verdict"], "valid"
+            self.load("candidate-preflight/correctness/primary/attempt-2.json")["verdict"], "valid"
         )
 
     def test_coverage_completion_rejects_input_bytes_not_bound_to_valid_receipt(self) -> None:
@@ -1039,8 +1619,8 @@ class ReviewCtlTest(unittest.TestCase):
         )
         paths[0].write_text(paths[0].read_text(encoding="utf-8") + "\n", encoding="utf-8")
         self.ingest_candidate_paths(paths, expected=2)
-        self.assertEqual(self.load("state.json")["phase"], "REVIEW_INCOMPLETE")
-        self.assertEqual(self.load("coverage-status.json")["status"], "incomplete")
+        self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
         self.assertFalse((self.run_dir / "candidates.json").exists())
 
     def test_coverage_completion_preserves_rejected_optional_lens(self) -> None:
@@ -1079,6 +1659,751 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertIn("CANDIDATE_INVALID", optional["diagnostics"])
         self.assertTrue(any("documentation" in item for item in status["limitations"]))
 
+    def test_valid_optional_receipt_must_be_supplied_explicitly(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"].append(
+            {
+                "lens_id": "documentation",
+                "required": False,
+                "reviewer_id": "docs",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "none",
+            }
+        )
+        plan_path = self.write_json("valid-optional-receipt-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+        required_paths = self.preflight_core_wave(
+            scope_hash, self.candidate_set(scope_hash, include_style=False)
+        )
+        optional = self.candidate_set(scope_hash, include_style=False)
+        optional["reviewer_id"] = "docs"
+        optional_path = self.write_json("valid-optional-receipt-docs.json", optional)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "documentation", "--input", str(optional_path),
+        )
+        state_before = copy.deepcopy(self.load("state.json"))
+
+        self.ingest_candidate_paths(required_paths, expected=2)
+
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_valid_optional_receipt_is_ingested_exactly_once(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"].append(
+            {
+                "lens_id": "documentation",
+                "required": False,
+                "reviewer_id": "docs",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "none",
+            }
+        )
+        plan_path = self.write_json("valid-optional-receipt-success-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+        paths = self.preflight_core_wave(
+            scope_hash, self.candidate_set(scope_hash, include_style=False)
+        )
+        optional = self.candidate_set(scope_hash, include_style=False)
+        optional["reviewer_id"] = "docs"
+        optional_path = self.write_json("valid-optional-receipt-success-docs.json", optional)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "documentation", "--input", str(optional_path),
+        )
+        paths.append(optional_path)
+
+        self.ingest_candidate_paths(paths)
+
+        bundle = self.load("candidates.json")
+        self.assertEqual(
+            sum(item["reviewer_id"] == "docs" for item in bundle["reviewer_sets"]), 1
+        )
+        self.assertEqual(
+            sum(item["reviewer_id"] == "docs" for item in bundle["candidates"]), 1
+        )
+        optional_status = next(
+            item for item in bundle["coverage"]["lenses"]
+            if item["lens_id"] == "documentation"
+        )
+        self.assertTrue(optional_status["completed"])
+
+    def test_valid_optional_receipt_absence_remains_nonblocking(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"].append(
+            {
+                "lens_id": "documentation",
+                "required": False,
+                "reviewer_id": "docs",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "none",
+            }
+        )
+        plan_path = self.write_json("valid-optional-receipt-absent-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+        paths = self.preflight_core_wave(
+            scope_hash, self.candidate_set(scope_hash, include_style=False)
+        )
+
+        self.ingest_candidate_paths(paths)
+
+        status = self.load("coverage-status.json")
+        optional = next(
+            item for item in status["lenses"] if item["lens_id"] == "documentation"
+        )
+        self.assertFalse(optional["completed"])
+        self.assertTrue(any("documentation" in item for item in status["limitations"]))
+
+    def test_fallback_assignment_binds_actual_identity_through_coverage(self) -> None:
+        scope_hash = self.init_with_coverage()
+        failed = self.candidate_set(scope_hash, include_style=False)
+        failed["findings"][0]["category"] = "not-a-category"
+        failed_path = self.write_json("fallback-assignment-primary.json", failed)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(failed_path), expected=2,
+        )
+        primary = self.load("candidate-preflight/correctness/primary/attempt-1.json")
+
+        fallback = self.candidate_set(scope_hash, include_style=False)
+        fallback["reviewer_id"] = "fallback-correctness"
+        fallback["independence_group"] = "model-b"
+        fallback_path = self.write_json("fallback-assignment-candidate.json", fallback)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback", expected=2,
+        )
+        self.assertFalse((self.run_dir / "fallback-assignments/correctness.json").exists())
+
+        assignment = self.assign_fallback()
+        self.assertEqual(assignment["failure_trigger_hash"], primary["receipt_hash"])
+        self.assertEqual(assignment["reviewer_id"], "fallback-correctness")
+        self.assertEqual(assignment["independence_group"], "model-b")
+        self.assertTrue(assignment["degraded"])
+
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+        )
+        receipt = self.load("candidate-preflight/correctness/fallback/attempt-1.json")
+        self.assertEqual(receipt["reviewer_id"], "fallback-correctness")
+        self.assertEqual(receipt["independence_group"], "model-b")
+        self.assertEqual(receipt["fallback_assignment_hash"], assignment["assignment_hash"])
+
+        paths = [fallback_path]
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"fallback-assignment-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                "--lens", lens_id, "--input", str(path),
+            )
+            paths.append(path)
+        self.ingest_candidate_paths(paths)
+
+        bundle = self.load("candidates.json")
+        correctness_set = next(
+            item for item in bundle["reviewer_sets"]
+            if item["reviewer_id"] == "fallback-correctness"
+        )
+        self.assertEqual(correctness_set["independence_group"], "model-b")
+        correctness = next(
+            item for item in bundle["coverage"]["lenses"]
+            if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(correctness["completion_route"], "fallback")
+        self.assertEqual(correctness["reviewer_id"], "fallback-correctness")
+        self.assertEqual(correctness["independence_group"], "model-b")
+        self.assertEqual(
+            correctness["fallback_assignment_hash"], assignment["assignment_hash"]
+        )
+        self.assertEqual(correctness["fallback_trigger_hash"], primary["receipt_hash"])
+        self.assertTrue(correctness["degraded"])
+
+        adjudication = self.adjudication(
+            scope_hash, bundle["candidate_bundle_hash"], include_style=False
+        )
+        adjudication["groups"][0]["source_reviewers"] = ["fallback-correctness"]
+        adjudication["groups"][0]["source_independence_groups"] = ["model-b"]
+        adjudication["groups"][0]["validation"]["independence_group"] = "model-b"
+        adjudication_path = self.write_json(
+            "fallback-assignment-same-group-adjudication.json", adjudication
+        )
+        self.run_tool(
+            "compile-ledger", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(adjudication_path), expected=2,
+        )
+        self.assertFalse((self.run_dir / "ledger.json").exists())
+
+    def test_fallback_assignment_rejects_identity_drift(self) -> None:
+        scope_hash = self.init_with_coverage()
+        failed = self.candidate_set(scope_hash, include_style=False)
+        failed["findings"][0]["category"] = "not-a-category"
+        failed_path = self.write_json("fallback-assignment-drift-primary.json", failed)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(failed_path), expected=2,
+        )
+        assignment = self.assign_fallback()
+
+        drifted_path = self.write_json(
+            "fallback-assignment-drift.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(drifted_path), "--fallback", expected=2,
+        )
+        receipt = self.load("candidate-preflight/correctness/fallback/attempt-1.json")
+        self.assertEqual(receipt["fallback_assignment_hash"], assignment["assignment_hash"])
+        self.assertEqual(receipt["reviewer_id"], "fallback-correctness")
+        self.assertIn("TOP_LEVEL_METADATA", {item["code"] for item in receipt["diagnostics"]})
+
+    def test_fallback_assignment_rejects_unverified_or_duplicate_activation(self) -> None:
+        scope_hash = self.init_with_coverage()
+        failed = self.candidate_set(scope_hash, include_style=False)
+        failed["findings"][0]["category"] = "not-a-category"
+        failed_path = self.write_json("fallback-assignment-activation-primary.json", failed)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(failed_path), expected=2,
+        )
+        command = (
+            "assign-fallback", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--reviewer-id", "fallback-correctness",
+            "--independence-group", "model-b", "--review-mode", "subagent",
+        )
+        self.run_tool(
+            *command,
+            "--failure-trigger-kind", "candidate_preflight_receipt",
+            "--failure-trigger-hash", "0" * 64,
+            expected=2,
+        )
+        self.run_tool(
+            *command,
+            "--failure-trigger-kind", "reviewer_failure_attestation",
+            "--failure-trigger-hash", "0" * 64,
+            expected=2,
+        )
+        self.assertFalse((self.run_dir / "fallback-assignments/correctness.json").exists())
+
+        assignment = self.assign_fallback()
+        state_before = copy.deepcopy(self.load("state.json"))
+        self.run_tool(
+            *command,
+            "--failure-trigger-kind", "candidate_preflight_receipt",
+            "--failure-trigger-hash", assignment["failure_trigger_hash"],
+            expected=2,
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(failed_path), expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before)
+
+        tampered = copy.deepcopy(assignment)
+        tampered["reviewer_id"] = "forged-fallback"
+        (self.run_dir / "fallback-assignments/correctness.json").write_text(
+            json.dumps(tampered, indent=2), encoding="utf-8"
+        )
+        fallback = self.candidate_set(scope_hash, include_style=False)
+        fallback["reviewer_id"] = "fallback-correctness"
+        fallback["independence_group"] = "model-b"
+        fallback_path = self.write_json("fallback-assignment-tampered.json", fallback)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback", expected=2,
+        )
+        self.assertFalse(
+            (self.run_dir / "candidate-preflight/correctness/fallback/attempt-1.json").exists()
+        )
+
+    def test_fallback_assignment_requires_exhausted_correctable_route(self) -> None:
+        scope_hash = self.init_with_coverage()
+        correctable = self.candidate_set(scope_hash, include_style=False)
+        correctable["findings"][0]["evidence_quote"] = "return something else"
+        path = self.write_json("fallback-assignment-correctable-primary.json", correctable)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(path), expected=2,
+        )
+        receipt_hash = self.load(
+            "candidate-preflight/correctness/primary/attempt-1.json"
+        )["receipt_hash"]
+        self.run_tool(
+            "assign-fallback", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness",
+            "--failure-trigger-kind", "candidate_preflight_receipt",
+            "--failure-trigger-hash", receipt_hash,
+            "--reviewer-id", "fallback-correctness",
+            "--independence-group", "model-b", "--review-mode", "subagent",
+            expected=2,
+        )
+        self.assertFalse((self.run_dir / "fallback-assignments").exists())
+
+    def test_fallback_assignment_rejects_valid_primary_and_optional_lens(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"].append(
+            {
+                "lens_id": "documentation",
+                "required": False,
+                "reviewer_id": "docs",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "none",
+            }
+        )
+        plan_path = self.write_json("fallback-assignment-boundary-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+        valid_path = self.write_json(
+            "fallback-assignment-valid-primary.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(valid_path),
+        )
+        primary_hash = self.load(
+            "candidate-preflight/correctness/primary/attempt-1.json"
+        )["receipt_hash"]
+        for lens_id in ("correctness", "documentation"):
+            self.run_tool(
+                "assign-fallback", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                "--lens", lens_id,
+                "--failure-trigger-kind", "candidate_preflight_receipt",
+                "--failure-trigger-hash", primary_hash,
+                "--reviewer-id", f"fallback-{lens_id}",
+                "--independence-group", "model-b", "--review-mode", "subagent",
+                expected=2,
+            )
+        self.assertFalse((self.run_dir / "fallback-assignments").exists())
+
+    def test_fallback_none_rejects_replacement_and_finalizes_incomplete(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        correctness = next(
+            lens for lens in plan["lenses"] if lens["lens_id"] == "correctness"
+        )
+        correctness["fallback"] = "none"
+        plan_path = self.write_json("fallback-none-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+
+        failed_primary = self.candidate_set(scope_hash, include_style=False)
+        failed_primary["findings"][0]["category"] = "not-a-category"
+        failed_primary_path = self.write_json(
+            "fallback-none-primary.json", failed_primary
+        )
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(failed_primary_path), expected=2,
+        )
+        primary_receipt = self.load(
+            "candidate-preflight/correctness/primary/attempt-1.json"
+        )
+        self.assertEqual(primary_receipt["verdict"], "rejected")
+        state_before_rejected_fallback = copy.deepcopy(self.load("state.json"))
+        self.run_tool(
+            "assign-fallback", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness",
+            "--failure-trigger-kind", "candidate_preflight_receipt",
+            "--failure-trigger-hash", primary_receipt["receipt_hash"],
+            "--reviewer-id", "fallback-correctness",
+            "--independence-group", "model-b", "--review-mode", "subagent",
+            expected=2,
+        )
+
+        fallback = self.candidate_set(scope_hash, include_style=False)
+        fallback["reviewer_id"] = "fallback-correctness"
+        fallback["independence_group"] = "model-b"
+        fallback_path = self.write_json("fallback-none-candidate.json", fallback)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before_rejected_fallback)
+        self.assertFalse((self.run_dir / "fallback-assignments").exists())
+        self.assertFalse(
+            (self.run_dir / "candidate-preflight/correctness/fallback").exists()
+        )
+
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"fallback-none-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo),
+                "--run-id", self.run_id, "--lens", lens_id, "--input", str(path),
+            )
+
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], "REVIEW_INCOMPLETE")
+        status = self.load("coverage-status.json")
+        self.assertEqual(status["status"], "incomplete")
+        correctness_status = next(
+            lens for lens in status["lenses"] if lens["lens_id"] == "correctness"
+        )
+        self.assertFalse(correctness_status["completed"])
+        self.assertEqual(
+            correctness_status["primary_receipt_hash"], primary_receipt["receipt_hash"]
+        )
+        for relative in ("candidates.json", "ledger.json", "gates/findings.json"):
+            self.assertFalse((self.run_dir / relative).exists())
+
+    def test_reviewer_failure_attestation_authorizes_bound_fallback(self) -> None:
+        scope_hash = self.init_with_coverage()
+        primary_failure = self.record_reviewer_failure()
+        self.assertIsNotNone(primary_failure)
+        assert primary_failure is not None
+        self.assertEqual(primary_failure["route"], "primary")
+        self.assertEqual(primary_failure["assignment_kind"], "coverage_plan")
+        self.assertEqual(primary_failure["reason"], "timeout")
+        self.assertNotIn("candidate", primary_failure)
+        self.assertNotIn("raw_log", primary_failure)
+
+        assignment = self.assign_fallback(
+            failure_trigger_kind="reviewer_failure_attestation",
+            failure_trigger_hash=primary_failure["attestation_hash"],
+        )
+        pending_paths: list[Path] = []
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"attestation-pending-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                "--lens", lens_id, "--input", str(path),
+            )
+            pending_paths.append(path)
+        state_before_pending_ingest = copy.deepcopy(self.load("state.json"))
+        self.ingest_candidate_paths(pending_paths, expected=2)
+        self.assertEqual(self.load("state.json"), state_before_pending_ingest)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+
+        fallback = self.candidate_set(scope_hash, include_style=False)
+        fallback["reviewer_id"] = "fallback-correctness"
+        fallback["independence_group"] = "model-b"
+        fallback_path = self.write_json("attested-fallback.json", fallback)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+        )
+
+        paths = [fallback_path, *pending_paths]
+        self.ingest_candidate_paths(paths)
+
+        status = self.load("coverage-status.json")
+        correctness = next(
+            item for item in status["lenses"] if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(correctness["completion_route"], "fallback")
+        self.assertEqual(
+            correctness["primary_attestation_hash"], primary_failure["attestation_hash"]
+        )
+        self.assertEqual(
+            correctness["fallback_assignment_hash"], assignment["assignment_hash"]
+        )
+        self.assertEqual(
+            correctness["fallback_trigger_kind"], "reviewer_failure_attestation"
+        )
+        self.assertTrue(correctness["degraded"])
+
+    def test_reviewer_failure_attestation_exhausts_fallback_and_finalizes(self) -> None:
+        scope_hash = self.init_with_coverage()
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"attestation-finalize-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                "--lens", lens_id, "--input", str(path),
+            )
+        primary_failure = self.record_reviewer_failure(
+            reason="capacity_unavailable",
+            diagnostics=("attempt_number=1",),
+        )
+        assert primary_failure is not None
+        self.assign_fallback(
+            failure_trigger_kind="reviewer_failure_attestation",
+            failure_trigger_hash=primary_failure["attestation_hash"],
+        )
+        fallback_failure = self.record_reviewer_failure(
+            route="fallback",
+            reason="execution_failed",
+            observer_kind="controller",
+            observer_id="root-controller",
+            diagnostics=("exit_code=1",),
+        )
+        assert fallback_failure is not None
+
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], "REVIEW_INCOMPLETE")
+        status = self.load("coverage-status.json")
+        self.assertEqual(status["status"], "incomplete")
+        correctness = next(
+            item for item in status["lenses"] if item["lens_id"] == "correctness"
+        )
+        self.assertEqual(
+            correctness["primary_attestation_hash"], primary_failure["attestation_hash"]
+        )
+        self.assertEqual(
+            correctness["fallback_attestation_hash"], fallback_failure["attestation_hash"]
+        )
+        self.assertIn("capacity_unavailable", correctness["diagnostics"])
+        self.assertIn("execution_failed", correctness["diagnostics"])
+        for relative in ("candidates.json", "ledger.json", "gates/findings.json"):
+            self.assertFalse((self.run_dir / relative).exists())
+
+    def test_reviewer_failure_attestation_rejects_unbound_or_readable_routes(self) -> None:
+        scope_hash = self.init_with_coverage()
+        state_before = copy.deepcopy(self.load("state.json"))
+        self.record_reviewer_failure(route="fallback", expected=2)
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "reviewer-failure-attestations").exists())
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+
+        primary_failure = self.record_reviewer_failure()
+        assert primary_failure is not None
+        state_after_attestation = copy.deepcopy(self.load("state.json"))
+        self.record_reviewer_failure(expected=2)
+        self.assertEqual(self.load("state.json"), state_after_attestation)
+
+        assignment = self.assign_fallback(
+            failure_trigger_kind="reviewer_failure_attestation",
+            failure_trigger_hash=primary_failure["attestation_hash"],
+        )
+        fallback = self.candidate_set(scope_hash, include_style=False)
+        fallback["reviewer_id"] = assignment["reviewer_id"]
+        fallback["independence_group"] = assignment["independence_group"]
+        fallback_path = self.write_json("attestation-readable-fallback.json", fallback)
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(fallback_path), "--fallback",
+        )
+        self.record_reviewer_failure(route="fallback", expected=2)
+        self.assertFalse(
+            (self.run_dir / "reviewer-failure-attestations/correctness/fallback.json").exists()
+        )
+
+    def test_reviewer_failure_attestation_rejects_optional_and_unbounded_metadata(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"].append(
+            {
+                "lens_id": "documentation",
+                "required": False,
+                "reviewer_id": "docs",
+                "independence_group": "model-a",
+                "review_mode": "subagent",
+                "fallback": "none",
+            }
+        )
+        plan_path = self.write_json("attestation-optional-plan.json", plan)
+        self.run_tool(
+            "record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(plan_path),
+        )
+        self.record_reviewer_failure(lens_id="documentation", expected=2)
+        self.record_reviewer_failure(
+            diagnostics=("elapsed_seconds=999999",), expected=2
+        )
+        self.record_reviewer_failure(
+            diagnostics=("elapsed_seconds=1", "elapsed_seconds=2"), expected=2
+        )
+        self.assertFalse((self.run_dir / "reviewer-failure-attestations").exists())
+
+    def test_reviewer_failure_attestation_rejects_tampering(self) -> None:
+        self.init_with_coverage()
+        attestation = self.record_reviewer_failure()
+        assert attestation is not None
+        tampered = copy.deepcopy(attestation)
+        tampered["reason"] = "execution_failed"
+        (self.run_dir / "reviewer-failure-attestations/correctness/primary.json").write_text(
+            json.dumps(tampered, indent=2), encoding="utf-8"
+        )
+        self.run_tool(
+            "assign-fallback", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness",
+            "--failure-trigger-kind", "reviewer_failure_attestation",
+            "--failure-trigger-hash", attestation["attestation_hash"],
+            "--reviewer-id", "fallback-correctness",
+            "--independence-group", "model-b", "--review-mode", "subagent",
+            expected=2,
+        )
+        self.assertFalse((self.run_dir / "fallback-assignments").exists())
+
+    def test_reviewer_failure_attestation_rejects_complete_finalization(self) -> None:
+        scope_hash = self.init_with_coverage()
+        paths = self.preflight_core_wave(
+            scope_hash, self.candidate_set(scope_hash, include_style=False)
+        )
+        state_before = copy.deepcopy(self.load("state.json"))
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            expected=2,
+        )
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+        self.assertEqual(len(paths), 3)
+
+    def test_provisional_v1_restart_rejects_artifacts_without_mutation(self) -> None:
+        scope_hash = self.init_with_coverage()
+        coverage_path = self.run_dir / "coverage-plan.json"
+        current_coverage = self.load("coverage-plan.json")
+        provisional_coverage = copy.deepcopy(current_coverage)
+        provisional_coverage.pop("workflow_profile")
+        coverage_path.write_text(json.dumps(provisional_coverage, indent=2), encoding="utf-8")
+        state_before = copy.deepcopy(self.load("state.json"))
+        candidate_path = self.write_json(
+            "provisional-plan-candidate.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        _, stderr = self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(candidate_path), expected=2,
+        )
+        self.assertIn("restart this run", stderr)
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "candidate-preflight").exists())
+
+        coverage_path.write_text(json.dumps(current_coverage, indent=2), encoding="utf-8")
+        self.run_tool(
+            "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--lens", "correctness", "--input", str(candidate_path),
+        )
+        receipt_path = self.run_dir / "candidate-preflight/correctness/primary/attempt-1.json"
+        provisional_receipt = self.load(
+            "candidate-preflight/correctness/primary/attempt-1.json"
+        )
+        for field in (
+            "route", "independence_group", "review_mode", "fallback_assignment_hash", "degraded"
+        ):
+            provisional_receipt.pop(field)
+        provisional_receipt["fallback"] = False
+        provisional_receipt["receipt_hash"] = reviewctl.canonical_hash(
+            {key: value for key, value in provisional_receipt.items() if key != "receipt_hash"}
+        )
+        receipt_path.write_text(json.dumps(provisional_receipt, indent=2), encoding="utf-8")
+        state = self.load("state.json")
+        state["candidate_preflight"]["correctness"]["primary"][0]["receipt_hash"] = (
+            provisional_receipt["receipt_hash"]
+        )
+        (self.run_dir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+        state_before = copy.deepcopy(state)
+        _, stderr = self.run_tool(
+            "ingest-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(candidate_path), expected=2,
+        )
+        self.assertIn("restart this run", stderr)
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "coverage-status.json").exists())
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_provisional_v1_restart_preserves_legacy_absent_coverage_required(self) -> None:
+        scope_hash = self.init()
+        state = self.load("state.json")
+        state.pop("coverage_required")
+        state.pop("workflow_profile")
+        (self.run_dir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+        candidate_path = self.write_json(
+            "legacy-unbound-candidate.json",
+            self.candidate_set(scope_hash, include_style=False),
+        )
+        self.run_tool(
+            "ingest-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(candidate_path),
+        )
+        bundle = self.load("candidates.json")
+        self.assertNotIn("coverage", bundle)
+        self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
+
+    def test_provisional_v1_restart_rejects_status_without_mutation(self) -> None:
+        scope_hash = self.init_with_coverage()
+        paths = self.preflight_core_wave(
+            scope_hash, self.candidate_set(scope_hash, include_style=False)
+        )
+        self.ingest_candidate_paths(paths)
+        bundle = self.load("candidates.json")
+        status = self.load("coverage-status.json")
+        for lens in status["lenses"]:
+            lens.pop("primary_attestation_hash")
+            lens.pop("fallback_attestation_hash")
+        status["coverage_status_hash"] = reviewctl.canonical_hash(
+            {key: value for key, value in status.items() if key != "coverage_status_hash"}
+        )
+        (self.run_dir / "coverage-status.json").write_text(
+            json.dumps(status, indent=2), encoding="utf-8"
+        )
+        state = self.load("state.json")
+        state["hashes"]["coverage_status_hash"] = status["coverage_status_hash"]
+        (self.run_dir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+        state_before = copy.deepcopy(state)
+        adjudication_path = self.write_json(
+            "provisional-status-adjudication.json",
+            self.adjudication(
+                scope_hash, bundle["candidate_bundle_hash"], include_style=False
+            ),
+        )
+        _, stderr = self.run_tool(
+            "compile-ledger", "--repo-root", str(self.repo), "--run-id", self.run_id,
+            "--input", str(adjudication_path), expected=2,
+        )
+        self.assertIn("restart this run", stderr)
+        self.assertEqual(self.load("state.json"), state_before)
+        self.assertFalse((self.run_dir / "ledger.json").exists())
+
     def test_coverage_completion_accepts_one_valid_required_lens_fallback(self) -> None:
         scope_hash = self.init_with_coverage()
         failed = self.candidate_set(scope_hash, include_style=False)
@@ -1087,6 +2412,9 @@ class ReviewCtlTest(unittest.TestCase):
         self.run_tool(
             "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
             "--lens", "correctness", "--input", str(failed_path), expected=2,
+        )
+        self.assign_fallback(
+            reviewer_id="correctness", independence_group="model-a"
         )
         fallback_path = self.write_json(
             "valid-fallback.json", self.candidate_set(scope_hash, include_style=False)
@@ -1126,6 +2454,9 @@ class ReviewCtlTest(unittest.TestCase):
             "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
             "--lens", "correctness", "--input", str(primary_path), expected=2,
         )
+        self.assign_fallback(
+            reviewer_id="correctness", independence_group="model-a"
+        )
         failed_fallback = copy.deepcopy(failed)
         failed_fallback["findings"][0]["category"] = "still-not-a-category"
         fallback_path = self.write_json("failed-required-fallback.json", failed_fallback)
@@ -1133,7 +2464,21 @@ class ReviewCtlTest(unittest.TestCase):
             "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
             "--lens", "correctness", "--input", str(fallback_path), "--fallback", expected=2,
         )
-        self.ingest_candidate_paths([fallback_path], expected=2)
+        for lens_id, reviewer_id, area in (
+            ("test_adequacy", "test-adequacy", "tests"),
+            ("standards_alignment", "standards", "standards"),
+        ):
+            path = self.write_json(
+                f"failed-required-{lens_id}.json",
+                self.empty_candidate_set(scope_hash, reviewer_id, area),
+            )
+            self.run_tool(
+                "check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id,
+                "--lens", lens_id, "--input", str(path),
+            )
+        self.run_tool(
+            "finalize-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id,
+        )
         self.assertEqual(self.load("state.json")["phase"], "REVIEW_INCOMPLETE")
         self.assertEqual(self.load("coverage-status.json")["status"], "incomplete")
         self.assertFalse((self.run_dir / "candidates.json").exists())
@@ -1603,6 +2948,253 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertTrue(result["restored_after_mutation"])
         self.assertEqual(result["changed_paths_by_test"], ["calc.py"])
         self.assertEqual(result["control_mutations_by_test"], [])
+
+    def test_pre_verification_recovery_refreshes_exact_stale_required_test(self) -> None:
+        self.retain_fixed_finding()
+        refresh_args = (
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+        )
+        self.run_tool(*refresh_args)
+        initial_state = self.load("state.json")
+        self.assertEqual(initial_state["finding_status"]["F001"]["attempts"], 1)
+        self.assertEqual(initial_state["repair_round"], 0)
+
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a + b\n\n# retained later approved edit\n",
+            encoding="utf-8",
+        )
+        state = self.load("state.json")
+        state["expected_workspace_guard_hash"] = reviewctl.workspace_guard(self.repo)["guard_hash"]
+        (self.run_dir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+        _, stderr = self.run_tool(
+            "prepare-verification",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            expected=2,
+        )
+        self.assertIn("stale after a later workspace edit", stderr)
+
+        self.run_tool(*refresh_args)
+        self.run_tool(
+            "prepare-verification",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+        )
+        summary = self.load("fix-summary.json")
+        refreshes = summary["final_test_refresh_results"]["F001"]["unit-regression"]
+        self.assertEqual(len(refreshes), 2)
+        self.assertEqual(summary["repair_round"], 0)
+
+    def test_pre_verification_recovery_binds_latest_failed_global_evidence(self) -> None:
+        global_test = {
+            "id": "global-regression",
+            "command": "python3 -c 'import sys; sys.exit(1)'",
+            "working_directory": ".",
+            "required": True,
+            "timeout_seconds": 30,
+            "purpose": "Provide deterministic failed global evidence.",
+        }
+        self.retain_fixed_finding(global_tests=[global_test])
+        self.run_tool(
+            "run-global-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--test",
+            "global-regression",
+            expected=1,
+        )
+        state = self.load("state.json")
+        result = state["global_test_results"]["global-regression"][-1]
+        recovery_args = (
+            "begin-pre-verification-repair",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--evidence-kind",
+            "global_test",
+            "--evidence-id",
+            "global-regression",
+            "--reason",
+            "The failed global regression is causally owned by F001.",
+        )
+        self.run_tool(*recovery_args, "--evidence-hash", "0" * 64, expected=2)
+        self.assertEqual(self.load("state.json")["repair_round"], 0)
+        self.run_tool(*recovery_args, "--evidence-hash", result["result_hash"])
+        recovered = self.load("state.json")
+        self.assertEqual(recovered["finding_status"]["F001"]["status"], "repair_pending")
+        self.assertEqual(recovered["repair_round"], 1)
+        self.assertEqual(recovered["repair_targets"], ["F001"])
+        history = recovered["pre_verification_recovery_history"]
+        self.assertEqual(history[-1]["evidence"]["result_hash"], result["result_hash"])
+        self.assertTrue((self.run_dir / "pre-verification-recovery/round-1.json").exists())
+        self.run_tool(
+            "start-finding",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+        )
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a + b\n\n# bounded repair round\n",
+            encoding="utf-8",
+        )
+        self.run_tool(
+            "run-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+        )
+        self.run_tool(
+            "finish-finding",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--status",
+            "fixed",
+            "--note",
+            "Retained the bounded repair-round evidence change.",
+        )
+        self.run_tool(
+            "run-global-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--test",
+            "global-regression",
+            expected=1,
+        )
+        latest = self.load("state.json")["global_test_results"]["global-regression"][-1]
+        _, exhausted_stderr = self.run_tool(
+            *recovery_args,
+            "--evidence-hash",
+            latest["result_hash"],
+            expected=2,
+        )
+        self.assertIn("repair-round budget is exhausted", exhausted_stderr)
+        self.assertEqual(self.load("state.json")["repair_round"], 1)
+
+    def test_pre_verification_recovery_rejects_current_passing_evidence(self) -> None:
+        global_test = {
+            "id": "global-regression",
+            "command": "python3 -c 'raise SystemExit(0)'",
+            "working_directory": ".",
+            "required": True,
+            "timeout_seconds": 30,
+            "purpose": "Provide deterministic passing global evidence.",
+        }
+        self.retain_fixed_finding(global_tests=[global_test])
+        self.run_tool(
+            "run-global-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--test",
+            "global-regression",
+        )
+        result = self.load("state.json")["global_test_results"]["global-regression"][-1]
+        _, stderr = self.run_tool(
+            "begin-pre-verification-repair",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--evidence-kind",
+            "global_test",
+            "--evidence-id",
+            "global-regression",
+            "--evidence-hash",
+            result["result_hash"],
+            "--reason",
+            "This must be rejected because no recovery authority exists.",
+            expected=2,
+        )
+        self.assertIn("current and passing", stderr)
+        state = self.load("state.json")
+        self.assertEqual(state["finding_status"]["F001"]["status"], "fixed")
+        self.assertEqual(state["repair_round"], 0)
+
+    def test_pre_verification_recovery_refresh_restores_test_mutation(self) -> None:
+        trigger = self.out / "mutate-refresh"
+        command = (
+            f"if test -f {trigger}; then "
+            "printf 'def add(a, b):\\n    return 999\\n' > calc.py; "
+            "else grep -Fq 'return a + b' calc.py; fi"
+        )
+        self.retain_fixed_finding(test_command=command)
+        repaired = (self.repo / "calc.py").read_text(encoding="utf-8")
+        trigger.write_text("trigger\n", encoding="utf-8")
+        self.run_tool(
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+            expected=2,
+        )
+        self.assertEqual((self.repo / "calc.py").read_text(encoding="utf-8"), repaired)
+        result = self.load("state.json")["final_test_refresh_results"]["F001"]["unit-regression"][-1]
+        self.assertTrue(result["restored_after_mutation"])
+        self.assertEqual(result["changed_paths_by_test"], ["calc.py"])
+        self.run_tool(
+            "begin-pre-verification-repair",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--evidence-kind",
+            "finding_test",
+            "--evidence-finding",
+            "F001",
+            "--evidence-id",
+            "unit-regression",
+            "--evidence-hash",
+            result["result_hash"],
+            "--reason",
+            "The mutating required command requires a bounded F001 repair attempt.",
+        )
+        recovered = self.load("state.json")
+        self.assertEqual(recovered["finding_status"]["F001"]["status"], "repair_pending")
+        self.assertEqual(
+            recovered["pre_verification_recovery_history"][-1]["evidence"]["source"],
+            "final_test_refresh",
+        )
 
     @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks unavailable")
     def test_checkpoint_preserves_final_symlink_and_rejects_parent_escape(self) -> None:

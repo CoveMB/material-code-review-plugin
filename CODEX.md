@@ -62,7 +62,7 @@ Explicit invocation:
 Use $material-code-review to review the current uncommitted changes for material issues only. Use scope:auto, depth:auto, and external-review:off. Do not edit code. Stop at Gate A and show every kept and discarded candidate.
 ```
 
-For a pull request, supply its repository-qualified identifier and exact read-only host base/head metadata. Use `scope:range` with matching PR provenance; never default to the head parent. New runs record the required lens roster and preflight each draft once. If a required lens cannot complete after its one declared sequential fallback, report `REVIEW_INCOMPLETE` without a merge verdict or Gate A.
+For a GitHub pull request, supply its repository-qualified `owner/repository#number` and exact read-only host base/head metadata. Use `scope:pull_request` with refs resolving to that pair; the controller freezes the effective merge-base-to-head diff and never defaults to the head parent or a direct range. New review runs bind the `material_review` roster to their root-owned workflow profile. Each lens has a primary route with at most one author-owned correction. After a required primary route fails, `assign-fallback` must bind its exact receipt or root-observed no-output attestation to the actual fallback actor before the one separately addressed fallback attempt; the fallback cannot supersede or reopen primary, and remains explicitly degraded. Never fabricate candidate JSON for a reviewer that returned no readable bytes. If every incomplete required route is evidenced and its fallback exhausted, use `finalize-coverage` to report `REVIEW_INCOMPLETE` without candidates, a merge verdict, or Gate A. Simplification runs use the separate `material_simplification` architecture/structural and code/test roster for `codebase`, `auto`, `uncommitted`, `branch`, and `range`; they reject the review-only pull-request selector.
 
 After Gate A approval:
 
@@ -75,6 +75,8 @@ Only after Gate B:
 ```text
 Apply the exact approved plan through the material-code-review controller. Keep each repair only after approved validation passes; otherwise restore its checkpoint. Then run bounded post-fix verification only for approved findings and repair-caused regressions.
 ```
+
+At final repair state, use `refresh-finding-test` only to refresh an exact approved required command made stale by later approved edits. If code must change before verification, `begin-pre-verification-repair` requires the exact latest failed or stale required test evidence hash, causal approved target IDs, an explicit rationale, and remaining attempt/repair-round budgets. Neither operation expands Gate B authority.
 
 ## Codex-specific operating rules
 

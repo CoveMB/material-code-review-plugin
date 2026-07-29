@@ -35,6 +35,8 @@ SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
 CANDIDATE_PREFLIGHT_SCHEMA = "material-review/candidate-preflight/v1"
+FALLBACK_ASSIGNMENT_SCHEMA = "material-review/fallback-assignment/v1"
+REVIEWER_FAILURE_ATTESTATION_SCHEMA = "material-review/reviewer-failure-attestation/v1"
 COVERAGE_STATUS_SCHEMA = "material-review/coverage-status/v1"
 NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
@@ -92,7 +94,39 @@ SCOPE_RELATIONS = {"primary", "secondary", "pre_existing"}
 FIX_RISKS = {"low", "medium", "high", "unknown"}
 REVIEW_MODES = {"subagent", "controller", "external"}
 COVERAGE_FALLBACKS = {"sequential_degraded_self_audit", "none"}
+PREFLIGHT_ROUTES = {"primary", "fallback"}
+FALLBACK_TRIGGER_KINDS = {
+    "candidate_preflight_receipt",
+    "reviewer_failure_attestation",
+}
+REVIEWER_FAILURE_REASONS = {
+    "dispatch_failed",
+    "timeout",
+    "capacity_unavailable",
+    "execution_failed",
+    "external_route_failed",
+}
+FAILURE_OBSERVER_KINDS = {"controller", "scheduler"}
+FAILURE_DIAGNOSTIC_CODES = {
+    "attempt_number",
+    "elapsed_seconds",
+    "status_code",
+    "exit_code",
+    "signal_number",
+}
+FAILURE_DIAGNOSTIC_BOUNDS = {
+    "attempt_number": (1, 2),
+    "elapsed_seconds": (0, 86_400),
+    "status_code": (100, 599),
+    "exit_code": (-255, 255),
+    "signal_number": (1, 255),
+}
+MAX_FAILURE_DIAGNOSTICS = 8
+WORKFLOW_PROFILE_REVIEW = "material_review"
+WORKFLOW_PROFILE_SIMPLIFICATION = "material_simplification"
+WORKFLOW_PROFILES = {WORKFLOW_PROFILE_REVIEW, WORKFLOW_PROFILE_SIMPLIFICATION}
 CORE_LENSES = {"correctness", "test_adequacy", "standards_alignment"}
+SIMPLIFICATION_CORE_LENSES = {"architecture_structural", "code_test"}
 PROTOCOL_RISK_SIGNALS = {
     "multi_stage_lifecycle",
     "cross_boundary_data",
@@ -109,6 +143,36 @@ EVIDENCE_ANCHOR_FIELDS = {
     "evidence_side",
     "evidence_quote",
 }
+CANDIDATE_FINDING_FIELDS = (
+    "local_id",
+    "title",
+    "nature",
+    "category",
+    "severity",
+    "confidence",
+    "file",
+    "line_start",
+    "line_end",
+    "evidence_side",
+    "evidence_quote",
+    "scope_relation",
+    "related_changed_files",
+    "direct_dependency",
+    "observable_consequence",
+    "trigger_conditions",
+    "counterevidence_checked",
+    "why_not_preference",
+    "proposed_resolution",
+    "estimated_fix_risk",
+    "requires_user_decision",
+    "assumptions",
+)
+CANDIDATE_MECHANICAL_FIELDS = EVIDENCE_ANCHOR_FIELDS | {"local_id"}
+CANDIDATE_SUBSTANTIVE_FIELDS = tuple(
+    field
+    for field in CANDIDATE_FINDING_FIELDS
+    if field not in CANDIDATE_MECHANICAL_FIELDS
+)
 CORRECTABLE_DIAGNOSTIC_CODES = {
     "JSON_SYNTAX",
     "TOP_LEVEL_METADATA",
@@ -177,6 +241,13 @@ def is_transient_runtime_path(path: str) -> bool:
 
 class ReviewError(RuntimeError):
     """Expected control failure with an actionable message."""
+
+
+def provisional_v1_restart(context: str) -> ReviewError:
+    return ReviewError(
+        f"Provisional branch-local v1 {context} is incompatible with the final v1 contract; "
+        "restart this run"
+    )
 
 
 def utc_now() -> str:
@@ -501,11 +572,14 @@ def require_control_id(value: Any, context: str) -> str:
 def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
     context = "coverage plan"
     obj = require_object(raw, context)
+    if state.get("coverage_required", False) and "workflow_profile" not in obj:
+        raise provisional_v1_restart("coverage plan")
     require_exact_keys(
         obj,
         {
             "schema_version",
             "scope_hash",
+            "workflow_profile",
             "risk_signals",
             "lenses",
             "max_candidate_corrections",
@@ -517,6 +591,18 @@ def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
     scope_hash = require_sha256(obj["scope_hash"], "coverage plan.scope_hash")
     if scope_hash != state["scope_hash"]:
         raise ReviewError("coverage plan.scope_hash does not match the active frozen scope")
+    workflow_profile = require_string(
+        obj["workflow_profile"], "coverage plan.workflow_profile"
+    )
+    if workflow_profile not in WORKFLOW_PROFILES:
+        raise ReviewError(
+            f"coverage plan.workflow_profile must be one of {sorted(WORKFLOW_PROFILES)}"
+        )
+    state_profile = require_string(
+        state.get("workflow_profile"), "state.workflow_profile"
+    )
+    if workflow_profile != state_profile:
+        raise ReviewError("coverage plan.workflow_profile does not match the root-owned run profile")
 
     risk_signals: list[dict[str, Any]] = []
     for index, raw_signal in enumerate(require_array(obj["risk_signals"], "coverage plan.risk_signals")):
@@ -587,22 +673,54 @@ def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
         )
 
     lens_by_id = {lens["lens_id"]: lens for lens in lenses}
+    required_lenses = (
+        CORE_LENSES
+        if workflow_profile == WORKFLOW_PROFILE_REVIEW
+        else SIMPLIFICATION_CORE_LENSES
+    )
     missing_core = sorted(
         lens_id
-        for lens_id in CORE_LENSES
+        for lens_id in required_lenses
         if lens_id not in lens_by_id or not lens_by_id[lens_id]["required"]
     )
     if missing_core:
         raise ReviewError(
-            "coverage plan must require every core lens: " + ", ".join(missing_core)
+            f"{workflow_profile} coverage plan must require every core lens: "
+            + ", ".join(missing_core)
         )
-    if risk_signals and (
+    if workflow_profile == WORKFLOW_PROFILE_REVIEW and risk_signals and (
         "protocol_coherence" not in lens_by_id
         or not lens_by_id["protocol_coherence"]["required"]
     ):
         raise ReviewError(
             "coverage plan must require protocol_coherence when protocol risk signals are present"
         )
+    if workflow_profile == WORKFLOW_PROFILE_SIMPLIFICATION:
+        required_extras = sorted(
+            lens["lens_id"]
+            for lens in lenses
+            if lens["required"] and lens["lens_id"] not in SIMPLIFICATION_CORE_LENSES
+        )
+        if required_extras:
+            raise ReviewError(
+                "material_simplification additional lenses must be optional: "
+                + ", ".join(required_extras)
+            )
+        invalid_fallbacks = sorted(
+            lens["lens_id"]
+            for lens in lenses
+            if (
+                lens["required"]
+                and lens["fallback"] != "sequential_degraded_self_audit"
+            )
+            or (not lens["required"] and lens["fallback"] != "none")
+        )
+        if invalid_fallbacks:
+            raise ReviewError(
+                "material_simplification requires one declared sequential fallback for each "
+                "required lens and fallback=none for optional lenses: "
+                + ", ".join(invalid_fallbacks)
+            )
     max_corrections = require_int(
         obj["max_candidate_corrections"],
         "coverage plan.max_candidate_corrections",
@@ -612,6 +730,7 @@ def validate_coverage_plan(raw: Any, state: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": COVERAGE_PLAN_SCHEMA,
         "scope_hash": scope_hash,
+        "workflow_profile": workflow_profile,
         "risk_signals": risk_signals,
         "lenses": lenses,
         "max_candidate_corrections": max_corrections,
@@ -622,7 +741,11 @@ def candidate_semantic_hash(findings: list[dict[str, Any]]) -> str | None:
     if not all(isinstance(item, dict) for item in findings):
         return None
     payload = [
-        {key: value for key, value in item.items() if key not in EVIDENCE_ANCHOR_FIELDS}
+        {
+            field: item[field]
+            for field in CANDIDATE_SUBSTANTIVE_FIELDS
+            if field in item
+        }
         for item in findings
     ]
     return canonical_hash(payload)
@@ -745,21 +868,35 @@ def resolve_commit(repo: Path, ref: str) -> str:
 
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+GITHUB_PULL_REQUEST_ID_RE = re.compile(
+    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$"
+)
 REVIEW_OBJECT_KINDS = {"pull_request"}
+COMMIT_COMPARISON_KINDS = {"commit", "merge_base_to_head"}
 
 
 def normalize_review_object(
     *, kind: str, identifier: str, base_sha: str, head_sha: str, requested_scope: str
 ) -> dict[str, str] | None:
     values = (kind, identifier, base_sha, head_sha)
-    if not any(values):
+    if requested_scope != "pull_request":
+        if any(values):
+            raise ReviewError(
+                "PR review provenance is valid only with scope=pull_request; "
+                "restart provisional PR-as-range runs"
+            )
         return None
     if not all(values):
-        raise ReviewError("PR review provenance requires kind, identifier, base SHA, and head SHA")
-    if requested_scope != "range":
-        raise ReviewError("PR review provenance is valid only with scope=range")
+        raise ReviewError(
+            "scope=pull_request requires kind, repository-qualified identifier, "
+            "base SHA, and head SHA"
+        )
     if kind not in REVIEW_OBJECT_KINDS:
         raise ReviewError(f"Unsupported review-object kind: {kind}")
+    if not GITHUB_PULL_REQUEST_ID_RE.fullmatch(identifier):
+        raise ReviewError(
+            "Pull-request identity must use repository-qualified GitHub form owner/repository#number"
+        )
     if not FULL_SHA_RE.fullmatch(base_sha) or not FULL_SHA_RE.fullmatch(head_sha):
         raise ReviewError("PR review provenance requires exact lowercase 40-character SHAs")
     return {
@@ -809,9 +946,20 @@ def diff_args_for_scope(scope: dict[str, Any], *, name_status: bool = False) -> 
         prefix = ["diff", "--name-status", "-z", "--find-renames"]
     else:
         prefix = ["diff", "--binary", "--full-index", "--find-renames"]
-    if scope["comparison_kind"] == "working-tree":
+    comparison_kind = scope["comparison_kind"]
+    if comparison_kind == "working-tree":
         return [*prefix, base, "--"]
-    return [*prefix, f"{base}..{scope['comparison_sha']}", "--"]
+    if comparison_kind in COMMIT_COMPARISON_KINDS:
+        return [*prefix, f"{base}..{scope['comparison_sha']}", "--"]
+    raise ReviewError(f"Unsupported comparison kind: {comparison_kind}")
+
+
+def comparison_uses_commit_tree(comparison_kind: str) -> bool:
+    if comparison_kind in COMMIT_COMPARISON_KINDS:
+        return True
+    if comparison_kind == "working-tree":
+        return False
+    raise ReviewError(f"Unsupported comparison kind: {comparison_kind}")
 
 
 def build_scope(
@@ -826,6 +974,7 @@ def build_scope(
     head_sha = resolve_commit(repo, "HEAD")
     branch = current_branch(repo)
     actual_scope = requested_scope
+    effective_merge_base: str | None = None
     if requested_scope == "auto":
         actual_scope = "uncommitted" if workspace_has_changes(repo, include_untracked=include_untracked) else "branch"
 
@@ -853,20 +1002,38 @@ def build_scope(
         comparison_sha = resolve_commit(repo, head_ref)
         comparison_kind = "commit"
         mutable = False
+    elif actual_scope == "pull_request":
+        if not base_ref or not head_ref:
+            raise ReviewError("scope=pull_request requires both --base and --head")
+        if review_object is None:
+            raise ReviewError("scope=pull_request requires complete PR review provenance")
+        host_base_sha = resolve_commit(repo, base_ref)
+        host_head_sha = resolve_commit(repo, head_ref)
+        if host_base_sha != review_object["base_sha"]:
+            raise ReviewError(
+                "PR review base SHA mismatch: "
+                f"expected {review_object['base_sha']}, actual {host_base_sha}"
+            )
+        if host_head_sha != review_object["head_sha"]:
+            raise ReviewError(
+                "PR review head SHA mismatch: "
+                f"expected {review_object['head_sha']}, actual {host_head_sha}"
+            )
+        baseline_reference = base_ref
+        comparison_reference = head_ref
+        effective_merge_base = git_text(repo, "merge-base", host_base_sha, host_head_sha)
+        baseline_sha = effective_merge_base
+        comparison_sha = host_head_sha
+        comparison_kind = "merge_base_to_head"
+        mutable = False
     else:
         raise ReviewError(f"Unsupported scope: {actual_scope}")
 
-    if review_object is not None:
-        if baseline_sha != review_object["base_sha"]:
-            raise ReviewError(
-                "PR review base SHA mismatch: "
-                f"expected {review_object['base_sha']}, actual {baseline_sha}"
-            )
-        if comparison_sha != review_object["head_sha"]:
-            raise ReviewError(
-                "PR review head SHA mismatch: "
-                f"expected {review_object['head_sha']}, actual {comparison_sha}"
-            )
+    if review_object is not None and actual_scope != "pull_request":
+        raise ReviewError(
+            "PR review provenance requires scope=pull_request; "
+            "restart provisional PR-as-range runs"
+        )
 
     scope_base: dict[str, Any] = {
         "requested_scope": requested_scope,
@@ -882,6 +1049,8 @@ def build_scope(
         "branch": branch if mutable else None,
         "workspace_head_sha": head_sha if mutable else None,
     }
+    if effective_merge_base is not None:
+        scope_base["effective_merge_base"] = effective_merge_base
 
     patch = git_bytes(repo, *diff_args_for_scope(scope_base, name_status=False))
     status_data = git_bytes(repo, *diff_args_for_scope(scope_base, name_status=True))
@@ -903,7 +1072,7 @@ def build_scope(
         old_path = normalize_repo_path(entry["old_path"]) if entry.get("old_path") else None
         baseline_path = old_path if old_path is not None else path
         baseline_data = git_object_bytes(repo, baseline_sha, baseline_path)
-        if comparison_kind == "commit":
+        if comparison_uses_commit_tree(comparison_kind):
             comparison_data = git_object_bytes(repo, comparison_sha, path)
         else:
             target = repo_path(repo, path)
@@ -951,6 +1120,8 @@ def build_scope(
         "unstaged_patch_sha256": sha256_bytes(unstaged_patch),
         "files": normalized_entries,
     }
+    if effective_merge_base is not None:
+        identity["effective_merge_base"] = effective_merge_base
     if review_object is not None:
         identity["review_object"] = copy.deepcopy(review_object)
     if not normalized_entries:
@@ -994,7 +1165,7 @@ def snapshot_sources(
                 continue
             if side == "baseline":
                 data = git_object_bytes(repo, identity["baseline_sha"], source_path)
-            elif identity["comparison_kind"] == "commit":
+            elif comparison_uses_commit_tree(identity["comparison_kind"]):
                 data = git_object_bytes(repo, identity["comparison_sha"], source_path)
             else:
                 target = repo_path(repo, source_path)
@@ -1204,21 +1375,30 @@ def write_source_bundle_files(run_dir: Path, scope: dict[str, Any], limitations:
         "",
         f"- Scope hash: `{scope['scope_hash']}`",
         f"- Mode: `{identity['actual_scope']}`",
-        f"- Baseline: `{identity['base_reference']}` -> `{identity['baseline_sha']}`",
-        f"- Comparison: `{identity['comparison_reference']}` -> `{identity['comparison_sha']}`",
-        f"- Mutable/aligned: `{str(identity['mutable']).lower()}`",
-        f"- Include untracked: `{str(identity['include_untracked']).lower()}`",
     ]
     if identity.get("review_object"):
         review_object = identity["review_object"]
         lines.extend(
             [
                 f"- Review object: `{review_object['kind']}` `{review_object['identifier']}`",
-                f"- Review base SHA: `{review_object['base_sha']}`",
-                f"- Review head SHA: `{review_object['head_sha']}`",
+                f"- Host base: `{identity['base_reference']}` -> `{review_object['base_sha']}`",
+                f"- Host head: `{identity['head_reference']}` -> `{review_object['head_sha']}`",
+                f"- Effective merge base: `{identity['effective_merge_base']}`",
                 f"- Review metadata source: `{review_object['metadata_source']}`",
             ]
         )
+    else:
+        lines.append(
+            f"- Baseline: `{identity['base_reference']}` -> `{identity['baseline_sha']}`"
+        )
+    lines.extend(
+        [
+            f"- Comparison kind: `{identity['comparison_kind']}`",
+            f"- Comparison: `{identity['comparison_reference']}` -> `{identity['comparison_sha']}`",
+            f"- Mutable/aligned: `{str(identity['mutable']).lower()}`",
+            f"- Include untracked: `{str(identity['include_untracked']).lower()}`",
+        ]
+    )
     lines.extend(["", "## Files", ""])
     for entry in identity["files"]:
         rename = f" (from `{entry['old_path']}`)" if entry.get("old_path") else ""
@@ -1231,6 +1411,11 @@ def write_source_bundle_files(run_dir: Path, scope: dict[str, Any], limitations:
 
 def recompute_scope_from_state(repo: Path, state: dict[str, Any]) -> dict[str, Any]:
     params = state["scope_params"]
+    if params["actual_scope"] == "range" and params.get("review_object"):
+        raise ReviewError(
+            "Provisional PR-as-range scope is no longer supported; "
+            "restart the run with scope=pull_request"
+        )
     return build_scope(
         repo,
         requested_scope=params["actual_scope"],
@@ -1550,7 +1735,7 @@ def read_snapshot_source(run_dir: Path, scope_identity: dict[str, Any], side: st
             source_path = entry.get("old_path") if entry.get("old_path") and path == entry.get("old_path") else path
             data = git_object_bytes(repo, scope_identity["baseline_sha"], source_path)
             return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        if scope_identity["comparison_kind"] == "commit":
+        if comparison_uses_commit_tree(scope_identity["comparison_kind"]):
             data = git_object_bytes(repo, scope_identity["comparison_sha"], path)
             return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
         target = repo_path(repo, path)
@@ -1680,30 +1865,7 @@ def _normalize_candidate_set(
     valid_findings: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     local_ids: set[str] = set()
-    finding_keys = {
-        "local_id",
-        "title",
-        "nature",
-        "category",
-        "severity",
-        "confidence",
-        "file",
-        "line_start",
-        "line_end",
-        "evidence_side",
-        "evidence_quote",
-        "scope_relation",
-        "related_changed_files",
-        "direct_dependency",
-        "observable_consequence",
-        "trigger_conditions",
-        "counterevidence_checked",
-        "why_not_preference",
-        "proposed_resolution",
-        "estimated_fix_risk",
-        "requires_user_decision",
-        "assumptions",
-    }
+    finding_keys = set(CANDIDATE_FINDING_FIELDS)
 
     for index, raw_finding in enumerate(findings_raw):
         context = f"{source_file}.findings[{index}]"
@@ -2956,6 +3118,7 @@ def command_init(args: argparse.Namespace) -> int:
                 "include_untracked": identity["include_untracked"],
                 "review_object": identity.get("review_object"),
             },
+            "workflow_profile": args.workflow_profile,
             "coverage_required": True,
             "candidate_preflight": {},
             "mutation_allowed": identity["mutable"],
@@ -2964,6 +3127,8 @@ def command_init(args: argparse.Namespace) -> int:
             "approved_findings": [],
             "finding_status": {},
             "global_test_results": {},
+            "final_test_refresh_results": {},
+            "pre_verification_recovery_history": [],
             "active_finding": None,
             "repair_round": 0,
             "repair_targets": [],
@@ -3036,19 +3201,147 @@ def load_verified_coverage_plan(
     return plan, plan_hash
 
 
+def load_fallback_assignments(
+    run_dir: Path,
+    state: dict[str, Any],
+    coverage_plan: dict[str, Any],
+    coverage_plan_hash: str,
+) -> dict[str, dict[str, Any]]:
+    plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
+    raw_state = require_object(
+        state.get("fallback_assignments", {}), "state.fallback_assignments"
+    )
+    assignments: dict[str, dict[str, Any]] = {}
+    for lens_id, raw_record in raw_state.items():
+        require_control_id(lens_id, "state.fallback_assignments lens ID")
+        if lens_id not in plan_lenses:
+            raise ReviewError(f"Fallback assignment references unplanned lens {lens_id}")
+        lens = plan_lenses[lens_id]
+        if not lens["required"] or lens["fallback"] != "sequential_degraded_self_audit":
+            raise ReviewError(f"Fallback assignment is not permitted for lens {lens_id}")
+        record = require_object(
+            raw_record, f"state.fallback_assignments.{lens_id}"
+        )
+        require_exact_keys(
+            record,
+            {"path", "assignment_hash"},
+            f"state.fallback_assignments.{lens_id}",
+        )
+        relative_path = require_string(
+            record["path"], f"state.fallback_assignments.{lens_id}.path"
+        )
+        if relative_path != f"fallback-assignments/{lens_id}.json":
+            raise ReviewError(
+                f"Fallback assignment path does not match lens {lens_id}"
+            )
+        assignment = require_object(
+            load_json(run_dir / relative_path), f"fallback assignment {relative_path}"
+        )
+        require_exact_keys(
+            assignment,
+            {
+                "schema_version",
+                "scope_hash",
+                "coverage_plan_hash",
+                "workflow_profile",
+                "lens_id",
+                "route",
+                "failure_trigger_kind",
+                "failure_trigger_hash",
+                "reviewer_id",
+                "independence_group",
+                "review_mode",
+                "degraded",
+                "assignment_hash",
+            },
+            f"fallback assignment {relative_path}",
+        )
+        if assignment["schema_version"] != FALLBACK_ASSIGNMENT_SCHEMA:
+            raise ReviewError(f"Unsupported fallback assignment schema in {relative_path}")
+        if require_sha256(
+            assignment["scope_hash"], f"{relative_path}.scope_hash"
+        ) != state["scope_hash"]:
+            raise ReviewError("Fallback assignment has a stale scope hash")
+        if require_sha256(
+            assignment["coverage_plan_hash"], f"{relative_path}.coverage_plan_hash"
+        ) != coverage_plan_hash:
+            raise ReviewError("Fallback assignment has a stale coverage-plan hash")
+        if require_string(
+            assignment["workflow_profile"], f"{relative_path}.workflow_profile"
+        ) != coverage_plan["workflow_profile"]:
+            raise ReviewError("Fallback assignment has a stale workflow profile")
+        if require_control_id(
+            assignment["lens_id"], f"{relative_path}.lens_id"
+        ) != lens_id:
+            raise ReviewError("Fallback assignment lens does not match its state key")
+        if require_string(assignment["route"], f"{relative_path}.route") != "fallback":
+            raise ReviewError("Fallback assignment route must be fallback")
+        trigger_kind = require_string(
+            assignment["failure_trigger_kind"],
+            f"{relative_path}.failure_trigger_kind",
+        )
+        if trigger_kind not in FALLBACK_TRIGGER_KINDS:
+            raise ReviewError(f"{relative_path}.failure_trigger_kind is invalid")
+        require_sha256(
+            assignment["failure_trigger_hash"],
+            f"{relative_path}.failure_trigger_hash",
+        )
+        require_control_id(assignment["reviewer_id"], f"{relative_path}.reviewer_id")
+        require_string(
+            assignment["independence_group"], f"{relative_path}.independence_group"
+        )
+        review_mode = require_string(
+            assignment["review_mode"], f"{relative_path}.review_mode"
+        )
+        if review_mode not in REVIEW_MODES:
+            raise ReviewError(f"{relative_path}.review_mode is invalid")
+        if require_bool(assignment["degraded"], f"{relative_path}.degraded") is not True:
+            raise ReviewError("Fallback assignments must be marked degraded")
+        assignment_hash = verify_embedded_hash(
+            assignment,
+            hash_field="assignment_hash",
+            context=f"fallback assignment {relative_path}",
+        )
+        if assignment_hash != require_sha256(
+            record["assignment_hash"],
+            f"state.fallback_assignments.{lens_id}.assignment_hash",
+        ):
+            raise ReviewError("Fallback assignment does not match its state hash")
+        assignments[lens_id] = assignment
+    return assignments
+
+
+def primary_candidate_route_failed(receipts: list[dict[str, Any]]) -> bool:
+    if not receipts or any(item["verdict"] == "valid" for item in receipts):
+        return False
+    latest = max(receipts, key=lambda item: item["attempt"])
+    return latest["verdict"] == "rejected" or latest["attempt"] == 2
+
+
 def load_candidate_preflight_receipt(
     run_dir: Path, record: dict[str, Any]
 ) -> dict[str, Any]:
     require_exact_keys(record, {"path", "receipt_hash"}, "candidate preflight state record")
     relative_path = require_string(record.get("path"), "candidate preflight state path")
-    if re.fullmatch(
-        r"candidate-preflight/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/attempt-[12]\.json",
+    path_match = re.fullmatch(
+        r"candidate-preflight/([A-Za-z0-9][A-Za-z0-9._-]{0,127})/"
+        r"(primary|fallback)/attempt-([12])\.json",
         relative_path,
-    ) is None:
+    )
+    if path_match is None:
         raise ReviewError("Candidate preflight state path is invalid")
     receipt = require_object(
         load_json(run_dir / relative_path), f"candidate preflight receipt {relative_path}"
     )
+    final_v1_fields = {
+        "route",
+        "independence_group",
+        "review_mode",
+        "fallback_assignment_hash",
+        "degraded",
+    }
+    if not final_v1_fields.issubset(receipt) or "fallback" in receipt:
+        raise provisional_v1_restart("candidate-preflight receipt")
     require_exact_keys(
         receipt,
         {
@@ -3056,7 +3349,7 @@ def load_candidate_preflight_receipt(
             "scope_hash",
             "coverage_plan_hash",
             "lens_id",
-            "fallback",
+            "route",
             "attempt",
             "draft_hash",
             "semantic_hash",
@@ -3064,6 +3357,10 @@ def load_candidate_preflight_receipt(
             "verdict",
             "diagnostics",
             "reviewer_id",
+            "independence_group",
+            "review_mode",
+            "fallback_assignment_hash",
+            "degraded",
             "source_file",
             "receipt_hash",
         },
@@ -3074,10 +3371,16 @@ def load_candidate_preflight_receipt(
     require_sha256(receipt["scope_hash"], f"{relative_path}.scope_hash")
     require_sha256(receipt["coverage_plan_hash"], f"{relative_path}.coverage_plan_hash")
     lens_id = require_control_id(receipt["lens_id"], f"{relative_path}.lens_id")
-    require_bool(receipt["fallback"], f"{relative_path}.fallback")
+    route = require_string(receipt["route"], f"{relative_path}.route")
+    if route not in PREFLIGHT_ROUTES:
+        raise ReviewError(f"{relative_path}.route is invalid")
     attempt = require_int(receipt["attempt"], f"{relative_path}.attempt", minimum=1, maximum=2)
-    if relative_path != f"candidate-preflight/{lens_id}/attempt-{attempt}.json":
-        raise ReviewError("Candidate preflight receipt path does not match its lens and attempt")
+    if route == "fallback" and attempt != 1:
+        raise ReviewError("Fallback candidate preflight permits only route-local attempt 1")
+    if relative_path != f"candidate-preflight/{lens_id}/{route}/attempt-{attempt}.json":
+        raise ReviewError(
+            "Candidate preflight receipt path does not match its lens, route, and attempt"
+        )
     require_sha256(receipt["draft_hash"], f"{relative_path}.draft_hash")
     for field in ("semantic_hash", "supersedes_receipt_hash"):
         if receipt[field] is not None:
@@ -3099,6 +3402,16 @@ def load_candidate_preflight_receipt(
     if verdict != "valid" and not diagnostics:
         raise ReviewError(f"{relative_path}: non-valid receipt requires diagnostics")
     require_control_id(receipt["reviewer_id"], f"{relative_path}.reviewer_id")
+    require_string(receipt["independence_group"], f"{relative_path}.independence_group")
+    review_mode = require_string(receipt["review_mode"], f"{relative_path}.review_mode")
+    if review_mode not in REVIEW_MODES:
+        raise ReviewError(f"{relative_path}.review_mode is invalid")
+    if receipt["fallback_assignment_hash"] is not None:
+        require_sha256(
+            receipt["fallback_assignment_hash"],
+            f"{relative_path}.fallback_assignment_hash",
+        )
+    require_bool(receipt["degraded"], f"{relative_path}.degraded")
     require_string(receipt["source_file"], f"{relative_path}.source_file")
     receipt_hash = verify_embedded_hash(
         receipt,
@@ -3118,74 +3431,446 @@ def load_all_candidate_preflight_receipts(
     state: dict[str, Any],
     coverage_plan: dict[str, Any],
     coverage_plan_hash: str,
+    *,
+    fallback_assignments: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
+    if fallback_assignments is None:
+        fallback_assignments = load_fallback_assignments(
+            run_dir, state, coverage_plan, coverage_plan_hash
+        )
     raw_state = require_object(state.get("candidate_preflight", {}), "state.candidate_preflight")
     receipts: list[dict[str, Any]] = []
     seen_hashes: set[str] = set()
-    for lens_id, raw_records in raw_state.items():
+    for lens_id, raw_routes in raw_state.items():
         require_control_id(lens_id, "state.candidate_preflight lens ID")
         if lens_id not in plan_lenses:
             raise ReviewError(f"Candidate preflight state references unplanned lens {lens_id}")
-        records = require_array(raw_records, f"state.candidate_preflight.{lens_id}")
-        if len(records) > 2:
-            raise ReviewError(f"Candidate preflight attempt limit exceeded for lens {lens_id}")
-        for raw_record in records:
-            record = require_object(raw_record, f"state.candidate_preflight.{lens_id} record")
-            receipt = load_candidate_preflight_receipt(run_dir, record)
-            if receipt["lens_id"] != lens_id:
-                raise ReviewError("Candidate preflight receipt lens does not match state")
-            if receipt["scope_hash"] != state["scope_hash"]:
-                raise ReviewError("Candidate preflight receipt has a stale scope hash")
-            if receipt["coverage_plan_hash"] != coverage_plan_hash:
-                raise ReviewError("Candidate preflight receipt has a stale coverage-plan hash")
-            plan_lens = plan_lenses[lens_id]
-            if receipt["reviewer_id"] != plan_lens["reviewer_id"]:
-                raise ReviewError("Candidate preflight reviewer does not match the coverage plan")
-            if receipt["fallback"] and (
-                not plan_lens["required"]
-                or plan_lens["fallback"] != "sequential_degraded_self_audit"
+        routes = require_object(
+            raw_routes, f"state.candidate_preflight.{lens_id} routes"
+        )
+        require_exact_keys(
+            routes,
+            PREFLIGHT_ROUTES,
+            f"state.candidate_preflight.{lens_id} routes",
+        )
+        plan_lens = plan_lenses[lens_id]
+        for route in ("primary", "fallback"):
+            records = require_array(
+                routes[route], f"state.candidate_preflight.{lens_id}.{route}"
+            )
+            route_limit = 2 if route == "primary" else 1
+            if len(records) > route_limit:
+                raise ReviewError(
+                    f"Candidate preflight {route} route attempt limit exceeded for lens {lens_id}"
+                )
+            route_receipts: list[dict[str, Any]] = []
+            for index, raw_record in enumerate(records, start=1):
+                record = require_object(
+                    raw_record,
+                    f"state.candidate_preflight.{lens_id}.{route} record",
+                )
+                receipt = load_candidate_preflight_receipt(run_dir, record)
+                if receipt["lens_id"] != lens_id or receipt["route"] != route:
+                    raise ReviewError(
+                        "Candidate preflight receipt lens or route does not match state"
+                    )
+                if receipt["attempt"] != index:
+                    raise ReviewError(
+                        "Candidate preflight route attempts are not contiguous"
+                    )
+                if receipt["scope_hash"] != state["scope_hash"]:
+                    raise ReviewError("Candidate preflight receipt has a stale scope hash")
+                if receipt["coverage_plan_hash"] != coverage_plan_hash:
+                    raise ReviewError("Candidate preflight receipt has a stale coverage-plan hash")
+                if route == "primary":
+                    expected_identity = plan_lens
+                    if receipt["fallback_assignment_hash"] is not None:
+                        raise ReviewError(
+                            "Primary candidate preflight may not reference a fallback assignment"
+                        )
+                    if receipt["degraded"]:
+                        raise ReviewError("Primary candidate preflight may not be degraded")
+                else:
+                    assignment = fallback_assignments.get(lens_id)
+                    if assignment is None:
+                        raise ReviewError(
+                            f"Candidate preflight fallback lacks a root-owned assignment for lens {lens_id}"
+                        )
+                    expected_identity = assignment
+                    if receipt["fallback_assignment_hash"] != assignment["assignment_hash"]:
+                        raise ReviewError(
+                            "Candidate preflight fallback assignment hash does not match state"
+                        )
+                    if not receipt["degraded"]:
+                        raise ReviewError("Fallback candidate preflight must be degraded")
+                for field in ("reviewer_id", "independence_group", "review_mode"):
+                    if receipt[field] != expected_identity[field]:
+                        raise ReviewError(
+                            f"Candidate preflight {field} does not match its active assignment"
+                        )
+                if receipt["receipt_hash"] in seen_hashes:
+                    raise ReviewError(
+                        "Candidate preflight state contains a duplicate receipt hash"
+                    )
+                seen_hashes.add(receipt["receipt_hash"])
+                route_receipts.append(receipt)
+                receipts.append(receipt)
+            if route == "primary" and route_receipts:
+                if route_receipts[0]["supersedes_receipt_hash"] is not None:
+                    raise ReviewError("Primary attempt 1 may not supersede a receipt")
+                if len(route_receipts) == 2 and route_receipts[1][
+                    "supersedes_receipt_hash"
+                ] != route_receipts[0]["receipt_hash"]:
+                    raise ReviewError(
+                        "Primary attempt 2 must supersede primary attempt 1"
+                    )
+            if route == "fallback" and route_receipts and route_receipts[0][
+                "supersedes_receipt_hash"
+            ] is not None:
+                raise ReviewError("Fallback route may not supersede a primary receipt")
+        primary = [item for item in receipts if item["lens_id"] == lens_id and item["route"] == "primary"]
+        fallback = [item for item in receipts if item["lens_id"] == lens_id and item["route"] == "fallback"]
+        if fallback:
+            assignment = fallback_assignments.get(lens_id)
+            if assignment is None:
+                raise ReviewError(
+                    f"Fallback route for lens {lens_id} lacks an assignment"
+                )
+            if assignment["failure_trigger_kind"] == "candidate_preflight_receipt" and (
+                not primary or any(item["verdict"] == "valid" for item in primary)
             ):
-                raise ReviewError(f"Candidate preflight fallback is not permitted for lens {lens_id}")
-            if receipt["receipt_hash"] in seen_hashes:
-                raise ReviewError("Candidate preflight state contains a duplicate receipt hash")
-            seen_hashes.add(receipt["receipt_hash"])
-            receipts.append(receipt)
+                raise ReviewError(
+                    f"Fallback route for lens {lens_id} requires a primary route with no valid receipt"
+                )
+    for lens_id, assignment in fallback_assignments.items():
+        primary = [
+            item
+            for item in receipts
+            if item["lens_id"] == lens_id and item["route"] == "primary"
+        ]
+        if assignment["failure_trigger_kind"] == "candidate_preflight_receipt":
+            if not primary_candidate_route_failed(primary):
+                raise ReviewError(
+                    f"Fallback assignment for lens {lens_id} requires a failed primary route"
+                )
+            latest_primary = max(primary, key=lambda item: item["attempt"])
+            if assignment["failure_trigger_hash"] != latest_primary["receipt_hash"]:
+                raise ReviewError(
+                    f"Fallback assignment for lens {lens_id} does not bind the latest primary receipt"
+                )
     return receipts
+
+
+def load_reviewer_failure_attestations(
+    run_dir: Path,
+    state: dict[str, Any],
+    coverage_plan: dict[str, Any],
+    coverage_plan_hash: str,
+    fallback_assignments: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
+    raw_state = require_object(
+        state.get("reviewer_failure_attestations", {}),
+        "state.reviewer_failure_attestations",
+    )
+    attestations: list[dict[str, Any]] = []
+    seen_hashes: set[str] = set()
+    for lens_id, raw_routes in raw_state.items():
+        require_control_id(lens_id, "state.reviewer_failure_attestations lens ID")
+        if lens_id not in plan_lenses:
+            raise ReviewError(f"Reviewer failure references unplanned lens {lens_id}")
+        plan_lens = plan_lenses[lens_id]
+        if not plan_lens["required"] or plan_lens["fallback"] != "sequential_degraded_self_audit":
+            raise ReviewError(f"Reviewer failure is not permitted for lens {lens_id}")
+        routes = require_object(
+            raw_routes, f"state.reviewer_failure_attestations.{lens_id} routes"
+        )
+        require_exact_keys(
+            routes,
+            PREFLIGHT_ROUTES,
+            f"state.reviewer_failure_attestations.{lens_id} routes",
+        )
+        for route in ("primary", "fallback"):
+            raw_record = routes[route]
+            if raw_record is None:
+                continue
+            record = require_object(
+                raw_record,
+                f"state.reviewer_failure_attestations.{lens_id}.{route}",
+            )
+            require_exact_keys(
+                record,
+                {"path", "attestation_hash"},
+                f"state.reviewer_failure_attestations.{lens_id}.{route}",
+            )
+            relative_path = require_string(
+                record["path"],
+                f"state.reviewer_failure_attestations.{lens_id}.{route}.path",
+            )
+            expected_path = f"reviewer-failure-attestations/{lens_id}/{route}.json"
+            if relative_path != expected_path:
+                raise ReviewError(
+                    "Reviewer-failure attestation path does not match its lens and route"
+                )
+            attestation = require_object(
+                load_json(run_dir / relative_path),
+                f"reviewer-failure attestation {relative_path}",
+            )
+            require_exact_keys(
+                attestation,
+                {
+                    "schema_version",
+                    "scope_hash",
+                    "coverage_plan_hash",
+                    "workflow_profile",
+                    "lens_id",
+                    "route",
+                    "assignment_kind",
+                    "assignment_hash",
+                    "reviewer_id",
+                    "independence_group",
+                    "review_mode",
+                    "reason",
+                    "diagnostics",
+                    "observer_kind",
+                    "observer_id",
+                    "no_readable_draft",
+                    "observed_at",
+                    "attestation_hash",
+                },
+                f"reviewer-failure attestation {relative_path}",
+            )
+            if attestation["schema_version"] != REVIEWER_FAILURE_ATTESTATION_SCHEMA:
+                raise ReviewError(
+                    f"Unsupported reviewer-failure attestation schema in {relative_path}"
+                )
+            if require_sha256(
+                attestation["scope_hash"], f"{relative_path}.scope_hash"
+            ) != state["scope_hash"]:
+                raise ReviewError("Reviewer-failure attestation has a stale scope hash")
+            if require_sha256(
+                attestation["coverage_plan_hash"],
+                f"{relative_path}.coverage_plan_hash",
+            ) != coverage_plan_hash:
+                raise ReviewError(
+                    "Reviewer-failure attestation has a stale coverage-plan hash"
+                )
+            if require_string(
+                attestation["workflow_profile"], f"{relative_path}.workflow_profile"
+            ) != coverage_plan["workflow_profile"]:
+                raise ReviewError("Reviewer-failure attestation has a stale workflow profile")
+            if require_control_id(
+                attestation["lens_id"], f"{relative_path}.lens_id"
+            ) != lens_id:
+                raise ReviewError("Reviewer-failure attestation lens does not match state")
+            if require_string(attestation["route"], f"{relative_path}.route") != route:
+                raise ReviewError("Reviewer-failure attestation route does not match state")
+            if route == "primary":
+                expected_assignment_kind = "coverage_plan"
+                expected_assignment_hash = coverage_plan_hash
+                expected_identity = plan_lens
+            else:
+                assignment = fallback_assignments.get(lens_id)
+                if assignment is None:
+                    raise ReviewError(
+                        f"Fallback reviewer failure lacks an assignment for lens {lens_id}"
+                    )
+                expected_assignment_kind = "fallback_assignment"
+                expected_assignment_hash = assignment["assignment_hash"]
+                expected_identity = assignment
+            if require_string(
+                attestation["assignment_kind"], f"{relative_path}.assignment_kind"
+            ) != expected_assignment_kind:
+                raise ReviewError("Reviewer-failure attestation assignment kind is stale")
+            if require_sha256(
+                attestation["assignment_hash"], f"{relative_path}.assignment_hash"
+            ) != expected_assignment_hash:
+                raise ReviewError("Reviewer-failure attestation assignment hash is stale")
+            for field in ("reviewer_id", "independence_group", "review_mode"):
+                value = require_string(attestation[field], f"{relative_path}.{field}")
+                if value != expected_identity[field]:
+                    raise ReviewError(
+                        f"Reviewer-failure attestation {field} differs from its assignment"
+                    )
+            if attestation["review_mode"] not in REVIEW_MODES:
+                raise ReviewError(f"{relative_path}.review_mode is invalid")
+            reason = require_string(attestation["reason"], f"{relative_path}.reason")
+            if reason not in REVIEWER_FAILURE_REASONS:
+                raise ReviewError(f"{relative_path}.reason is invalid")
+            diagnostics = require_array(
+                attestation["diagnostics"], f"{relative_path}.diagnostics"
+            )
+            if len(diagnostics) > MAX_FAILURE_DIAGNOSTICS:
+                raise ReviewError("Reviewer-failure attestation has too many diagnostics")
+            seen_diagnostic_codes: set[str] = set()
+            for index, raw_diagnostic in enumerate(diagnostics):
+                context = f"{relative_path}.diagnostics[{index}]"
+                diagnostic = require_object(raw_diagnostic, context)
+                require_exact_keys(diagnostic, {"code", "value"}, context)
+                code = require_string(diagnostic["code"], f"{context}.code")
+                if code not in FAILURE_DIAGNOSTIC_CODES:
+                    raise ReviewError(f"{context}.code is invalid")
+                if code in seen_diagnostic_codes:
+                    raise ReviewError(
+                        f"Reviewer-failure attestation duplicates diagnostic code {code}"
+                    )
+                seen_diagnostic_codes.add(code)
+                minimum, maximum = FAILURE_DIAGNOSTIC_BOUNDS[code]
+                require_int(
+                    diagnostic["value"],
+                    f"{context}.value",
+                    minimum=minimum,
+                    maximum=maximum,
+                )
+            observer_kind = require_string(
+                attestation["observer_kind"], f"{relative_path}.observer_kind"
+            )
+            if observer_kind not in FAILURE_OBSERVER_KINDS:
+                raise ReviewError(f"{relative_path}.observer_kind is invalid")
+            require_control_id(attestation["observer_id"], f"{relative_path}.observer_id")
+            if require_bool(
+                attestation["no_readable_draft"], f"{relative_path}.no_readable_draft"
+            ) is not True:
+                raise ReviewError("Reviewer-failure attestation must confirm no readable draft")
+            observed_at = require_string(
+                attestation["observed_at"], f"{relative_path}.observed_at"
+            )
+            try:
+                datetime.strptime(observed_at, "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError as exc:
+                raise ReviewError(f"{relative_path}.observed_at is invalid") from exc
+            attestation_hash = verify_embedded_hash(
+                attestation,
+                hash_field="attestation_hash",
+                context=f"reviewer-failure attestation {relative_path}",
+            )
+            if attestation_hash != require_sha256(
+                record["attestation_hash"],
+                f"state.reviewer_failure_attestations.{lens_id}.{route}.attestation_hash",
+            ):
+                raise ReviewError("Reviewer-failure attestation does not match state")
+            if attestation_hash in seen_hashes:
+                raise ReviewError("Reviewer-failure state contains a duplicate hash")
+            seen_hashes.add(attestation_hash)
+            attestations.append(attestation)
+    return attestations
+
+
+def load_review_evidence(
+    run_dir: Path,
+    state: dict[str, Any],
+    coverage_plan: dict[str, Any],
+    coverage_plan_hash: str,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    fallback_assignments = load_fallback_assignments(
+        run_dir, state, coverage_plan, coverage_plan_hash
+    )
+    receipts = load_all_candidate_preflight_receipts(
+        run_dir,
+        state,
+        coverage_plan,
+        coverage_plan_hash,
+        fallback_assignments=fallback_assignments,
+    )
+    attestations = load_reviewer_failure_attestations(
+        run_dir,
+        state,
+        coverage_plan,
+        coverage_plan_hash,
+        fallback_assignments,
+    )
+    receipt_routes = {(item["lens_id"], item["route"]) for item in receipts}
+    attestation_routes = {(item["lens_id"], item["route"]) for item in attestations}
+    overlap = sorted(receipt_routes & attestation_routes)
+    if overlap:
+        raise ReviewError(
+            "A review route may contain candidate receipts or a no-output attestation, not both: "
+            + ", ".join(f"{lens}/{route}" for lens, route in overlap)
+        )
+    for lens_id, assignment in fallback_assignments.items():
+        if assignment["failure_trigger_kind"] != "reviewer_failure_attestation":
+            continue
+        primary_attestations = [
+            item
+            for item in attestations
+            if item["lens_id"] == lens_id and item["route"] == "primary"
+        ]
+        if len(primary_attestations) != 1:
+            raise ReviewError(
+                f"Fallback assignment for lens {lens_id} requires one primary failure attestation"
+            )
+        if assignment["failure_trigger_hash"] != primary_attestations[0]["attestation_hash"]:
+            raise ReviewError(
+                f"Fallback assignment for lens {lens_id} does not bind its primary attestation"
+            )
+    return receipts, fallback_assignments, attestations
 
 
 def latest_candidate_preflight_receipts(
     receipts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    latest: dict[tuple[str, bool], dict[str, Any]] = {}
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
     for receipt in receipts:
-        key = (receipt["lens_id"], receipt["fallback"])
+        key = (receipt["lens_id"], receipt["route"])
         if key not in latest or receipt["attempt"] > latest[key]["attempt"]:
             latest[key] = receipt
     return list(latest.values())
 
 
 def build_coverage_status(
-    *, state: dict[str, Any], coverage_plan: dict[str, Any], receipts: list[dict[str, Any]]
+    *,
+    state: dict[str, Any],
+    coverage_plan: dict[str, Any],
+    receipts: list[dict[str, Any]],
+    fallback_assignments: dict[str, dict[str, Any]],
+    attestations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     lens_results: list[dict[str, Any]] = []
     limitations: list[str] = []
     for lens in coverage_plan["lenses"]:
         matching = [item for item in receipts if item["lens_id"] == lens["lens_id"]]
         primary = max(
-            (item for item in matching if not item["fallback"]),
+            (item for item in matching if item["route"] == "primary"),
             key=lambda item: item["attempt"],
             default=None,
         )
         fallback = max(
-            (item for item in matching if item["fallback"]),
+            (item for item in matching if item["route"] == "fallback"),
             key=lambda item: item["attempt"],
             default=None,
         )
-        completed = any(
-            item is not None and item["verdict"] == "valid"
-            for item in (primary, fallback)
+        primary_attestation = next(
+            (
+                item
+                for item in attestations
+                if item["lens_id"] == lens["lens_id"] and item["route"] == "primary"
+            ),
+            None,
         )
+        fallback_attestation = next(
+            (
+                item
+                for item in attestations
+                if item["lens_id"] == lens["lens_id"] and item["route"] == "fallback"
+            ),
+            None,
+        )
+        completion_route = next(
+            (
+                route
+                for route, item in (("primary", primary), ("fallback", fallback))
+                if item is not None and item["verdict"] == "valid"
+            ),
+            None,
+        )
+        completed = completion_route is not None
+        assignment = fallback_assignments.get(lens["lens_id"])
+        active_identity = assignment or lens
         if not completed:
             availability = "required" if lens["required"] else "optional"
             limitations.append(
@@ -3196,15 +3881,45 @@ def build_coverage_status(
                 "lens_id": lens["lens_id"],
                 "required": lens["required"],
                 "completed": completed,
+                "completion_route": completion_route,
                 "primary_receipt_hash": primary["receipt_hash"] if primary else None,
                 "fallback_receipt_hash": fallback["receipt_hash"] if fallback else None,
-                "reviewer_id": lens["reviewer_id"],
-                "independence_group": lens["independence_group"],
-                "review_mode": lens["review_mode"],
+                "primary_attestation_hash": (
+                    primary_attestation["attestation_hash"]
+                    if primary_attestation
+                    else None
+                ),
+                "fallback_attestation_hash": (
+                    fallback_attestation["attestation_hash"]
+                    if fallback_attestation
+                    else None
+                ),
+                "fallback_assignment_hash": (
+                    assignment["assignment_hash"] if assignment else None
+                ),
+                "fallback_trigger_kind": (
+                    assignment["failure_trigger_kind"] if assignment else None
+                ),
+                "fallback_trigger_hash": (
+                    assignment["failure_trigger_hash"] if assignment else None
+                ),
+                "degraded": assignment is not None,
+                "reviewer_id": active_identity["reviewer_id"],
+                "independence_group": active_identity["independence_group"],
+                "review_mode": active_identity["review_mode"],
                 "diagnostics": [
                     diagnostic["code"]
                     for item in matching
                     for diagnostic in item["diagnostics"]
+                ]
+                + [
+                    value
+                    for attestation in (primary_attestation, fallback_attestation)
+                    if attestation is not None
+                    for value in (
+                        attestation["reason"],
+                        *(item["code"] for item in attestation["diagnostics"]),
+                    )
                 ],
             }
         )
@@ -3213,6 +3928,7 @@ def build_coverage_status(
         "schema_version": COVERAGE_STATUS_SCHEMA,
         "scope_hash": state["scope_hash"],
         "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+        "workflow_profile": coverage_plan["workflow_profile"],
         "status": "complete" if complete else "incomplete",
         "lenses": lens_results,
         "limitations": limitations,
@@ -3221,16 +3937,89 @@ def build_coverage_status(
     return payload
 
 
+def require_exhausted_incomplete_required_routes(
+    *,
+    coverage_plan: dict[str, Any],
+    coverage_status: dict[str, Any],
+    receipts: list[dict[str, Any]],
+    fallback_assignments: dict[str, dict[str, Any]],
+    attestations: list[dict[str, Any]],
+) -> None:
+    latest_receipts = latest_candidate_preflight_receipts(receipts)
+    attestation_routes = {
+        (item["lens_id"], item["route"]): item for item in attestations
+    }
+    status_lenses = {item["lens_id"]: item for item in coverage_status["lenses"]}
+    for lens in coverage_plan["lenses"]:
+        status_lens = status_lenses[lens["lens_id"]]
+        if not lens["required"] or status_lens["completed"]:
+            continue
+        lens_receipts = [
+            item for item in latest_receipts if item["lens_id"] == lens["lens_id"]
+        ]
+        if any(item["verdict"] == "valid" for item in lens_receipts):
+            raise ReviewError(
+                f"Required lens {lens['lens_id']} has valid candidate bytes that must be ingested"
+            )
+        primary_receipt = next(
+            (item for item in lens_receipts if item["route"] == "primary"),
+            None,
+        )
+        primary_failed = (
+            primary_receipt is not None and primary_receipt["verdict"] != "valid"
+        ) or ((lens["lens_id"], "primary") in attestation_routes)
+        if not primary_failed:
+            raise ReviewError(
+                f"Required lens {lens['lens_id']} has no terminal primary evidence"
+            )
+        if lens["fallback"] == "none":
+            continue
+        if lens["lens_id"] not in fallback_assignments:
+            raise ReviewError(
+                f"Required lens {lens['lens_id']} still has unused fallback authority"
+            )
+        fallback_receipt = next(
+            (item for item in lens_receipts if item["route"] == "fallback"),
+            None,
+        )
+        fallback_failed = (
+            fallback_receipt is not None and fallback_receipt["verdict"] != "valid"
+        ) or ((lens["lens_id"], "fallback") in attestation_routes)
+        if not fallback_failed:
+            raise ReviewError(
+                f"Required lens {lens['lens_id']} fallback route is not exhausted"
+            )
+
+
 def validate_coverage_status(
-    raw: Any, *, state: dict[str, Any], coverage_plan: dict[str, Any]
+    raw: Any,
+    *,
+    state: dict[str, Any],
+    coverage_plan: dict[str, Any],
+    fallback_assignments: dict[str, dict[str, Any]],
+    attestations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     status = require_object(raw, "coverage status")
+    if any(
+        not {
+            "primary_attestation_hash",
+            "fallback_attestation_hash",
+            "fallback_assignment_hash",
+            "fallback_trigger_kind",
+            "fallback_trigger_hash",
+            "degraded",
+        }.issubset(item)
+        for item in status.get("lenses", [])
+        if isinstance(item, dict)
+    ):
+        raise provisional_v1_restart("coverage status")
     require_exact_keys(
         status,
         {
             "schema_version",
             "scope_hash",
             "coverage_plan_hash",
+            "workflow_profile",
             "status",
             "lenses",
             "limitations",
@@ -3246,6 +4035,11 @@ def validate_coverage_status(
         status["coverage_plan_hash"], "coverage status.coverage_plan_hash"
     ) != state["hashes"]["coverage_plan_hash"]:
         raise ReviewError("Coverage status has a stale coverage-plan hash")
+    workflow_profile = require_string(
+        status["workflow_profile"], "coverage status.workflow_profile"
+    )
+    if workflow_profile != coverage_plan["workflow_profile"]:
+        raise ReviewError("Coverage status workflow profile differs from the coverage plan")
     status_value = require_string(status["status"], "coverage status.status")
     if status_value not in {"complete", "incomplete"}:
         raise ReviewError("coverage status.status must be complete or incomplete")
@@ -3261,8 +4055,15 @@ def validate_coverage_status(
                 "lens_id",
                 "required",
                 "completed",
+                "completion_route",
                 "primary_receipt_hash",
                 "fallback_receipt_hash",
+                "primary_attestation_hash",
+                "fallback_attestation_hash",
+                "fallback_assignment_hash",
+                "fallback_trigger_kind",
+                "fallback_trigger_hash",
+                "degraded",
                 "reviewer_id",
                 "independence_group",
                 "review_mode",
@@ -3277,13 +4078,111 @@ def validate_coverage_status(
         planned = plan_lenses[lens_id]
         required = require_bool(lens["required"], f"{context}.required")
         completed = require_bool(lens["completed"], f"{context}.completed")
+        completion_route = lens["completion_route"]
+        if completion_route is not None:
+            completion_route = require_string(
+                completion_route, f"{context}.completion_route"
+            )
+            if completion_route not in PREFLIGHT_ROUTES:
+                raise ReviewError(f"{context}.completion_route is invalid")
+        if completed != (completion_route is not None):
+            raise ReviewError(
+                f"Coverage status completion route disagrees for lens {lens_id}"
+            )
         if required != planned["required"]:
             raise ReviewError(f"Coverage status required flag differs for lens {lens_id}")
-        for field in ("primary_receipt_hash", "fallback_receipt_hash"):
+        for field in (
+            "primary_receipt_hash",
+            "fallback_receipt_hash",
+            "primary_attestation_hash",
+            "fallback_attestation_hash",
+        ):
             if lens[field] is not None:
                 require_sha256(lens[field], f"{context}.{field}")
+        expected_primary_attestation = next(
+            (
+                item["attestation_hash"]
+                for item in attestations
+                if item["lens_id"] == lens_id and item["route"] == "primary"
+            ),
+            None,
+        )
+        expected_fallback_attestation = next(
+            (
+                item["attestation_hash"]
+                for item in attestations
+                if item["lens_id"] == lens_id and item["route"] == "fallback"
+            ),
+            None,
+        )
+        if lens["primary_attestation_hash"] != expected_primary_attestation:
+            raise ReviewError(
+                f"Coverage status primary attestation differs for lens {lens_id}"
+            )
+        if lens["fallback_attestation_hash"] != expected_fallback_attestation:
+            raise ReviewError(
+                f"Coverage status fallback attestation differs for lens {lens_id}"
+            )
+        if completion_route == "primary" and lens["primary_receipt_hash"] is None:
+            raise ReviewError(
+                f"Coverage status primary completion lacks a receipt for lens {lens_id}"
+            )
+        if completion_route == "fallback" and lens["fallback_receipt_hash"] is None:
+            raise ReviewError(
+                f"Coverage status fallback completion lacks a receipt for lens {lens_id}"
+            )
+        assignment = fallback_assignments.get(lens_id)
+        expected_identity = assignment or planned
+        for field in (
+            "fallback_assignment_hash",
+            "fallback_trigger_kind",
+            "fallback_trigger_hash",
+        ):
+            if lens[field] is not None:
+                if field.endswith("_hash"):
+                    require_sha256(lens[field], f"{context}.{field}")
+                else:
+                    require_string(lens[field], f"{context}.{field}")
+        if assignment is None:
+            if any(
+                lens[field] is not None
+                for field in (
+                    "fallback_assignment_hash",
+                    "fallback_trigger_kind",
+                    "fallback_trigger_hash",
+                )
+            ):
+                raise ReviewError(
+                    f"Coverage status references an unassigned fallback for lens {lens_id}"
+                )
+        else:
+            expected_fallback = {
+                "fallback_assignment_hash": assignment["assignment_hash"],
+                "fallback_trigger_kind": assignment["failure_trigger_kind"],
+                "fallback_trigger_hash": assignment["failure_trigger_hash"],
+            }
+            for field, expected in expected_fallback.items():
+                if lens[field] != expected:
+                    raise ReviewError(
+                        f"Coverage status {field} differs for lens {lens_id}"
+                    )
+            trigger_field = (
+                "primary_receipt_hash"
+                if assignment["failure_trigger_kind"] == "candidate_preflight_receipt"
+                else "primary_attestation_hash"
+            )
+            if lens[trigger_field] != assignment["failure_trigger_hash"]:
+                raise ReviewError(
+                    f"Coverage status does not expose the failed primary trigger for lens {lens_id}"
+                )
+        if require_bool(lens["degraded"], f"{context}.degraded") != (assignment is not None):
+            raise ReviewError(f"Coverage status degraded marker differs for lens {lens_id}")
+        if completion_route == "fallback" and assignment is None:
+            raise ReviewError(
+                f"Coverage status fallback completion lacks an assignment for lens {lens_id}"
+            )
         for field in ("reviewer_id", "independence_group", "review_mode"):
-            if require_string(lens[field], f"{context}.{field}") != planned[field]:
+            if require_string(lens[field], f"{context}.{field}") != expected_identity[field]:
                 raise ReviewError(f"Coverage status {field} differs for lens {lens_id}")
         require_string_array(lens["diagnostics"], f"{context}.diagnostics", unique=False)
         if required and not completed:
@@ -3305,9 +4204,301 @@ def load_verified_coverage_status(
     status_hash = verify_embedded_hash(
         raw, hash_field="coverage_status_hash", context="coverage status"
     )
-    status = validate_coverage_status(raw, state=state, coverage_plan=coverage_plan)
+    coverage_plan_hash = require_sha256(
+        state["hashes"]["coverage_plan_hash"], "state coverage-plan hash"
+    )
+    _, fallback_assignments, attestations = load_review_evidence(
+        run_dir, state, coverage_plan, coverage_plan_hash
+    )
+    status = validate_coverage_status(
+        raw,
+        state=state,
+        coverage_plan=coverage_plan,
+        fallback_assignments=fallback_assignments,
+        attestations=attestations,
+    )
     require_state_hash(state, "coverage_status_hash", status_hash, "coverage status")
     return status
+
+
+def parse_failure_diagnostics(values: list[str]) -> list[dict[str, Any]]:
+    if len(values) > MAX_FAILURE_DIAGNOSTICS:
+        raise ReviewError(
+            f"Reviewer failure permits at most {MAX_FAILURE_DIAGNOSTICS} diagnostics"
+        )
+    diagnostics: list[dict[str, Any]] = []
+    seen_codes: set[str] = set()
+    for index, raw in enumerate(values):
+        if "=" not in raw:
+            raise ReviewError(
+                f"Reviewer failure diagnostic {index + 1} must use controlled CODE=INTEGER form"
+            )
+        code, raw_value = raw.split("=", 1)
+        if code not in FAILURE_DIAGNOSTIC_CODES:
+            raise ReviewError(
+                f"Reviewer failure diagnostic code must be one of {sorted(FAILURE_DIAGNOSTIC_CODES)}"
+            )
+        if code in seen_codes:
+            raise ReviewError(f"Reviewer failure diagnostic code is duplicated: {code}")
+        seen_codes.add(code)
+        try:
+            value = int(raw_value)
+        except ValueError as exc:
+            raise ReviewError(
+                f"Reviewer failure diagnostic {code} must contain an integer"
+            ) from exc
+        minimum, maximum = FAILURE_DIAGNOSTIC_BOUNDS[code]
+        require_int(
+            value,
+            f"reviewer failure diagnostic {code}",
+            minimum=minimum,
+            maximum=maximum,
+        )
+        diagnostics.append({"code": code, "value": value})
+    return diagnostics
+
+
+def command_record_reviewer_failure(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    with exclusive_run_state_lock(run_dir):
+        state = load_state(run_dir)
+        if state["phase"] != PHASE_CONTEXT:
+            raise ReviewError(
+                f"Cannot record reviewer failure in phase {state['phase']}"
+            )
+        check_scope_fresh(repo, run_dir, state)
+        coverage_plan, coverage_plan_hash = load_verified_coverage_plan(run_dir, state)
+        lens = next(
+            (item for item in coverage_plan["lenses"] if item["lens_id"] == args.lens),
+            None,
+        )
+        if lens is None:
+            raise ReviewError(f"Lens is not assigned by the coverage plan: {args.lens}")
+        if not lens["required"] or lens["fallback"] != "sequential_degraded_self_audit":
+            raise ReviewError(
+                f"Lens {args.lens} does not permit reviewer-failure fallback evidence"
+            )
+        receipts, assignments, attestations = load_review_evidence(
+            run_dir, state, coverage_plan, coverage_plan_hash
+        )
+        route_receipts = [
+            item
+            for item in receipts
+            if item["lens_id"] == args.lens and item["route"] == args.route
+        ]
+        route_attestations = [
+            item
+            for item in attestations
+            if item["lens_id"] == args.lens and item["route"] == args.route
+        ]
+        if route_receipts:
+            raise ReviewError(
+                f"Lens {args.lens} {args.route} route has readable candidate receipt evidence"
+            )
+        if route_attestations:
+            raise ReviewError(
+                f"Lens {args.lens} {args.route} failure is already attested"
+            )
+        if args.route == "primary":
+            if args.lens in assignments:
+                raise ReviewError(
+                    f"Lens {args.lens} primary route is closed by its fallback assignment"
+                )
+            assignment_kind = "coverage_plan"
+            assignment_hash = coverage_plan_hash
+            active_identity = lens
+        else:
+            assignment = assignments.get(args.lens)
+            if assignment is None:
+                raise ReviewError(
+                    f"Lens {args.lens} fallback failure requires a fallback assignment"
+                )
+            assignment_kind = "fallback_assignment"
+            assignment_hash = assignment["assignment_hash"]
+            active_identity = assignment
+        diagnostics = parse_failure_diagnostics(args.diagnostic)
+        reason = require_string(args.reason, "reviewer failure reason")
+        if reason not in REVIEWER_FAILURE_REASONS:
+            raise ReviewError(
+                f"reviewer failure reason must be one of {sorted(REVIEWER_FAILURE_REASONS)}"
+            )
+        observer_kind = require_string(args.observer_kind, "reviewer failure observer kind")
+        if observer_kind not in FAILURE_OBSERVER_KINDS:
+            raise ReviewError(
+                f"reviewer failure observer kind must be one of {sorted(FAILURE_OBSERVER_KINDS)}"
+            )
+        observer_id = require_control_id(args.observer_id, "reviewer failure observer ID")
+        attestation = {
+            "schema_version": REVIEWER_FAILURE_ATTESTATION_SCHEMA,
+            "scope_hash": state["scope_hash"],
+            "coverage_plan_hash": coverage_plan_hash,
+            "workflow_profile": coverage_plan["workflow_profile"],
+            "lens_id": args.lens,
+            "route": args.route,
+            "assignment_kind": assignment_kind,
+            "assignment_hash": assignment_hash,
+            "reviewer_id": active_identity["reviewer_id"],
+            "independence_group": active_identity["independence_group"],
+            "review_mode": active_identity["review_mode"],
+            "reason": reason,
+            "diagnostics": diagnostics,
+            "observer_kind": observer_kind,
+            "observer_id": observer_id,
+            "no_readable_draft": True,
+            "observed_at": utc_now(),
+        }
+        attestation_hash = canonical_hash(attestation)
+        attestation["attestation_hash"] = attestation_hash
+        relative_path = (
+            f"reviewer-failure-attestations/{args.lens}/{args.route}.json"
+        )
+        atomic_write_json(run_dir / relative_path, attestation)
+        failure_state = state.setdefault("reviewer_failure_attestations", {})
+        if args.lens not in failure_state:
+            failure_state[args.lens] = {"primary": None, "fallback": None}
+        routes = require_object(
+            failure_state[args.lens],
+            f"state.reviewer_failure_attestations.{args.lens} routes",
+        )
+        require_exact_keys(
+            routes,
+            PREFLIGHT_ROUTES,
+            f"state.reviewer_failure_attestations.{args.lens} routes",
+        )
+        routes[args.route] = {
+            "path": relative_path,
+            "attestation_hash": attestation_hash,
+        }
+        state["events"].append(
+            {
+                "at": utc_now(),
+                "event": "reviewer_failure_attested",
+                "lens_id": args.lens,
+                "route": args.route,
+                "reason": reason,
+                "observer_kind": observer_kind,
+                "observer_id": observer_id,
+                "attestation_hash": attestation_hash,
+            }
+        )
+        save_state(run_dir, state)
+        print(f"[OK] Reviewer failure attested: {attestation_hash}")
+        print(f"Artifact: {run_dir / relative_path}")
+        return 0
+
+
+def command_assign_fallback(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    with exclusive_run_state_lock(run_dir):
+        state = load_state(run_dir)
+        if state["phase"] != PHASE_CONTEXT:
+            raise ReviewError(f"Cannot assign a fallback in phase {state['phase']}")
+        check_scope_fresh(repo, run_dir, state)
+        coverage_plan, coverage_plan_hash = load_verified_coverage_plan(run_dir, state)
+        lens = next(
+            (item for item in coverage_plan["lenses"] if item["lens_id"] == args.lens),
+            None,
+        )
+        if lens is None:
+            raise ReviewError(f"Lens is not assigned by the coverage plan: {args.lens}")
+        if not lens["required"] or lens["fallback"] != "sequential_degraded_self_audit":
+            raise ReviewError(f"Lens {args.lens} does not permit a required-lens fallback")
+        all_receipts, assignments, attestations = load_review_evidence(
+            run_dir, state, coverage_plan, coverage_plan_hash
+        )
+        if args.lens in assignments:
+            raise ReviewError(f"Lens {args.lens} already has a fallback assignment")
+        primary = [
+            item
+            for item in all_receipts
+            if item["lens_id"] == args.lens and item["route"] == "primary"
+        ]
+        fallback = [
+            item
+            for item in all_receipts
+            if item["lens_id"] == args.lens and item["route"] == "fallback"
+        ]
+        if fallback:
+            raise ReviewError(
+                f"Lens {args.lens} cannot be assigned after a fallback preflight"
+            )
+        trigger_hash = require_sha256(
+            args.failure_trigger_hash, "fallback assignment failure trigger hash"
+        )
+        if args.failure_trigger_kind == "candidate_preflight_receipt":
+            if not primary_candidate_route_failed(primary):
+                raise ReviewError(
+                    f"Lens {args.lens} fallback assignment requires a failed primary route"
+                )
+            latest_primary = max(primary, key=lambda item: item["attempt"])
+            if trigger_hash != latest_primary["receipt_hash"]:
+                raise ReviewError(
+                    "Fallback assignment must bind the exact latest failed primary receipt"
+                )
+        else:
+            primary_attestations = [
+                item
+                for item in attestations
+                if item["lens_id"] == args.lens and item["route"] == "primary"
+            ]
+            if len(primary_attestations) != 1:
+                raise ReviewError(
+                    "Fallback assignment requires one verified primary failure attestation"
+                )
+            if trigger_hash != primary_attestations[0]["attestation_hash"]:
+                raise ReviewError(
+                    "Fallback assignment must bind the exact primary failure attestation"
+                )
+        reviewer_id = require_control_id(args.reviewer_id, "fallback reviewer_id")
+        independence_group = require_string(
+            args.independence_group, "fallback independence_group"
+        )
+        review_mode = require_string(args.review_mode, "fallback review_mode")
+        if review_mode not in REVIEW_MODES:
+            raise ReviewError(f"fallback review_mode must be one of {sorted(REVIEW_MODES)}")
+
+        assignment = {
+            "schema_version": FALLBACK_ASSIGNMENT_SCHEMA,
+            "scope_hash": state["scope_hash"],
+            "coverage_plan_hash": coverage_plan_hash,
+            "workflow_profile": coverage_plan["workflow_profile"],
+            "lens_id": args.lens,
+            "route": "fallback",
+            "failure_trigger_kind": args.failure_trigger_kind,
+            "failure_trigger_hash": trigger_hash,
+            "reviewer_id": reviewer_id,
+            "independence_group": independence_group,
+            "review_mode": review_mode,
+            "degraded": True,
+        }
+        assignment_hash = canonical_hash(assignment)
+        assignment["assignment_hash"] = assignment_hash
+        relative_path = f"fallback-assignments/{args.lens}.json"
+        atomic_write_json(run_dir / relative_path, assignment)
+        fallback_state = state.setdefault("fallback_assignments", {})
+        fallback_state[args.lens] = {
+            "path": relative_path,
+            "assignment_hash": assignment_hash,
+        }
+        state["events"].append(
+            {
+                "at": utc_now(),
+                "event": "fallback_assigned",
+                "lens_id": args.lens,
+                "failure_trigger_kind": args.failure_trigger_kind,
+                "failure_trigger_hash": trigger_hash,
+                "reviewer_id": reviewer_id,
+                "independence_group": independence_group,
+                "review_mode": review_mode,
+                "assignment_hash": assignment_hash,
+            }
+        )
+        save_state(run_dir, state)
+        print(f"[OK] Fallback assignment recorded: {assignment_hash}")
+        print(f"Artifact: {run_dir / relative_path}")
+        return 0
 
 
 def command_check_candidates(args: argparse.Namespace) -> int:
@@ -3333,26 +4524,87 @@ def command_check_candidates_locked(
         raise ReviewError(f"Lens is not assigned by the coverage plan: {args.lens}")
 
     preflight_state = state.setdefault("candidate_preflight", {})
-    records = preflight_state.setdefault(args.lens, [])
-    if len(records) >= 2:
-        raise ReviewError(f"Candidate preflight attempt limit reached for lens {args.lens}")
-    receipts = [load_candidate_preflight_receipt(run_dir, record) for record in records]
-    primary_receipts = [receipt for receipt in receipts if not receipt["fallback"]]
-    fallback_receipts = [receipt for receipt in receipts if receipt["fallback"]]
+    if args.lens not in preflight_state:
+        preflight_state[args.lens] = {"primary": [], "fallback": []}
+    routes = require_object(
+        preflight_state[args.lens],
+        f"state.candidate_preflight.{args.lens} routes; restart provisional v1 runs",
+    )
+    require_exact_keys(
+        routes,
+        PREFLIGHT_ROUTES,
+        f"state.candidate_preflight.{args.lens} routes; restart provisional v1 runs",
+    )
+    primary_records = require_array(
+        routes["primary"], f"state.candidate_preflight.{args.lens}.primary"
+    )
+    fallback_records = require_array(
+        routes["fallback"], f"state.candidate_preflight.{args.lens}.fallback"
+    )
+    all_receipts, fallback_assignments, attestations = load_review_evidence(
+        run_dir, state, coverage_plan, coverage_plan_hash
+    )
+    primary_receipts = [
+        item
+        for item in all_receipts
+        if item["lens_id"] == args.lens and item["route"] == "primary"
+    ]
+    fallback_receipts = [
+        item
+        for item in all_receipts
+        if item["lens_id"] == args.lens and item["route"] == "fallback"
+    ]
+    primary_attestation = next(
+        (
+            item
+            for item in attestations
+            if item["lens_id"] == args.lens and item["route"] == "primary"
+        ),
+        None,
+    )
+    fallback_attestation = next(
+        (
+            item
+            for item in attestations
+            if item["lens_id"] == args.lens and item["route"] == "fallback"
+        ),
+        None,
+    )
+    route = "fallback" if args.fallback else "primary"
+    records = fallback_records if args.fallback else primary_records
 
     previous: dict[str, Any] | None = None
     if args.fallback:
         if not lens["required"] or lens["fallback"] != "sequential_degraded_self_audit":
             raise ReviewError(f"Lens {args.lens} does not permit a required-lens fallback")
+        assignment = fallback_assignments.get(args.lens)
+        if assignment is None:
+            raise ReviewError(
+                f"Lens {args.lens} fallback requires a root-owned fallback assignment"
+            )
         if fallback_receipts:
             raise ReviewError(f"Lens {args.lens} already has a fallback preflight")
-        if not primary_receipts or primary_receipts[-1]["verdict"] == "valid":
+        if fallback_attestation is not None:
+            raise ReviewError(f"Lens {args.lens} fallback route is already attested unavailable")
+        if assignment["failure_trigger_kind"] == "candidate_preflight_receipt":
+            if not primary_candidate_route_failed(primary_receipts):
+                raise ReviewError(
+                    f"Lens {args.lens} fallback requires a failed primary route"
+                )
+        elif primary_attestation is None:
             raise ReviewError(
-                f"Lens {args.lens} fallback requires a failed primary preflight"
+                f"Lens {args.lens} fallback requires its primary failure attestation"
             )
         if args.supersedes:
             raise ReviewError("A fallback is a separate review and may not supersede a primary receipt")
+        active_identity = assignment
     elif primary_receipts:
+        if args.lens in fallback_assignments:
+            raise ReviewError(f"Lens {args.lens} cannot resume primary review after fallback assignment")
+        if len(primary_receipts) >= 2:
+            raise ReviewError(
+                f"Candidate preflight primary-route attempt limit reached for lens {args.lens}"
+            )
         if fallback_receipts:
             raise ReviewError(f"Lens {args.lens} cannot resume primary review after fallback")
         previous = primary_receipts[-1]
@@ -3364,6 +4616,15 @@ def command_check_candidates_locked(
             raise ReviewError("Second candidate attempt must supersede the exact prior receipt hash")
     elif args.supersedes:
         raise ReviewError("First candidate attempt may not supersede another receipt")
+    else:
+        if primary_attestation is not None:
+            raise ReviewError(
+                f"Lens {args.lens} primary route is already attested unavailable"
+            )
+        if args.lens in fallback_assignments:
+            raise ReviewError(f"Lens {args.lens} cannot start primary review after fallback assignment")
+    if not args.fallback:
+        active_identity = lens
 
     source = Path(args.input).expanduser().resolve()
     try:
@@ -3393,9 +4654,9 @@ def command_check_candidates_locked(
         diagnostics.extend(inspection_diagnostics)
         if isinstance(parsed, dict):
             assignments = {
-                "reviewer_id": lens["reviewer_id"],
-                "independence_group": lens["independence_group"],
-                "review_mode": lens["review_mode"],
+                "reviewer_id": active_identity["reviewer_id"],
+                "independence_group": active_identity["independence_group"],
+                "review_mode": active_identity["review_mode"],
             }
             for field, expected in assignments.items():
                 if parsed.get(field) != expected:
@@ -3403,7 +4664,7 @@ def command_check_candidates_locked(
                         {
                             "code": "TOP_LEVEL_METADATA",
                             "path": field,
-                            "message": f"{field} must match coverage-plan assignment {expected!r}",
+                            "message": f"{field} must match active route assignment {expected!r}",
                             "correctable": True,
                         }
                     )
@@ -3433,19 +4694,27 @@ def command_check_candidates_locked(
         "scope_hash": state["scope_hash"],
         "coverage_plan_hash": coverage_plan_hash,
         "lens_id": args.lens,
-        "fallback": bool(args.fallback),
+        "route": route,
         "attempt": attempt,
         "draft_hash": draft_hash,
         "semantic_hash": semantic_hash,
         "supersedes_receipt_hash": args.supersedes,
         "verdict": verdict,
         "diagnostics": diagnostics,
-        "reviewer_id": lens["reviewer_id"],
+        "reviewer_id": active_identity["reviewer_id"],
+        "independence_group": active_identity["independence_group"],
+        "review_mode": active_identity["review_mode"],
+        "fallback_assignment_hash": (
+            active_identity["assignment_hash"] if args.fallback else None
+        ),
+        "degraded": args.fallback,
         "source_file": str(source),
     }
     receipt_hash = canonical_hash(receipt)
     receipt["receipt_hash"] = receipt_hash
-    relative_path = f"candidate-preflight/{args.lens}/attempt-{attempt}.json"
+    relative_path = (
+        f"candidate-preflight/{args.lens}/{route}/attempt-{attempt}.json"
+    )
     atomic_write_json(run_dir / relative_path, receipt)
     records.append(
         {
@@ -3458,8 +4727,8 @@ def command_check_candidates_locked(
             "at": utc_now(),
             "event": "candidate_preflight_recorded",
             "lens_id": args.lens,
+            "route": route,
             "attempt": attempt,
-            "fallback": bool(args.fallback),
             "verdict": verdict,
             "receipt_hash": receipt_hash,
         }
@@ -3487,7 +4756,7 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
     unmatched_inputs = False
     if coverage_required:
         coverage_plan, coverage_plan_hash = load_verified_coverage_plan(run_dir, state)
-        all_receipts = load_all_candidate_preflight_receipts(
+        all_receipts, fallback_assignments, attestations = load_review_evidence(
             run_dir, state, coverage_plan, coverage_plan_hash
         )
         latest_receipts = latest_candidate_preflight_receipts(all_receipts)
@@ -3495,7 +4764,6 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
             receipt for receipt in latest_receipts if receipt["verdict"] != "valid"
         ]
         used_receipt_hashes: set[str] = set()
-        plan_lenses = {item["lens_id"]: item for item in coverage_plan["lenses"]}
         for raw_path in args.input:
             source = Path(raw_path).expanduser().resolve()
             try:
@@ -3523,7 +4791,6 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
                 unmatched_inputs = True
                 continue
             receipt = matches[0]
-            lens = plan_lenses[receipt["lens_id"]]
             try:
                 normalized_set, finding_rejections = validate_candidate_set(
                     json.loads(draft_bytes.decode("utf-8")),
@@ -3533,12 +4800,21 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
                     state=state,
                 )
                 if any(
-                    normalized_set[field] != lens[field]
+                    normalized_set[field] != receipt[field]
                     for field in ("reviewer_id", "independence_group", "review_mode")
                 ):
                     raise ReviewError(
-                        f"{source}: candidate identity no longer matches coverage-plan lens {receipt['lens_id']}"
+                        f"{source}: candidate identity no longer matches its verified {receipt['route']} receipt"
                     )
+                provenance = {
+                    "lens_id": receipt["lens_id"],
+                    "review_route": receipt["route"],
+                    "fallback_assignment_hash": receipt["fallback_assignment_hash"],
+                    "degraded": receipt["degraded"],
+                }
+                normalized_set.update(provenance)
+                for finding in normalized_set["findings"]:
+                    finding.update(provenance)
                 reviewer_sets.append(normalized_set)
                 rejections.extend(finding_rejections)
                 coverage_receipts.append(receipt)
@@ -3547,11 +4823,46 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
                 rejections.append({"source_file": str(source), "reason": str(exc)})
                 unmatched_inputs = True
 
+        unused_valid_receipts = [
+            receipt
+            for receipt in latest_receipts
+            if receipt["verdict"] == "valid"
+            and receipt["receipt_hash"] not in used_receipt_hashes
+        ]
+        for receipt in unused_valid_receipts:
+            rejections.append(
+                {
+                    "source_file": receipt["source_file"],
+                    "reason": (
+                        "Latest valid candidate-preflight receipt was not matched by exactly "
+                        f"one explicit --input for {receipt['lens_id']}/{receipt['route']}"
+                    ),
+                }
+            )
+        if unused_valid_receipts:
+            unmatched_inputs = True
+        if unmatched_inputs:
+            atomic_write_json(run_dir / "candidate-rejections.json", rejections)
+            print(
+                "[FAIL] Every latest valid candidate receipt must match exactly one explicit --input"
+            )
+            return 2
+
         coverage_status = build_coverage_status(
             state=state,
             coverage_plan=coverage_plan,
             receipts=coverage_receipts,
+            fallback_assignments=fallback_assignments,
+            attestations=attestations,
         )
+        if coverage_status["status"] == "incomplete":
+            require_exhausted_incomplete_required_routes(
+                coverage_plan=coverage_plan,
+                coverage_status=coverage_status,
+                receipts=all_receipts,
+                fallback_assignments=fallback_assignments,
+                attestations=attestations,
+            )
         atomic_write_json(run_dir / "coverage-status.json", coverage_status)
         state["hashes"]["coverage_status_hash"] = coverage_status["coverage_status_hash"]
         state["events"].append(
@@ -3578,10 +4889,6 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
             save_state(run_dir, state)
             print("[FAIL] Required review coverage is incomplete")
             print(f"Artifact: {run_dir / 'coverage-status.json'}")
-            return 2
-        if unmatched_inputs:
-            save_state(run_dir, state)
-            print("[FAIL] One or more candidate inputs lack a matching valid preflight receipt")
             return 2
     else:
         for raw_path in args.input:
@@ -3652,6 +4959,69 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
     print(f"Rejected candidate/input records: {len(rejections)}")
     print(f"Artifact: {run_dir / 'candidates.md'}")
     return 0
+
+
+def command_finalize_coverage(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    with exclusive_run_state_lock(run_dir):
+        state = load_state(run_dir)
+        if state["phase"] != PHASE_CONTEXT:
+            raise ReviewError(f"Cannot finalize coverage in phase {state['phase']}")
+        if not state.get("coverage_required", False):
+            raise ReviewError("Legacy runs without required coverage cannot be finalized here")
+        check_scope_fresh(repo, run_dir, state)
+        coverage_plan, coverage_plan_hash = load_verified_coverage_plan(run_dir, state)
+        receipts, assignments, attestations = load_review_evidence(
+            run_dir, state, coverage_plan, coverage_plan_hash
+        )
+        latest_receipts = latest_candidate_preflight_receipts(receipts)
+        coverage_status = build_coverage_status(
+            state=state,
+            coverage_plan=coverage_plan,
+            receipts=latest_receipts,
+            fallback_assignments=assignments,
+            attestations=attestations,
+        )
+        if coverage_status["status"] != "incomplete":
+            raise ReviewError(
+                "Coverage is complete; ingest the exact valid candidate inputs instead"
+            )
+        require_exhausted_incomplete_required_routes(
+            coverage_plan=coverage_plan,
+            coverage_status=coverage_status,
+            receipts=receipts,
+            fallback_assignments=assignments,
+            attestations=attestations,
+        )
+        forbidden_artifacts = (
+            "candidates.json",
+            "ledger.json",
+            "gates/findings.json",
+            "fix-plan.json",
+        )
+        existing = [relative for relative in forbidden_artifacts if (run_dir / relative).exists()]
+        if existing:
+            raise ReviewError(
+                "Coverage finalization found unexpected downstream artifacts: "
+                + ", ".join(existing)
+            )
+        atomic_write_json(run_dir / "coverage-status.json", coverage_status)
+        state["hashes"]["coverage_status_hash"] = coverage_status[
+            "coverage_status_hash"
+        ]
+        state["phase"] = PHASE_REVIEW_INCOMPLETE
+        state["events"].append(
+            {
+                "at": utc_now(),
+                "event": "coverage_finalized_incomplete",
+                "coverage_status_hash": coverage_status["coverage_status_hash"],
+            }
+        )
+        save_state(run_dir, state)
+        print("[OK] Required review coverage finalized as REVIEW_INCOMPLETE")
+        print(f"Artifact: {run_dir / 'coverage-status.json'}")
+        return 0
 
 
 def command_compile_ledger(args: argparse.Namespace) -> int:
@@ -4003,6 +5373,8 @@ def command_begin_fix(args: argparse.Namespace) -> int:
     state["finding_status"] = finding_status
     state["active_finding"] = None
     state["global_test_results"] = {}
+    state["final_test_refresh_results"] = {}
+    state["pre_verification_recovery_history"] = []
     state["repair_round"] = 0
     state["repair_targets"] = []
     state["expected_workspace_guard_hash"] = metadata["workspace_guard"]["guard_hash"]
@@ -4225,6 +5597,20 @@ def execute_test_command(
         "log_sha256": sha256_file(log_path),
     }
 
+
+def evidence_result_hash(result: dict[str, Any]) -> str:
+    """Return the stable identity of one recorded test result.
+
+    Older runs do not carry an embedded result hash, so their complete stored
+    record remains the hash input. New records exclude the embedded field.
+    """
+    payload = {key: value for key, value in result.items() if key != "result_hash"}
+    computed = canonical_hash(payload)
+    embedded = result.get("result_hash")
+    if embedded is not None and embedded != computed:
+        raise ReviewError("Recorded test evidence failed result-hash integrity validation")
+    return computed
+
 def command_run_test(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -4244,7 +5630,13 @@ def command_run_test(args: argparse.Namespace) -> int:
     prior_runs = active["test_results"].get(args.test, [])
     run_number = len(prior_runs) + 1
     test_checkpoint_dir = (
-        run_dir / "checkpoints" / "tests" / args.finding / args.test / f"run-{run_number}"
+        run_dir
+        / "checkpoints"
+        / "tests"
+        / args.finding
+        / f"attempt-{active['attempt']}"
+        / args.test
+        / f"run-{run_number}"
     )
     test_checkpoint = create_checkpoint(repo, test_checkpoint_dir, active["allowed_paths"])
     result = execute_test_command(
@@ -4253,7 +5645,13 @@ def command_run_test(args: argparse.Namespace) -> int:
         command=test["command"],
         working_directory=test["working_directory"],
         timeout_seconds=test["timeout_seconds"],
-        log_relative=Path("tests") / args.finding / args.test / f"run-{run_number}.log",
+        log_relative=(
+            Path("tests")
+            / args.finding
+            / f"attempt-{active['attempt']}"
+            / args.test
+            / f"run-{run_number}.log"
+        ),
     )
 
     after_test = workspace_guard(repo)
@@ -4283,6 +5681,7 @@ def command_run_test(args: argparse.Namespace) -> int:
     result["allowed_paths_hash"] = path_subset_hash(repo, active["allowed_paths"])
     result["changed_paths_at_completion"] = sorted(changed_paths)
     result["boundary_violations"] = sorted(outside_after)
+    result["result_hash"] = evidence_result_hash(result)
     active["test_results"].setdefault(args.test, []).append(result)
     state["events"].append(
         {
@@ -4307,6 +5706,7 @@ def command_run_test(args: argparse.Namespace) -> int:
     )
     print(f"[{'OK' if passed else 'FAIL'}] Test {args.test}")
     print(f"Exit code: {result['exit_code'] if result['exit_code'] is not None else 'timeout'}")
+    print(f"Evidence hash: {result['result_hash']}")
     print(f"Log: {run_dir / result['log_path']}")
     if changed_by_test or control_mutations:
         details = []
@@ -4566,6 +5966,7 @@ def command_run_global_test(args: argparse.Namespace) -> int:
         result["workspace_guard_hash"] = current["guard_hash"]
     else:
         result["restored_after_mutation"] = False
+    result["result_hash"] = evidence_result_hash(result)
     state["global_test_results"].setdefault(args.test, []).append(result)
     state["events"].append(
         {
@@ -4584,6 +5985,7 @@ def command_run_global_test(args: argparse.Namespace) -> int:
         f"Global test {args.test}"
     )
     print(f"Exit code: {result['exit_code'] if result['exit_code'] is not None else 'timeout'}")
+    print(f"Evidence hash: {result['result_hash']}")
     print(f"Log: {run_dir / result['log_path']}")
     if changed_by_test:
         raise ReviewError("Global test mutated tracked/untracked workspace paths and was restored: " + ", ".join(sorted(changed_by_test)))
@@ -4603,6 +6005,186 @@ def latest_fixed_attempt(state: dict[str, Any], finding_id: str) -> dict[str, An
         if entry.get("outcome") == "fixed":
             return entry
     raise ReviewError(f"No retained fixed attempt exists for {finding_id}")
+
+
+def aggregate_allowed_paths(plan: dict[str, Any]) -> set[str]:
+    return {path for item in plan["items"] for path in item["allowed_paths"]}
+
+
+def latest_finding_test_evidence(
+    state: dict[str, Any],
+    *,
+    finding_id: str,
+    test_id: str,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    attempt = latest_fixed_attempt(state, finding_id)
+    attempt_hash = attempt["attempt_hash"]
+    refreshes = (
+        state.get("final_test_refresh_results", {})
+        .get(finding_id, {})
+        .get(test_id, [])
+    )
+    matching_refreshes = [
+        result
+        for result in refreshes
+        if result.get("retained_attempt_hash") == attempt_hash
+    ]
+    if matching_refreshes:
+        return "final_test_refresh", matching_refreshes[-1], attempt
+    runs = attempt["tests"].get(test_id, [])
+    if not runs:
+        raise ReviewError(f"No retained required-test evidence exists for {finding_id}:{test_id}")
+    return "retained_attempt", runs[-1], attempt
+
+
+def finding_test_evidence_issues(
+    *,
+    repo: Path,
+    current: dict[str, Any],
+    item: dict[str, Any],
+    test: dict[str, Any],
+    source: str,
+    result: dict[str, Any],
+    attempt: dict[str, Any],
+) -> list[str]:
+    evidence_result_hash(result)
+    issues: list[str] = []
+    if result.get("timed_out"):
+        issues.append("timed out")
+    elif result.get("exit_code") != 0:
+        issues.append("failed")
+    if result.get("changed_paths_by_test"):
+        issues.append("mutated workspace paths")
+    if result.get("control_mutations_by_test"):
+        issues.append("mutated repository control state")
+    if result.get("boundary_violations"):
+        issues.append("crossed the approved path boundary")
+    if result.get("command") != test["command"]:
+        issues.append("does not match the approved command")
+    if result.get("working_directory") != test["working_directory"]:
+        issues.append("does not match the approved working directory")
+    if result.get("timeout_seconds") != test["timeout_seconds"]:
+        issues.append("does not match the approved timeout")
+    if result.get("allowed_paths_hash") != path_subset_hash(repo, item["allowed_paths"]):
+        issues.append("is stale for approved paths")
+    if source == "final_test_refresh":
+        if result.get("retained_attempt_hash") != attempt["attempt_hash"]:
+            issues.append("is bound to a superseded retained attempt")
+        if result.get("test_definition_hash") != canonical_hash(test):
+            issues.append("is bound to a different approved test definition")
+        if result.get("workspace_guard_hash") != current["guard_hash"]:
+            issues.append("is stale after a later workspace edit")
+    return issues
+
+
+def command_refresh_finding_test(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_FIXING or state.get("active_finding") is not None:
+        raise ReviewError("refresh-finding-test requires FIXING phase with no active finding")
+    if not all_findings_fixed(state):
+        raise ReviewError("Refresh finding tests only after every approved finding is fixed")
+    if args.finding not in state["approved_findings"]:
+        raise ReviewError(f"Finding {args.finding} was not approved at Gate A")
+
+    plan = load_verified_plan(run_dir, state)
+    item = plan_item_by_id(plan, args.finding)
+    test = test_by_id(item["tests"], args.test, args.finding)
+    if not test["required"]:
+        raise ReviewError("Only a required Gate-B-approved finding test may be refreshed")
+    current, _, outside = overall_repair_boundary(repo, run_dir, state, plan)
+    if outside:
+        raise ReviewError("Repair layer already contains unapproved paths: " + ", ".join(sorted(outside)))
+
+    attempt = latest_fixed_attempt(state, args.finding)
+    refresh_results = state.setdefault("final_test_refresh_results", {})
+    finding_results = refresh_results.setdefault(args.finding, {})
+    prior_runs = finding_results.get(args.test, [])
+    run_number = len(prior_runs) + 1
+    checkpoint_dir = (
+        run_dir
+        / "checkpoints"
+        / "final-test-refresh"
+        / args.finding
+        / args.test
+        / f"run-{run_number}"
+    )
+    create_checkpoint(repo, checkpoint_dir, aggregate_allowed_paths(plan))
+    result = execute_test_command(
+        repo=repo,
+        run_dir=run_dir,
+        command=test["command"],
+        working_directory=test["working_directory"],
+        timeout_seconds=test["timeout_seconds"],
+        log_relative=(
+            Path("tests")
+            / "final-refresh"
+            / args.finding
+            / args.test
+            / f"run-{run_number}.log"
+        ),
+    )
+    after = workspace_guard(repo)
+    changed_by_test = diff_guard_paths(current, after)
+    control_mutations: list[str] = []
+    for field, label in (
+        ("head_sha", "HEAD"),
+        ("branch", "branch"),
+        ("staged_patch_sha256", "Git index"),
+    ):
+        if after["identity"][field] != current["identity"][field]:
+            control_mutations.append(label)
+
+    result["changed_paths_by_test"] = sorted(changed_by_test)
+    result["control_mutations_by_test"] = control_mutations
+    result["boundary_violations"] = sorted(changed_by_test - aggregate_allowed_paths(plan))
+    result["restored_after_mutation"] = False
+    final_guard = after
+    if changed_by_test or control_mutations:
+        final_guard = restore_checkpoint(repo, checkpoint_dir)
+        result["restored_after_mutation"] = True
+    result["workspace_guard_hash"] = final_guard["guard_hash"]
+    result["allowed_paths_hash"] = path_subset_hash(repo, item["allowed_paths"])
+    result["retained_attempt_hash"] = attempt["attempt_hash"]
+    result["test_definition_hash"] = canonical_hash(test)
+    result["result_hash"] = evidence_result_hash(result)
+    finding_results.setdefault(args.test, []).append(result)
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "final_finding_test_refreshed",
+            "finding_id": args.finding,
+            "test_id": args.test,
+            "retained_attempt_hash": attempt["attempt_hash"],
+            "result_hash": result["result_hash"],
+            "exit_code": result["exit_code"],
+            "timed_out": result["timed_out"],
+            "changed_paths_by_test": result["changed_paths_by_test"],
+            "control_mutations_by_test": result["control_mutations_by_test"],
+        }
+    )
+    save_state(run_dir, state)
+    passed = (
+        result["exit_code"] == 0
+        and not result["timed_out"]
+        and not changed_by_test
+        and not control_mutations
+    )
+    print(f"[{'OK' if passed else 'FAIL'}] Refreshed {args.finding}:{args.test}")
+    print(f"Exit code: {result['exit_code'] if result['exit_code'] is not None else 'timeout'}")
+    print(f"Evidence hash: {result['result_hash']}")
+    print(f"Log: {run_dir / result['log_path']}")
+    if changed_by_test or control_mutations:
+        details = []
+        if changed_by_test:
+            details.append("paths: " + ", ".join(sorted(changed_by_test)))
+        if control_mutations:
+            details.append("controls: " + ", ".join(control_mutations))
+        raise ReviewError("Approved refresh test mutated the workspace and was restored (" + "; ".join(details) + ")")
+    if result["timed_out"] or result["exit_code"] != 0:
+        return 1
+    return 0
 
 
 def command_prepare_verification(args: argparse.Namespace) -> int:
@@ -4625,23 +6207,34 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
 
     stale_finding_tests: list[str] = []
     for item in plan["items"]:
-        attempt = latest_fixed_attempt(state, item["finding_id"])
-        current_subset = path_subset_hash(repo, item["allowed_paths"])
         for test in item["tests"]:
             if not test["required"]:
                 continue
-            runs = attempt["tests"].get(test["id"], [])
-            if not runs:
+            try:
+                source, latest, attempt = latest_finding_test_evidence(
+                    state,
+                    finding_id=item["finding_id"],
+                    test_id=test["id"],
+                )
+            except ReviewError:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} not run")
                 continue
-            latest = runs[-1]
-            if latest["timed_out"] or latest["exit_code"] != 0:
-                stale_finding_tests.append(f"{item['finding_id']}:{test['id']} failed")
-            elif latest.get("allowed_paths_hash") != current_subset:
-                stale_finding_tests.append(f"{item['finding_id']}:{test['id']} stale for approved paths")
+            issues = finding_test_evidence_issues(
+                repo=repo,
+                current=current,
+                item=item,
+                test=test,
+                source=source,
+                result=latest,
+                attempt=attempt,
+            )
+            if issues:
+                stale_finding_tests.append(
+                    f"{item['finding_id']}:{test['id']} " + "; ".join(issues)
+                )
     if stale_finding_tests:
         raise ReviewError(
-            "Finding tests are stale or failing at final repair state; reopen/rerun as appropriate: "
+            "Finding tests are stale or failing at final repair state; refresh exact tests or use evidence-bound pre-verification recovery: "
             + ", ".join(stale_finding_tests)
         )
 
@@ -4654,12 +6247,15 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
             stale_global.append(f"{test['id']} not run")
             continue
         latest = runs[-1]
+        evidence_result_hash(latest)
         if latest["timed_out"] or latest["exit_code"] != 0:
             stale_global.append(f"{test['id']} failed")
         elif latest["workspace_guard_hash"] != current["guard_hash"]:
             stale_global.append(f"{test['id']} stale after later edits")
         elif latest.get("changed_paths_by_test"):
             stale_global.append(f"{test['id']} mutated workspace")
+        elif latest.get("control_mutations_by_test"):
+            stale_global.append(f"{test['id']} mutated repository control state")
     if stale_global:
         raise ReviewError("Required global tests are stale or failing: " + ", ".join(stale_global))
 
@@ -4681,7 +6277,11 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
         "approved_findings": state["approved_findings"],
         "changed_paths": sorted(changed_paths),
         "finding_results": finding_results,
+        "final_test_refresh_results": state.get("final_test_refresh_results", {}),
         "global_test_results": state["global_test_results"],
+        "pre_verification_recovery_history": state.get(
+            "pre_verification_recovery_history", []
+        ),
         "repair_round": state["repair_round"],
         "prepared_at": utc_now(),
         "fix_patch_sha256": sha256_file(run_dir / "fix-summary.patch"),
@@ -5042,6 +6642,196 @@ def command_record_verification(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_pre_verification_recovery_evidence(
+    *,
+    repo: Path,
+    state: dict[str, Any],
+    plan: dict[str, Any],
+    current: dict[str, Any],
+    evidence_kind: str,
+    evidence_id: str,
+    evidence_finding: str | None,
+    expected_evidence_hash: str,
+) -> tuple[dict[str, Any], list[str]]:
+    if evidence_kind == "global_test":
+        if evidence_finding:
+            raise ReviewError("--evidence-finding is not valid for global-test evidence")
+        test = test_by_id(plan["global_tests"], evidence_id, "global")
+        if not test["required"]:
+            raise ReviewError("Pre-verification recovery requires evidence from a required global test")
+        runs = state.get("global_test_results", {}).get(evidence_id, [])
+        if not runs:
+            raise ReviewError(f"No global-test evidence exists for {evidence_id}")
+        result = runs[-1]
+        result_hash = evidence_result_hash(result)
+        if result_hash != expected_evidence_hash:
+            raise ReviewError("--evidence-hash does not identify the latest global-test result")
+        for key in ("command", "working_directory", "timeout_seconds"):
+            if result.get(key) != test[key]:
+                raise ReviewError("Latest global-test evidence does not match the Gate-B-approved test definition")
+        issues: list[str] = []
+        if result.get("timed_out"):
+            issues.append("timed out")
+        elif result.get("exit_code") != 0:
+            issues.append("failed")
+        if result.get("changed_paths_by_test"):
+            issues.append("mutated workspace paths")
+        if result.get("control_mutations_by_test"):
+            issues.append("mutated repository control state")
+        if result.get("workspace_guard_hash") != current["guard_hash"]:
+            issues.append("stale after a later workspace edit")
+        if not issues:
+            raise ReviewError("Latest global-test evidence is current and passing; recovery authority is absent")
+        return (
+            {
+                "kind": evidence_kind,
+                "test_id": evidence_id,
+                "finding_id": None,
+                "source": "global_test_results",
+                "result_hash": result_hash,
+            },
+            issues,
+        )
+
+    if evidence_kind != "finding_test":
+        raise ReviewError("--evidence-kind must be finding_test or global_test")
+    if not evidence_finding:
+        raise ReviewError("--evidence-finding is required for finding-test evidence")
+    if evidence_finding not in state["approved_findings"]:
+        raise ReviewError(f"Evidence finding {evidence_finding} was not approved at Gate A")
+    item = plan_item_by_id(plan, evidence_finding)
+    test = test_by_id(item["tests"], evidence_id, evidence_finding)
+    if not test["required"]:
+        raise ReviewError("Pre-verification recovery requires evidence from a required finding test")
+    source, result, attempt = latest_finding_test_evidence(
+        state,
+        finding_id=evidence_finding,
+        test_id=evidence_id,
+    )
+    result_hash = evidence_result_hash(result)
+    if result_hash != expected_evidence_hash:
+        raise ReviewError("--evidence-hash does not identify the latest finding-test result")
+    issues = finding_test_evidence_issues(
+        repo=repo,
+        current=current,
+        item=item,
+        test=test,
+        source=source,
+        result=result,
+        attempt=attempt,
+    )
+    invalid_definition = [
+        issue
+        for issue in issues
+        if "does not match the approved" in issue
+        or "different approved test definition" in issue
+        or "superseded retained attempt" in issue
+    ]
+    if invalid_definition:
+        raise ReviewError("Latest finding-test evidence is not valid recovery evidence: " + "; ".join(invalid_definition))
+    if not issues:
+        raise ReviewError("Latest finding-test evidence is current and passing; recovery authority is absent")
+    return (
+        {
+            "kind": evidence_kind,
+            "test_id": evidence_id,
+            "finding_id": evidence_finding,
+            "source": source,
+            "result_hash": result_hash,
+            "retained_attempt_hash": attempt["attempt_hash"],
+        },
+        issues,
+    )
+
+
+def command_begin_pre_verification_repair(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_FIXING or state.get("active_finding") is not None:
+        raise ReviewError(
+            "begin-pre-verification-repair requires FIXING phase with no active finding"
+        )
+    if not all_findings_fixed(state):
+        raise ReviewError("Pre-verification recovery requires every approved finding to be fixed")
+    reason = require_string(args.reason, "--reason")
+    evidence_id = require_string(args.evidence_id, "--evidence-id")
+    evidence_hash = require_string(args.evidence_hash, "--evidence-hash")
+    targets = [require_string(value, "--finding") for value in args.finding]
+    if len(set(targets)) != len(targets):
+        raise ReviewError("Pre-verification recovery target IDs must be unique")
+
+    plan = load_verified_plan(run_dir, state)
+    current, _, outside = overall_repair_boundary(repo, run_dir, state, plan)
+    if outside:
+        raise ReviewError("Aggregate repair delta contains unapproved paths: " + ", ".join(sorted(outside)))
+    if state["repair_round"] >= plan["max_repair_rounds"]:
+        raise ReviewError("Post-fix repair-round budget is exhausted")
+    for finding_id in targets:
+        if finding_id not in state["approved_findings"]:
+            raise ReviewError(f"Finding {finding_id} was not approved at Gate A")
+        plan_item_by_id(plan, finding_id)
+        status = state["finding_status"].get(finding_id)
+        if not status or status["status"] != "fixed":
+            raise ReviewError(f"Recovery target {finding_id} is not currently fixed")
+        if status["attempts"] >= status["max_attempts"]:
+            raise ReviewError(f"Finding {finding_id} has no remaining approved attempts")
+
+    evidence, evidence_issues = resolve_pre_verification_recovery_evidence(
+        repo=repo,
+        state=state,
+        plan=plan,
+        current=current,
+        evidence_kind=args.evidence_kind,
+        evidence_id=evidence_id,
+        evidence_finding=args.evidence_finding,
+        expected_evidence_hash=evidence_hash,
+    )
+    if evidence["kind"] == "finding_test" and evidence["finding_id"] not in targets:
+        raise ReviewError("A finding-test recovery must include its evidence owner as a repair target")
+
+    next_round = state["repair_round"] + 1
+    recovery = {
+        "schema_version": "material-review/pre-verification-recovery/v1",
+        "scope_hash": state["scope_hash"],
+        "plan_hash": plan["plan_hash"],
+        "repair_round": next_round,
+        "evidence": evidence,
+        "evidence_issues": evidence_issues,
+        "targets": targets,
+        "reason": reason,
+        "workspace_guard_hash": current["guard_hash"],
+        "recorded_at": utc_now(),
+    }
+    recovery["recovery_hash"] = canonical_hash(recovery)
+    history = state.setdefault("pre_verification_recovery_history", [])
+    history.append(recovery)
+    recovery_dir = run_dir / "pre-verification-recovery"
+    atomic_write_json(recovery_dir / f"round-{next_round}.json", recovery)
+    for finding_id in targets:
+        state["finding_status"][finding_id]["status"] = "repair_pending"
+    state["repair_round"] = next_round
+    state["repair_targets"] = targets
+    state["expected_workspace_guard_hash"] = current["guard_hash"]
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "pre_verification_repair_started",
+            "repair_round": next_round,
+            "targets": targets,
+            "evidence": evidence,
+            "evidence_issues": evidence_issues,
+            "recovery_hash": recovery["recovery_hash"],
+        }
+    )
+    save_state(run_dir, state)
+    print(f"[OK] Began evidence-bound pre-verification repair round {next_round}")
+    print("Targets: " + ", ".join(targets))
+    print(f"Evidence hash: {evidence['result_hash']}")
+    print(f"Recovery artifact: {recovery_dir / f'round-{next_round}.json'}")
+    return 0
+
+
 def command_begin_repair(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -5108,8 +6898,12 @@ def state_summary(state: dict[str, Any], run_dir: Path) -> dict[str, Any]:
             for finding_id, record in state.get("finding_status", {}).items()
         },
         "active_finding": state.get("active_finding"),
+        "final_test_refresh_results": state.get("final_test_refresh_results", {}),
         "repair_round": state.get("repair_round", 0),
         "repair_targets": state.get("repair_targets", []),
+        "pre_verification_recovery_history": state.get(
+            "pre_verification_recovery_history", []
+        ),
         "updated_at": state["updated_at"],
     }
 
@@ -5157,7 +6951,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--repo-root", default=".")
     init_parser.add_argument("--artifact-root", default="")
     init_parser.add_argument("--run-id", default="")
-    init_parser.add_argument("--scope", choices=["auto", "uncommitted", "branch", "range"], default="auto")
+    init_parser.add_argument(
+        "--scope",
+        choices=["auto", "uncommitted", "branch", "pull_request", "range"],
+        default="auto",
+    )
     init_parser.add_argument("--base", default="", help="Base ref for branch/range scope.")
     init_parser.add_argument("--head", default="", help="Head ref for range scope.")
     init_parser.add_argument("--review-object-kind", choices=["pull_request"], default="")
@@ -5180,6 +6978,45 @@ def build_parser() -> argparse.ArgumentParser:
     coverage_parser.add_argument("--input", required=True, help="Coverage-plan JSON path.")
     coverage_parser.set_defaults(func=command_record_coverage)
 
+    failure_parser = subparsers.add_parser(
+        "record-reviewer-failure",
+        help="Attest root-observed no-output failure for one assigned review route.",
+    )
+    add_common_run_options(failure_parser)
+    failure_parser.add_argument("--lens", required=True, help="Coverage-plan lens ID.")
+    failure_parser.add_argument("--route", choices=sorted(PREFLIGHT_ROUTES), required=True)
+    failure_parser.add_argument(
+        "--reason", choices=sorted(REVIEWER_FAILURE_REASONS), required=True
+    )
+    failure_parser.add_argument(
+        "--diagnostic",
+        action="append",
+        default=[],
+        help="Controlled CODE=INTEGER metadata; repeat at most eight times.",
+    )
+    failure_parser.add_argument(
+        "--observer-kind", choices=sorted(FAILURE_OBSERVER_KINDS), required=True
+    )
+    failure_parser.add_argument("--observer-id", required=True)
+    failure_parser.set_defaults(func=command_record_reviewer_failure)
+
+    fallback_parser = subparsers.add_parser(
+        "assign-fallback",
+        help="Record the root-owned actual reviewer assignment for a failed required lens.",
+    )
+    add_common_run_options(fallback_parser)
+    fallback_parser.add_argument("--lens", required=True, help="Coverage-plan lens ID.")
+    fallback_parser.add_argument(
+        "--failure-trigger-kind",
+        choices=sorted(FALLBACK_TRIGGER_KINDS),
+        required=True,
+    )
+    fallback_parser.add_argument("--failure-trigger-hash", required=True)
+    fallback_parser.add_argument("--reviewer-id", required=True)
+    fallback_parser.add_argument("--independence-group", required=True)
+    fallback_parser.add_argument("--review-mode", choices=sorted(REVIEW_MODES), required=True)
+    fallback_parser.set_defaults(func=command_assign_fallback)
+
     preflight_parser = subparsers.add_parser(
         "check-candidates", help="Preflight one assigned candidate draft."
     )
@@ -5194,6 +7031,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_run_options(ingest_parser)
     ingest_parser.add_argument("--input", action="append", required=True, help="Candidate-set JSON path. Repeat for each reviewer.")
     ingest_parser.set_defaults(func=command_ingest_candidates)
+
+    finalize_coverage_parser = subparsers.add_parser(
+        "finalize-coverage",
+        help="Finalize fully exhausted required review routes as REVIEW_INCOMPLETE.",
+    )
+    add_common_run_options(finalize_coverage_parser)
+    finalize_coverage_parser.set_defaults(func=command_finalize_coverage)
 
     ledger_parser = subparsers.add_parser("compile-ledger", help="Validate adjudication and create the kept/discarded ledger.")
     add_common_run_options(ledger_parser)
@@ -5257,6 +7101,15 @@ def build_parser() -> argparse.ArgumentParser:
     global_test_parser.add_argument("--test", required=True)
     global_test_parser.set_defaults(func=command_run_global_test)
 
+    refresh_parser = subparsers.add_parser(
+        "refresh-finding-test",
+        help="Refresh one required Gate-B-approved finding test at the final repair state.",
+    )
+    add_common_run_options(refresh_parser)
+    refresh_parser.add_argument("--finding", required=True)
+    refresh_parser.add_argument("--test", required=True)
+    refresh_parser.set_defaults(func=command_refresh_finding_test)
+
     prepare_parser = subparsers.add_parser("prepare-verification", help="Create the bounded fix-only verification bundle.")
     add_common_run_options(prepare_parser)
     prepare_parser.set_defaults(func=command_prepare_verification)
@@ -5269,6 +7122,23 @@ def build_parser() -> argparse.ArgumentParser:
     repair_parser = subparsers.add_parser("begin-repair", help="Begin one bounded in-plan post-fix repair round.")
     add_common_run_options(repair_parser)
     repair_parser.set_defaults(func=command_begin_repair)
+
+    pre_verification_repair_parser = subparsers.add_parser(
+        "begin-pre-verification-repair",
+        help="Begin one evidence-bound in-plan repair round before verification.",
+    )
+    add_common_run_options(pre_verification_repair_parser)
+    pre_verification_repair_parser.add_argument(
+        "--finding", action="append", required=True, help="Exact approved repair target; repeat as needed."
+    )
+    pre_verification_repair_parser.add_argument(
+        "--evidence-kind", choices=["finding_test", "global_test"], required=True
+    )
+    pre_verification_repair_parser.add_argument("--evidence-id", required=True)
+    pre_verification_repair_parser.add_argument("--evidence-finding", default=None)
+    pre_verification_repair_parser.add_argument("--evidence-hash", required=True)
+    pre_verification_repair_parser.add_argument("--reason", required=True)
+    pre_verification_repair_parser.set_defaults(func=command_begin_pre_verification_repair)
 
     abort_parser = subparsers.add_parser("abort-fixes", help="Restore the complete pre-fix checkpoint and stop.")
     add_common_run_options(abort_parser)
@@ -5283,7 +7153,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    workflow_profile: str = WORKFLOW_PROFILE_REVIEW,
+) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if hasattr(args, "base") and args.base == "":
@@ -5295,6 +7169,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if hasattr(args, "run_id") and args.run_id == "":
         args.run_id = None
     try:
+        if workflow_profile not in WORKFLOW_PROFILES:
+            raise ReviewError(f"Unsupported root-owned workflow profile: {workflow_profile}")
+        args.workflow_profile = workflow_profile
         return int(args.func(args))
     except ReviewError as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)

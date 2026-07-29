@@ -4,7 +4,7 @@
 
 **Goal:** Improve material-finding recall by binding PR scope identity, requiring protocol-coherence coverage, mechanically preflighting candidate drafts once, and refusing an optimistic verdict when required coverage fails.
 
-**Architecture:** Extend the dependency-free controller with additive PR provenance, a root-owned coverage plan, hash-bound candidate-preflight receipts, and a pre-ledger `REVIEW_INCOMPLETE` terminal state. Keep candidate-set v1 and all post-ingestion gates unchanged; add one focused protocol-coherence reviewer surface and a maintainer-only PR 3 regression case.
+**Architecture:** Extend the dependency-free controller with additive PR provenance, a root-owned coverage plan, hash-bound candidate receipts or no-output attestations, runtime fallback assignments, and a pre-ledger `REVIEW_INCOMPLETE` terminal state. Keep candidate-set v1 and all post-ingestion gates unchanged; add one focused protocol-coherence reviewer surface and a maintainer-only PR 3 regression case.
 
 **Tech Stack:** Python 3.10+ standard library, `unittest`, JSON Schema documents, Markdown Agent Skill references, Git, Make, ZIP packaging validators.
 
@@ -26,147 +26,41 @@
 ### Task 1: Bind pull-request provenance to the frozen scope
 
 **Files:**
-- Modify: `skills/material-code-review/scripts/reviewctl.py:591-726,941-1000,2578-2657,4236-4251`
-- Modify: `skills/material-code-review/tests/test_reviewctl.py:21-302,471-486`
+- Modify: `skills/material-code-review/scripts/reviewctl.py`
+- Modify: `skills/material-code-review/tests/test_reviewctl.py`
+- Modify: `skills/material-code-simplification/scripts/simplifyctl.py`
+- Modify: `skills/material-code-simplification/tests/test_simplifyctl.py`
+- Modify: `skills/material-code-review/SKILL.md`, `commands/material-review.md`, package validation/tests, the PR evaluation case, and affected documentation
 
 **Interfaces:**
 - Consumes: existing `build_scope(repo, requested_scope, base_ref, head_ref, include_untracked)` and `scope_identity_hash(identity)` behavior.
-- Produces: `normalize_review_object(kind, identifier, base_sha, head_sha, requested_scope) -> dict[str, str] | None`; optional `review_object` in frozen scope identity and `state["scope_params"]`; four new `init` flags: `--review-object-kind`, `--review-object-id`, `--review-base-sha`, and `--review-head-sha`.
+- Produces: first-class immutable `scope=pull_request`; mandatory repository-qualified host provenance; persisted `effective_merge_base` and `comparison_kind=merge_base_to_head`; and the four existing `--review-object-*` flags.
 
-- [ ] **Step 1: Add failing controller tests for exact PR provenance**
+- [ ] **Step 1: Add causal failing tests**
 
-Add these helpers and tests to `ReviewCtlTest`:
+Create a diverged Git history where the host base advances after the feature branch diverges. Prove the future PR scope must equal `git diff merge-base(host_base, host_head)..host_head`, must differ from direct `host_base..host_head`, and must snapshot baseline/head bytes from commit trees. Add fail-before-run cases for absent or partial metadata, an unqualified identity, missing refs, SHA mismatch, and PR provenance on ordinary range. Pin ordinary range to its existing direct bytes and `comparison_kind=commit`.
 
-```python
-def committed_range(self) -> tuple[str, str]:
-    base = self.git("rev-parse", "HEAD")
-    self.git("add", "calc.py")
-    self.git("commit", "-qm", "change operator")
-    return base, self.git("rev-parse", "HEAD")
+Add separate failing tests proving material simplification refuses `pull_request` before delegating to the shared controller and that the canonical skill, shipped command, package validator, and maintainer PR evaluation case expose one aligned selector contract.
 
-def test_pr_provenance_is_bound_to_scope_hash(self) -> None:
-    base, head = self.committed_range()
-    self.run_tool(
-        "init", "--repo-root", str(self.repo), "--scope", "range",
-        "--base", base, "--head", head, "--run-id", self.run_id,
-        "--review-object-kind", "pull_request",
-        "--review-object-id", "CoveMB/material-code-review-plugin#3",
-        "--review-base-sha", base, "--review-head-sha", head,
-    )
-    scope = self.load("scope.json")
-    self.assertEqual(
-        scope["identity"]["review_object"],
-        {
-            "kind": "pull_request",
-            "identifier": "CoveMB/material-code-review-plugin#3",
-            "base_sha": base,
-            "head_sha": head,
-            "metadata_source": "read_only_host_lookup",
-        },
-    )
-    self.assertEqual(scope["scope_hash"], reviewctl.scope_identity_hash(scope["identity"]))
-    self.run_tool("check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id)
+- [ ] **Step 2: Implement the first-class scope**
 
-def test_pr_provenance_mismatch_fails_before_run_creation(self) -> None:
-    base, head = self.committed_range()
-    self.run_tool(
-        "init", "--repo-root", str(self.repo), "--scope", "range",
-        "--base", base, "--head", head, "--run-id", self.run_id,
-        "--review-object-kind", "pull_request",
-        "--review-object-id", "CoveMB/material-code-review-plugin#3",
-        "--review-base-sha", head, "--review-head-sha", head,
-        expected=2,
-    )
-    self.assertFalse(self.run_dir.exists())
+Require `scope=pull_request`, `owner/repository#number`, exact lowercase host base/head SHAs, and supplied refs resolving to that pair. Verify the host pair before computing `effective_merge_base`; persist provenance, effective comparison, and `comparison_kind=merge_base_to_head` separately. Use the effective merge base for patch bytes, file states, source snapshots, scope hashing/rendering, and freshness recomputation.
 
-def test_pr_provenance_requires_complete_range_metadata(self) -> None:
-    base, head = self.committed_range()
-    self.run_tool(
-        "init", "--repo-root", str(self.repo), "--scope", "range",
-        "--base", base, "--head", head, "--run-id", self.run_id,
-        "--review-object-kind", "pull_request",
-        "--review-object-id", "CoveMB/material-code-review-plugin#3",
-        "--review-base-sha", base,
-        expected=2,
-    )
-    self.assertFalse(self.run_dir.exists())
-```
+Treat both `commit` and `merge_base_to_head` as commit-backed comparisons. Reject unknown comparison kinds rather than treating them as working-tree state. Preserve ordinary range identity byte-for-byte for backward-compatible legacy freshness. Fail closed with a restart diagnostic for provisional PR-as-range runs.
 
-- [ ] **Step 2: Run the provenance tests and verify RED**
+- [ ] **Step 3: Guard consumers and validate repeated wording**
 
-Run:
+Add an explicit material-simplification allowlist for `codebase`, `auto`, `uncommitted`, `branch`, and `range`. Update the canonical skill, shipped command, context/workflow/failure references, user docs, design, changelog, and PR evaluation request. Require `commands/material-review.md` in the full package and mechanically compare its argument hint with the canonical review skill.
+
+- [ ] **Step 4: Run focused tests and verify GREEN**
 
 ```bash
-python3 -B skills/material-code-review/tests/test_reviewctl.py \
-  ReviewCtlTest.test_pr_provenance_is_bound_to_scope_hash \
-  ReviewCtlTest.test_pr_provenance_mismatch_fails_before_run_creation \
-  ReviewCtlTest.test_pr_provenance_requires_complete_range_metadata -v
+python3 -B skills/material-code-review/tests/test_reviewctl.py -k pull_request_scope -v
+python3 -B skills/material-code-simplification/tests/test_simplifyctl.py -k pull_request_scope -v
+python3 -B scripts/tests/test_packaging.py -k pull_request_scope_contract -v
 ```
 
-Expected: all three fail because the new `init` arguments are not recognized.
-
-- [ ] **Step 3: Implement strict review-object normalization**
-
-Add near `resolve_commit`:
-
-```python
-FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-REVIEW_OBJECT_KINDS = {"pull_request"}
-
-def normalize_review_object(
-    *, kind: str, identifier: str, base_sha: str, head_sha: str, requested_scope: str
-) -> dict[str, str] | None:
-    values = (kind, identifier, base_sha, head_sha)
-    if not any(values):
-        return None
-    if not all(values):
-        raise ReviewError("PR review provenance requires kind, identifier, base SHA, and head SHA")
-    if requested_scope != "range":
-        raise ReviewError("PR review provenance is valid only with scope=range")
-    if kind not in REVIEW_OBJECT_KINDS:
-        raise ReviewError(f"Unsupported review-object kind: {kind}")
-    if not FULL_SHA_RE.fullmatch(base_sha) or not FULL_SHA_RE.fullmatch(head_sha):
-        raise ReviewError("PR review provenance requires exact lowercase 40-character SHAs")
-    return {
-        "kind": kind,
-        "identifier": identifier,
-        "base_sha": base_sha,
-        "head_sha": head_sha,
-        "metadata_source": "read_only_host_lookup",
-    }
-```
-
-Extend `build_scope(repo: Path, *, requested_scope: str, base_ref: str | None, head_ref: str | None, include_untracked: bool, review_object: dict[str, str] | None = None)`. After refs resolve, compare `baseline_sha` and `comparison_sha` with the supplied PR SHAs, raise an error containing expected and actual values on mismatch, and add `review_object` to `identity` only when supplied. Store the same value in `state["scope_params"]`, pass it from `recompute_scope_from_state`, and render the PR identity in `scope.md`.
-
-Add parser flags:
-
-```python
-init_parser.add_argument("--review-object-kind", choices=["pull_request"], default="")
-init_parser.add_argument("--review-object-id", default="")
-init_parser.add_argument("--review-base-sha", default="")
-init_parser.add_argument("--review-head-sha", default="")
-```
-
-- [ ] **Step 4: Run focused and existing scope tests and verify GREEN**
-
-Run:
-
-```bash
-python3 -B skills/material-code-review/tests/test_reviewctl.py \
-  ReviewCtlTest.test_pr_provenance_is_bound_to_scope_hash \
-  ReviewCtlTest.test_pr_provenance_mismatch_fails_before_run_creation \
-  ReviewCtlTest.test_pr_provenance_requires_complete_range_metadata \
-  ReviewCtlTest.test_scope_includes_untracked_and_detects_staleness -v
-```
-
-Expected: four tests pass; mismatch failures create no run directory.
-
-- [ ] **Step 5: Commit the PR provenance change**
-
-```bash
-git add skills/material-code-review/scripts/reviewctl.py skills/material-code-review/tests/test_reviewctl.py
-git commit -m "feat: bind review scope to PR provenance"
-```
+Expected: PR bytes/files/snapshots and freshness derive from merge-base-to-head; invalid initialization creates no run; ordinary range remains direct and legacy-compatible; simplification rejects the selector; package contract drift fails deterministically.
 
 ---
 
@@ -178,8 +72,8 @@ git commit -m "feat: bind review scope to PR provenance"
 - Modify: `skills/material-code-review/tests/test_reviewctl.py:21-160,471-570`
 
 **Interfaces:**
-- Consumes: frozen `scope_hash`, context-derived risk signals, actual reviewer identities, and independence groups.
-- Produces: `material-review/coverage-plan/v1`, `validate_coverage_plan(raw, state) -> dict[str, Any]`, `record-coverage --input PATH`, `coverage-plan.json`, `coverage_plan_hash`, and `state["coverage_required"]` for new runs.
+- Consumes: frozen `scope_hash`, the controller-owned workflow profile, context-derived risk signals, actual reviewer identities, and independence groups.
+- Produces: `material-review/coverage-plan/v1`, `validate_coverage_plan(raw, state) -> dict[str, Any]`, `record-coverage --input PATH`, `coverage-plan.json`, `coverage_plan_hash`, and `state["workflow_profile"]`, `state["coverage_required"]`, and `state["candidate_preflight"]` for new runs.
 
 - [ ] **Step 1: Write the failing coverage-plan tests**
 
@@ -199,6 +93,7 @@ def coverage_plan(self, scope_hash: str, *, protocol: bool = False) -> dict:
     return {
         "schema_version": "material-review/coverage-plan/v1",
         "scope_hash": scope_hash,
+        "workflow_profile": "material_review",
         "risk_signals": signals,
         "lenses": lenses,
         "max_candidate_corrections": 1,
@@ -234,6 +129,7 @@ Create a Draft 2020-12 object schema with `additionalProperties: false` and this
 {
   "schema_version": "material-review/coverage-plan/v1",
   "scope_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "workflow_profile": "material_review",
   "risk_signals": [
     {"code": "state_dependent_schema", "rationale": "The response shape changes at Gate A.", "evidence_paths": ["calc.py"]}
   ],
@@ -255,13 +151,16 @@ Add constants:
 
 ```python
 COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
+WORKFLOW_PROFILE_REVIEW = "material_review"
+WORKFLOW_PROFILE_SIMPLIFICATION = "material_simplification"
 CORE_LENSES = {"correctness", "test_adequacy", "standards_alignment"}
+SIMPLIFICATION_CORE_LENSES = {"architecture_structural", "code_test"}
 PROTOCOL_RISK_SIGNALS = {"multi_stage_lifecycle", "cross_boundary_data", "prompt_contract", "conditional_validation", "state_dependent_schema", "trust_ordering", "shared_schema"}
 ```
 
-`validate_coverage_plan` must enforce exact keys, unique lens and reviewer IDs, all core lenses as required, protocol coverage for any protocol risk signal, `max_candidate_corrections == 1`, and honest controlled modes. `command_record_coverage` runs only in `CONTEXT_FROZEN`, rechecks scope freshness, writes the hash-bound plan, stores its hash, and appends a `coverage_plan_recorded` event.
+`validate_coverage_plan` must enforce exact keys, unique lens and reviewer IDs, equality with the state-owned workflow profile, the `material_review` core/protocol rules, the `material_simplification` required `architecture_structural` and `code_test` rules, optional-only simplification extras, `max_candidate_corrections == 1`, and honest controlled modes. `command_record_coverage` runs only in `CONTEXT_FROZEN`, rechecks scope freshness, writes the hash-bound plan, stores its hash, and appends a `coverage_plan_recorded` event.
 
-Set `state["coverage_required"] = True` and initialize `state["candidate_preflight"] = {}` for every newly created run. Existing v1 state files lacking `coverage_required` remain legacy-compatible.
+Set the internal root-owned `state["workflow_profile"]`, set `state["coverage_required"] = True`, and initialize `state["candidate_preflight"] = {}` for every newly created run. Direct review initialization uses `material_review`; the simplification adapter supplies `material_simplification` internally for codebase and delegated Git selectors. Do not expose a CLI profile selector. State files lacking `coverage_required` remain legacy-compatible; provisional feature-branch coverage artifacts missing the final profile contract are rejected with a restart-run outcome rather than interpreted through a dual reader.
 
 - [ ] **Step 5: Run the focused tests and verify GREEN**
 
@@ -286,12 +185,14 @@ git commit -m "feat: record required review coverage"
 
 **Files:**
 - Create: `skills/material-code-review/schemas/candidate-preflight.schema.json`
+- Create: `skills/material-code-review/schemas/fallback-assignment.schema.json`
+- Create: `skills/material-code-review/schemas/reviewer-failure-attestation.schema.json`
 - Modify: `skills/material-code-review/scripts/reviewctl.py:1312-1572,2669-2743,4248-4260`
 - Modify: `skills/material-code-review/tests/test_reviewctl.py:73-160,570-760`
 
 **Interfaces:**
-- Consumes: candidate-set v1 draft, active coverage plan, exact `lens_id`, optional `--fallback`, and optional prior receipt hash.
-- Produces: `check-candidates --lens LENS --input PATH [--fallback] [--supersedes RECEIPT_HASH]`; `material-review/candidate-preflight/v1` receipts under paths formatted as `candidate-preflight/{lens_id}/attempt-{attempt}.json`; `candidate_semantic_hash(findings) -> str | None`.
+- Consumes: candidate-set v1 draft when readable bytes exist; otherwise one root-observed required-route failure with controlled reason and bounded numeric metadata; active coverage plan; exact `lens_id`; optional prior receipt hash; and a root-owned fallback assignment before any fallback evidence.
+- Produces: `record-reviewer-failure --lens LENS --route ROUTE --reason REASON --observer-kind KIND --observer-id ID [--diagnostic CODE=INTEGER]`; immutable `material-review/reviewer-failure-attestation/v1`; `assign-fallback --lens LENS --failure-trigger-kind KIND --failure-trigger-hash HASH --reviewer-id ID --independence-group GROUP --review-mode MODE`; immutable `material-review/fallback-assignment/v1` under `fallback-assignments/{lens_id}.json`; `check-candidates --lens LENS --input PATH [--fallback] [--supersedes RECEIPT_HASH]`; route-local `material-review/candidate-preflight/v1` receipts; `finalize-coverage` after all incomplete required routes are exhausted; and `candidate_semantic_hash(findings) -> str | None`.
 
 - [ ] **Step 1: Add failing preflight tests**
 
@@ -302,7 +203,7 @@ def test_valid_candidate_preflight_does_not_advance_phase(self) -> None:
     scope_hash = self.init_with_coverage()
     path = self.write_json("candidate.json", self.candidate_set(scope_hash, include_style=False))
     self.run_tool("check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, "--lens", "correctness", "--input", str(path))
-    receipt = self.load("candidate-preflight/correctness/attempt-1.json")
+    receipt = self.load("candidate-preflight/correctness/primary/attempt-1.json")
     self.assertEqual(receipt["verdict"], "valid")
     self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
 
@@ -312,7 +213,7 @@ def test_nonverbatim_quote_gets_one_correctable_receipt(self) -> None:
     draft["findings"][0]["evidence_quote"] = "return something else"
     path = self.write_json("bad-quote.json", draft)
     self.run_tool("check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, "--lens", "correctness", "--input", str(path), expected=2)
-    receipt = self.load("candidate-preflight/correctness/attempt-1.json")
+    receipt = self.load("candidate-preflight/correctness/primary/attempt-1.json")
     self.assertEqual(receipt["verdict"], "correctable")
     self.assertEqual(receipt["diagnostics"][0]["code"], "EVIDENCE_NOT_FOUND")
 
@@ -322,12 +223,12 @@ def test_second_attempt_cannot_change_substantive_fields(self) -> None:
     draft["findings"][0]["evidence_quote"] = "return something else"
     first = self.write_json("first.json", draft)
     self.run_tool("check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, "--lens", "correctness", "--input", str(first), expected=2)
-    prior = self.load("candidate-preflight/correctness/attempt-1.json")
+    prior = self.load("candidate-preflight/correctness/primary/attempt-1.json")
     draft["findings"][0]["evidence_quote"] = "    return a - b"
     draft["findings"][0]["observable_consequence"] = "Changed substance."
     second = self.write_json("second.json", draft)
     self.run_tool("check-candidates", "--repo-root", str(self.repo), "--run-id", self.run_id, "--lens", "correctness", "--input", str(second), "--supersedes", prior["receipt_hash"], expected=2)
-    self.assertIn("SUBSTANTIVE_DRIFT", {item["code"] for item in self.load("candidate-preflight/correctness/attempt-2.json")["diagnostics"]})
+    self.assertIn("SUBSTANTIVE_DRIFT", {item["code"] for item in self.load("candidate-preflight/correctness/primary/attempt-2.json")["diagnostics"]})
 ```
 
 Also test a corrected evidence-only second attempt succeeds, a third attempt is refused, a stale scope is refused, and an unparseable first attempt permits exactly one degraded syntax correction.
@@ -348,19 +249,31 @@ Introduce these internal records using dictionaries rather than a new dependency
 
 ```python
 EVIDENCE_ANCHOR_FIELDS = {"file", "line_start", "line_end", "evidence_side", "evidence_quote"}
+CANDIDATE_FINDING_FIELDS = (  # exact candidate-set/v1 property order
+    "local_id", "title", "nature", "category", "severity", "confidence",
+    "file", "line_start", "line_end", "evidence_side", "evidence_quote",
+    "scope_relation", "related_changed_files", "direct_dependency",
+    "observable_consequence", "trigger_conditions", "counterevidence_checked",
+    "why_not_preference", "proposed_resolution", "estimated_fix_risk",
+    "requires_user_decision", "assumptions",
+)
+CANDIDATE_MECHANICAL_FIELDS = EVIDENCE_ANCHOR_FIELDS | {"local_id"}
+CANDIDATE_SUBSTANTIVE_FIELDS = tuple(
+    field for field in CANDIDATE_FINDING_FIELDS if field not in CANDIDATE_MECHANICAL_FIELDS
+)
 CORRECTABLE_DIAGNOSTIC_CODES = {"JSON_SYNTAX", "TOP_LEVEL_METADATA", "UNKNOWN_FIELD", "EVIDENCE_NOT_FOUND", "EVIDENCE_OUTSIDE_RANGE", "DUPLICATE_LOCAL_ID"}
 
 def candidate_semantic_hash(findings: list[dict[str, Any]]) -> str | None:
     if not all(isinstance(item, dict) for item in findings):
         return None
     payload = [
-        {key: value for key, value in item.items() if key not in EVIDENCE_ANCHOR_FIELDS}
+        {field: item[field] for field in CANDIDATE_SUBSTANTIVE_FIELDS if field in item}
         for item in findings
     ]
     return canonical_hash(payload)
 ```
 
-Extract the current per-finding validation into an inspection function that returns normalized findings plus structured diagnostics. Keep `validate_candidate_set` as the fail-closed wrapper used by ingestion so existing accepted/rejected semantics remain unchanged.
+Reuse `CANDIDATE_FINDING_FIELDS` for exact-key validation and the substantive projection. This permits the documented local-ID repair and undeclared-key removal without excluding any schema-declared non-mechanical field. Extract the current per-finding validation into an inspection function that returns normalized findings plus structured diagnostics. Keep `validate_candidate_set` as the fail-closed wrapper used by ingestion so existing accepted/rejected semantics remain unchanged.
 
 - [ ] **Step 4: Implement preflight receipts and bounded correction**
 
@@ -372,7 +285,7 @@ The receipt schema must fail closed and require:
   "scope_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "lens_id": "correctness",
-  "fallback": false,
+  "route": "primary",
   "attempt": 1,
   "draft_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "semantic_hash": null,
@@ -380,16 +293,20 @@ The receipt schema must fail closed and require:
   "verdict": "valid",
   "diagnostics": [],
   "reviewer_id": "correctness",
+  "independence_group": "model-a",
+  "review_mode": "subagent",
+  "fallback_assignment_hash": null,
+  "degraded": false,
   "source_file": "/absolute/private/path/candidate.json",
   "receipt_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 }
 ```
 
-Controlled verdicts are `valid`, `correctable`, and `rejected`. Each diagnostic requires `code`, `path`, `message`, and `correctable`. Attempt 2 must reference attempt 1, must be from the same lens and reviewer, and must preserve the semantic hash whenever attempt 1 was parsable. No attempt 3 is permitted.
+Controlled candidate verdicts are `valid`, `correctable`, and `rejected`. Each candidate diagnostic requires `code`, `path`, `message`, and `correctable`. Primary attempt 2 must reference primary attempt 1, must be from the same lens and reviewer, and must preserve the semantic hash whenever attempt 1 was parsable. No primary attempt 3 is permitted. A route may instead have one root-owned no-output attestation, never both receipts and an attestation. Attestations use controlled reasons and code-and-integer diagnostics only; no free-form summary, candidate substance, or raw logs. Fallback has only route-local attempt 1, is unavailable until `fallback-assignment/v1` binds the exact failed-primary receipt or attestation to the actual actor, and permanently prevents primary resumption. Fallback receipts and normalized candidates copy the verified assignment hash, identity, route, and degraded marker; candidate-supplied identity never creates authority.
 
 When attempt 1 is not parseable, take `reviewer_id` from the hash-verified coverage-plan assignment and set `semantic_hash` to null. The corrected draft must declare that same reviewer ID before candidate validation continues.
 
-Write receipts atomically, persist their hashes in `state["candidate_preflight"]`, and return exit status 2 for `correctable` or `rejected` while retaining the receipt.
+Write receipts atomically, persist their hashes under `state["candidate_preflight"][lens_id][route]`, include `completion_route` in coverage status, and return exit status 2 for `correctable` or `rejected` while retaining the receipt.
 
 - [ ] **Step 5: Run preflight and legacy-ingestion tests and verify GREEN**
 
@@ -531,6 +448,7 @@ def build_coverage_status(
         "schema_version": "material-review/coverage-status/v1",
         "scope_hash": state["scope_hash"],
         "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+        "workflow_profile": coverage_plan["workflow_profile"],
         "status": "complete" if complete else "incomplete",
         "lenses": lens_results,
         "limitations": limitations,
@@ -539,11 +457,11 @@ def build_coverage_status(
     return payload
 ```
 
-Implement the function with explicit output keys `schema_version`, `scope_hash`, `coverage_plan_hash`, `status`, `lenses`, `limitations`, and `coverage_status_hash`. Each lens records primary and fallback receipt hashes, completion status, reviewer identity, mode, and diagnostic summaries. Use schema value `material-review/coverage-status/v1` as a controller-owned artifact.
+Implement the function with explicit output keys `schema_version`, `scope_hash`, `coverage_plan_hash`, `workflow_profile`, `status`, `lenses`, `limitations`, and `coverage_status_hash`. Each lens records primary and fallback receipt hashes, completion status, reviewer identity, mode, and diagnostic summaries. Use schema value `material-review/coverage-status/v1` as a controller-owned artifact.
 
 Create `coverage-status.schema.json` with the exact fields produced by `build_coverage_status`, controlled `complete`/`incomplete` status, nullable primary/fallback receipt hashes, fail-closed lens objects, and `additionalProperties: false` at every object level.
 
-For new runs, `ingest-candidates` must verify each input against a latest valid receipt, aggregate required and optional lenses, preserve rejected coverage, and write `coverage-status.json`. If required coverage is incomplete, write the artifact, set `REVIEW_INCOMPLETE`, save state, and return a failure without writing `candidates.json`. Treat `REVIEW_INCOMPLETE` as a terminal non-mutation phase in active-run discovery and status output so it does not masquerade as a resumable candidate run.
+For new runs, `ingest-candidates` must verify each input against a latest valid receipt, aggregate required and optional lenses, preserve rejected coverage, and write `coverage-status.json`. If required coverage is incomplete and every incomplete route is terminally evidenced with no correction or fallback authority unused, write the artifact, set `REVIEW_INCOMPLETE`, save state, and return a failure without writing `candidates.json`. Otherwise reject premature ingestion without status or phase mutation. `finalize-coverage` provides the corresponding zero-input path only after the same exhaustion check. Treat `REVIEW_INCOMPLETE` as a terminal non-mutation phase in active-run discovery and status output so it does not masquerade as a resumable candidate run.
 
 For complete coverage, include the normalized coverage object and hash in `candidates.json`. `compile-ledger` must load and hash-verify that object before adjudication. Runs created by older controllers use `state.get("coverage_required", False)` and keep the legacy path.
 
@@ -639,8 +557,10 @@ Document the exact sequence:
 ```text
 read PR metadata -> init exact range with provenance -> record coverage plan ->
 dispatch one lens per reviewer -> preflight each draft -> at most one author-owned
-mechanical correction -> optional required-lens fallback -> ingest only with
-complete required coverage -> validate/adjudicate -> Gate A
+mechanical correction -> bind actual fallback identity after primary failure ->
+optional required-lens fallback -> ingest only with complete required coverage ->
+validate/adjudicate -> Gate A; otherwise finalize only fully exhausted required
+routes as REVIEW_INCOMPLETE and stop
 ```
 
 State that a PR lookup failure never falls back to the head parent, completely rejected coverage remains visible, `REVIEW_INCOMPLETE` has no merge verdict, and Gate A still approves findings only. Add the new reference to the SKILL reference list and update the workflow/failure tables with the new commands and states.
@@ -708,7 +628,7 @@ Expected: FAIL because deleting a new schema or lens reference from a fixture do
 
 - [ ] **Step 3: Update source and archive validators**
 
-Add all three new schemas and the protocol reference to both canonical required-file sets. Keep generic JSON-schema validation unchanged: every schema remains an object with `additionalProperties: false`. Add controlled SKILL markers for `record-coverage`, `check-candidates`, `protocol_coherence`, and `REVIEW_INCOMPLETE` so a package cannot ship the controller without its human workflow.
+Add every new runtime schema and the protocol reference to both canonical required-file sets. Keep generic JSON-schema validation unchanged: every schema remains an object with `additionalProperties: false`. Add controlled SKILL markers for `record-coverage`, `check-candidates`, `record-reviewer-failure`, `assign-fallback`, `finalize-coverage`, `protocol_coherence`, and `REVIEW_INCOMPLETE` so a package cannot ship the controller without its human workflow.
 
 Do not change package version, archive names, maintainer-only exclusions, the standalone simplification layout, or marketplace metadata.
 
@@ -805,7 +725,7 @@ Write JSON with:
   "pull_request": 3,
   "base_commit": "8ebeb7ae2a1f28acfe297c258f703865280c4fa4",
   "head_commit": "c740131b0953a04a93cbe1c970dcbf36dae8bca1",
-  "review_request": "Review the exact PR range with depth:full and external-review:off; stop at Gate A.",
+  "review_request": "Review scope:pull_request with the exact host base/head provenance, depth:full, and external-review:off; stop at Gate A.",
   "expected_material_failure_modes": [
     {"id": "checkout-attestation-order", "primary_path": ".agents/skills/material-review-evaluation/SKILL.md"},
     {"id": "private-receipt-visibility", "primary_path": ".agents/skills/material-review-evaluation/SKILL.md"},
@@ -854,6 +774,22 @@ Expected: both tests pass and neither archive contains the oracle.
 git add evaluations/material-code-review/cases/pr-3-discovery-recall.json EVALUATION.md scripts/validate_package.py scripts/tests/test_packaging.py
 git commit -m "test: add material review recall regression case"
 ```
+
+---
+
+### Task 7A: Close final-state test-evidence recovery deadlocks
+
+**Files:** shared controller, both canonical skills and workflow/failure references, controller/simplification/packaging tests and validators, plus current capability documentation.
+
+**Interfaces:**
+- `refresh-finding-test --finding F### --test ID` reruns only an exact required Gate-B-approved finding command after all findings are fixed. It records evidence bound to the latest retained attempt, current allowed-path hash, current workspace guard, and exact test definition; it consumes no attempt or repair round.
+- `begin-pre-verification-repair` requires the exact hash of the latest failed or stale required test evidence, exact approved target IDs, and a non-empty causal rationale. It consumes remaining per-finding attempts and one shared repair round, and grants no new path, command, strategy, or finding authority.
+
+- [ ] Add append-only refresh and recovery history to new controller state while accepting older state that omits those additive fields.
+- [ ] Make `prepare-verification` consume a current refresh for the latest retained attempt and fail closed on failed, mutating, stale, superseded, or definition-mismatched evidence.
+- [ ] Reject passing, nonlatest, optional, unbound, wrong-ID, out-of-plan, or budget-exhausted recovery evidence.
+- [ ] Exercise refresh invalidation, mutation restoration, exact evidence-hash binding, shared budgets, simplification delegation, package contract markers, and the two coverage-completion regressions.
+- [ ] Keep state/schema and plugin versions unchanged because the commands and optional state fields are additive and local run artifacts require no migration.
 
 ---
 
@@ -909,7 +845,7 @@ From a fresh material-review task, use exactly:
 ```text
 Review pull request CoveMB/material-code-review-plugin#3 using exact base
 8ebeb7ae2a1f28acfe297c258f703865280c4fa4 and exact head
-c740131b0953a04a93cbe1c970dcbf36dae8bca1. Use scope:range, depth:full,
+c740131b0953a04a93cbe1c970dcbf36dae8bca1. Use scope:pull_request, depth:full,
 external-review:off, the PR provenance contract, and the complete required lens
 roster. Do not read the discovery-recall oracle. Stop at Gate A without edits.
 ```

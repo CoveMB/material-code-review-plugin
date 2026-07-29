@@ -5,7 +5,7 @@ Use this checklist before candidate generation. Record omitted areas as limitati
 ## Scope identity
 
 - Confirm the repository root, branch, HEAD, baseline, comparison, scope mode, changed files, untracked files, and `scope_hash`.
-- For a pull request, obtain the actual read-only host identifier, base SHA, and head SHA. Bind all three during `scope:range` initialization; never substitute the head parent when metadata is unavailable.
+- For a pull request, obtain the actual read-only `owner/repository#number`, base SHA, and head SHA. Bind all three during `scope:pull_request` initialization, then confirm the frozen effective merge base and merge-base-to-head comparison; never substitute the head parent when metadata is unavailable.
 - For ref or remote scope, inspect comparison-side files through the frozen source snapshot or reviewed ref. Never use an unrelated workspace copy as evidence.
 - Run `reviewctl check-scope` immediately before reviewer dispatch.
 

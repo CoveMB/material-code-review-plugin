@@ -37,8 +37,16 @@ ACTIVATION_PREFLIGHT_MARKERS = (
 DISCOVERY_CONTROL_MARKERS = (
     "record-coverage",
     "check-candidates",
+    "assign-fallback",
+    "record-reviewer-failure",
+    "finalize-coverage",
     "protocol_coherence",
     "REVIEW_INCOMPLETE",
+)
+RECOVERY_CONTROL_MARKERS = (
+    "refresh-finding-test",
+    "begin-pre-verification-repair",
+    "latest failed or stale required test evidence",
 )
 
 DISTRIBUTABLE_REQUIRED = {
@@ -54,6 +62,7 @@ DISTRIBUTABLE_REQUIRED = {
     "THIRD_PARTY.md",
     "CHANGELOG.md",
     "Makefile",
+    "commands/material-review.md",
     "bin/material-reviewctl",
     "bin/material-reviewctl.cmd",
     "bin/material-reviewctl.ps1",
@@ -65,6 +74,8 @@ DISTRIBUTABLE_REQUIRED = {
     "skills/material-code-review/tests/test_reviewctl.py",
     "skills/material-code-review/schemas/candidate-set.schema.json",
     "skills/material-code-review/schemas/candidate-preflight.schema.json",
+    "skills/material-code-review/schemas/fallback-assignment.schema.json",
+    "skills/material-code-review/schemas/reviewer-failure-attestation.schema.json",
     "skills/material-code-review/schemas/coverage-plan.schema.json",
     "skills/material-code-review/schemas/coverage-status.schema.json",
     "skills/material-code-review/schemas/adjudication.schema.json",
@@ -707,6 +718,16 @@ def check_source_package(
         if frontmatter.get("description") != ACTIVATION_DISCOVERY_DESCRIPTION:
             fail(errors, f"{rel} description does not match the Git-change activation contract")
 
+    canonical_review_skill = root / "skills/material-code-review/SKILL.md"
+    material_review_command = root / "commands/material-review.md"
+    if canonical_review_skill.is_file() and material_review_command.is_file():
+        canonical_frontmatter = parse_frontmatter(canonical_review_skill, errors)
+        command_frontmatter = parse_frontmatter(material_review_command, errors)
+        if command_frontmatter.get("argument-hint") != canonical_frontmatter.get(
+            "argument-hint"
+        ):
+            fail(errors, "command argument hint does not match canonical review skill")
+
     evaluator_skill = root / ".agents/skills/material-review-evaluation/SKILL.md"
     if not distribution_layout and evaluator_skill.is_file():
         frontmatter = parse_frontmatter(evaluator_skill, errors)
@@ -776,6 +797,9 @@ def check_source_package(
         for marker in DISCOVERY_CONTROL_MARKERS:
             if marker not in text:
                 fail(errors, f"canonical skill discovery contract missing marker: {marker}")
+        for marker in RECOVERY_CONTROL_MARKERS:
+            if marker not in text:
+                fail(errors, f"canonical skill recovery contract missing marker: {marker}")
 
     for path in sorted((root / "skills/material-code-review/schemas").glob("*.json")):
         data = load_json(path, errors)
@@ -808,6 +832,9 @@ def check_source_package(
         text = controller.read_text(encoding="utf-8")
         if f'TOOL_VERSION = "{VERSION}"' not in text:
             fail(errors, "controller version does not match package version")
+        for marker in RECOVERY_CONTROL_MARKERS[:2]:
+            if marker not in text:
+                fail(errors, f"controller recovery surface missing marker: {marker}")
         if os.name != "nt" and not (controller.stat().st_mode & stat.S_IXUSR):
             fail(errors, "reviewctl.py is not executable")
 
@@ -874,6 +901,8 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     "scripts/reviewctl.py",
                     "schemas/candidate-set.schema.json",
                     "schemas/candidate-preflight.schema.json",
+                    "schemas/fallback-assignment.schema.json",
+                    "schemas/reviewer-failure-attestation.schema.json",
                     "schemas/coverage-plan.schema.json",
                     "schemas/coverage-status.schema.json",
                     "references/protocol-coherence-lens.md",
@@ -886,6 +915,8 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     "skills/material-code-review/SKILL.md",
                     "skills/material-code-review/agents/openai.yaml",
                     "skills/material-code-review/schemas/candidate-preflight.schema.json",
+                    "skills/material-code-review/schemas/fallback-assignment.schema.json",
+                    "skills/material-code-review/schemas/reviewer-failure-attestation.schema.json",
                     "skills/material-code-review/schemas/coverage-plan.schema.json",
                     "skills/material-code-review/schemas/coverage-status.schema.json",
                     "skills/material-code-review/references/protocol-coherence-lens.md",

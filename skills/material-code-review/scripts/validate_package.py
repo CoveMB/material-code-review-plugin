@@ -27,8 +27,16 @@ ACTIVATION_PREFLIGHT_MARKERS = (
 DISCOVERY_CONTROL_MARKERS = (
     "record-coverage",
     "check-candidates",
+    "assign-fallback",
+    "record-reviewer-failure",
+    "finalize-coverage",
     "protocol_coherence",
     "REVIEW_INCOMPLETE",
+)
+RECOVERY_CONTROL_MARKERS = (
+    "refresh-finding-test",
+    "begin-pre-verification-repair",
+    "latest failed or stale required test evidence",
 )
 REQUIRED = {
     "SKILL.md",
@@ -38,6 +46,8 @@ REQUIRED = {
     "tests/test_reviewctl.py",
     "schemas/candidate-set.schema.json",
     "schemas/candidate-preflight.schema.json",
+    "schemas/fallback-assignment.schema.json",
+    "schemas/reviewer-failure-attestation.schema.json",
     "schemas/coverage-plan.schema.json",
     "schemas/coverage-status.schema.json",
     "schemas/adjudication.schema.json",
@@ -117,13 +127,20 @@ def main() -> int:
         for marker in DISCOVERY_CONTROL_MARKERS:
             if marker not in text:
                 errors.append(f"SKILL.md discovery contract missing marker: {marker}")
+        for marker in RECOVERY_CONTROL_MARKERS:
+            if marker not in text:
+                errors.append(f"SKILL.md recovery contract missing marker: {marker}")
         for rel in sorted(set(re.findall(r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")
     controller = ROOT / "scripts/reviewctl.py"
     if controller.is_file():
-        if f'TOOL_VERSION = "{VERSION}"' not in controller.read_text(encoding="utf-8"):
+        controller_text = controller.read_text(encoding="utf-8")
+        if f'TOOL_VERSION = "{VERSION}"' not in controller_text:
             errors.append("reviewctl version mismatch")
+        for marker in RECOVERY_CONTROL_MARKERS[:2]:
+            if marker not in controller_text:
+                errors.append(f"reviewctl.py recovery surface missing marker: {marker}")
         if not sys.platform.startswith("win") and not (controller.stat().st_mode & 0o100):
             errors.append("reviewctl.py is not executable")
     for path in (ROOT / "schemas").glob("*.json"):

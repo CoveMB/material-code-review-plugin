@@ -8,6 +8,7 @@
     "schema_version",
     "scope_hash",
     "coverage_plan_hash",
+    "workflow_profile",
     "status",
     "lenses",
     "limitations",
@@ -25,6 +26,9 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "workflow_profile": {
+      "enum": ["material_review", "material_simplification"]
+    },
     "status": {
       "enum": ["complete", "incomplete"]
     },
@@ -37,8 +41,15 @@
           "lens_id",
           "required",
           "completed",
+          "completion_route",
           "primary_receipt_hash",
           "fallback_receipt_hash",
+          "primary_attestation_hash",
+          "fallback_attestation_hash",
+          "fallback_assignment_hash",
+          "fallback_trigger_kind",
+          "fallback_trigger_hash",
+          "degraded",
           "reviewer_id",
           "independence_group",
           "review_mode",
@@ -55,6 +66,10 @@
           "completed": {
             "type": "boolean"
           },
+          "completion_route": {
+            "type": ["string", "null"],
+            "enum": ["primary", "fallback", null]
+          },
           "primary_receipt_hash": {
             "type": ["string", "null"],
             "pattern": "^[0-9a-f]{64}$"
@@ -62,6 +77,29 @@
           "fallback_receipt_hash": {
             "type": ["string", "null"],
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "primary_attestation_hash": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fallback_attestation_hash": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fallback_assignment_hash": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fallback_trigger_kind": {
+            "type": ["string", "null"],
+            "enum": ["candidate_preflight_receipt", "reviewer_failure_attestation", null]
+          },
+          "fallback_trigger_hash": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "degraded": {
+            "type": "boolean"
           },
           "reviewer_id": {
             "type": "string",
