@@ -1445,6 +1445,33 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
         self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
 
+    def test_missing_input_retry_writes_diagnostic_without_replacing_authoritative_bundle(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        self.ingest_candidate_paths(paths)
+        original_candidates = (self.run_dir / "candidates.json").read_text(encoding="utf-8")
+        original_markdown = (self.run_dir / "candidates.md").read_text(encoding="utf-8")
+        original_rejections = (self.run_dir / "candidate-rejections.json").read_text(encoding="utf-8")
+        original_state = self.load("state.json")
+        missing = self.out / "missing-candidate.json"
+
+        _, stderr = self.ingest_candidate_paths([*paths, missing], expected=2)
+
+        self.assertIn("Expected artifact file is missing", stderr)
+        self.assertEqual((self.run_dir / "candidates.json").read_text(encoding="utf-8"), original_candidates)
+        self.assertEqual((self.run_dir / "candidates.md").read_text(encoding="utf-8"), original_markdown)
+        self.assertEqual(
+            (self.run_dir / "candidate-rejections.json").read_text(encoding="utf-8"), original_rejections
+        )
+        state = self.load("state.json")
+        self.assertEqual(state["phase"], original_state["phase"])
+        self.assertEqual(
+            state["hashes"]["candidate_bundle_hash"], original_state["hashes"]["candidate_bundle_hash"]
+        )
+        failure = self.load("candidate-ingestion-failure.json")
+        self.assertEqual(failure["input_hashes"], [reviewctl.sha256_file(path) for path in paths])
+        self.assertIn("Expected artifact file is missing", failure["rejections"][0]["reason"])
+
     def test_compile_ledger_rejects_deleted_tampered_or_stale_coverage_binding(self) -> None:
         for name in ("deleted", "tampered", "stale-candidate"):
             with self.subTest(name=name):

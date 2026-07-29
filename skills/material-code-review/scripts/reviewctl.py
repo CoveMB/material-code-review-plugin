@@ -2937,14 +2937,15 @@ def command_check_scope(args: argparse.Namespace) -> int:
 def command_ingest_material_review_candidates(
     args: argparse.Namespace, *, repo: Path, run_dir: Path, state: dict[str, Any]
 ) -> int:
-    input_hashes = [sha256_file(Path(raw).expanduser().resolve()) for raw in args.input]
+    sources = [Path(raw).expanduser().resolve() for raw in args.input]
+    input_hashes: list[str] = []
     reviewer_sets: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     try:
         plan = load_recorded_coverage_plan(run_dir, state)
-        for raw_path in args.input:
-            source = Path(raw_path).expanduser().resolve()
+        for source in sources:
             try:
+                input_hashes.append(sha256_file(source))
                 normalized_set, finding_rejections = validate_candidate_set(
                     load_json(source), source_file=source, repo=repo, run_dir=run_dir, state=state
                 )
