@@ -1,5 +1,7 @@
 # Material Review Discovery Recall Implementation Plan
 
+> **Status:** Superseded for implementation by `../specs/2026-07-29-targeted-material-review-recall-precision-design.md`. The broader PR provenance, protocol-coherence, candidate-preflight, fallback, and recovery work in this plan is deferred.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve material-finding recall by binding PR scope identity, requiring protocol-coherence coverage, mechanically preflighting candidate drafts once, and refusing an optimistic verdict when required coverage fails.

@@ -1,6 +1,8 @@
 # Material Review Discovery Recall Design
 
-**Status:** Approved for implementation planning
+**Status:** Superseded for implementation by `2026-07-29-targeted-material-review-recall-precision-design.md`
+
+> The targeted design retains fail-closed, root-owned review coverage but defers this document's PR provenance, protocol-coherence, candidate-preflight, fallback, and recovery scope. Do not use this document as the active implementation contract.
 
 **Date:** 2026-07-27
 
