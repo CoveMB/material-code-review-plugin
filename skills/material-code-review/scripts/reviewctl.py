@@ -40,6 +40,16 @@ FIX_PLAN_SCHEMA = "material-review/fix-plan/v2"
 PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
 FIX_SUMMARY_SCHEMA = "material-review/fix-summary/v1"
 VERIFICATION_SCHEMA = "material-review/verification/v1"
+COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
+WORKFLOW_PROFILE_REVIEW = "material_review"
+SIMPLIFICATION_PROFILE = "material-code-simplification"
+
+RISK_ASSESSMENT_CODES = frozenset({"user_selectable_output_paths", "persisted_config_semantics"})
+CORE_REVIEW_LENSES = frozenset({"correctness", "test_adequacy", "standards_alignment"})
+REQUIRED_LENSES_BY_RISK = {
+    "user_selectable_output_paths": frozenset({"reliability"}),
+    "persisted_config_semantics": frozenset({"migration_data_safety", "api_config_compatibility"}),
+}
 
 PHASE_CONTEXT = "CONTEXT_FROZEN"
 PHASE_CANDIDATES = "CANDIDATES_CAPTURED"
@@ -396,6 +406,17 @@ def require_bool(value: Any, context: str) -> bool:
     if not isinstance(value, bool):
         raise ReviewError(f"{context} must be a boolean")
     return value
+
+
+def is_simplification_state(state: dict[str, Any]) -> bool:
+    return state.get("profile") == SIMPLIFICATION_PROFILE
+
+
+def require_current_material_review_contract(state: dict[str, Any]) -> None:
+    if is_simplification_state(state):
+        raise ReviewError("Material-review coverage is not used for material simplification")
+    if state.get("coverage_required") is not True or state.get("workflow_profile") != WORKFLOW_PROFILE_REVIEW:
+        raise ReviewError("Run predates required coverage; start a new run.")
 
 
 def require_int(value: Any, context: str, *, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -820,6 +841,19 @@ def load_verified_scope(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     if files_copy != identity.get("files"):
         raise ReviewError("files.json does not match scope.json identity.files")
     return scope
+
+
+def load_recorded_coverage_plan(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    artifact = require_object(load_json(run_dir / "coverage-plan.json"), "coverage plan")
+    plan = copy.deepcopy(artifact)
+    embedded_hash = require_sha256(plan.pop("coverage_plan_hash", None), "coverage plan.coverage_plan_hash")
+    recomputed_hash = canonical_hash(plan)
+    if recomputed_hash != embedded_hash:
+        raise ReviewError(
+            f"Coverage plan failed its embedded hash check: expected {embedded_hash}, recomputed {recomputed_hash}"
+        )
+    require_state_hash(state, "coverage_plan_hash", embedded_hash, "coverage plan")
+    return validate_coverage_plan(plan, run_dir=run_dir, state=state)
 
 
 def load_verified_findings_gate(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -1382,6 +1416,117 @@ def render_checkpoint_diff(checkpoint_dir: Path, repo: Path, changed_paths: Iter
         if chunk:
             chunks.append(chunk)
     return "\n".join(chunks)
+
+
+def required_lenses_for_assessments(assessments: list[dict[str, Any]]) -> set[str]:
+    required = set(CORE_REVIEW_LENSES)
+    for assessment in assessments:
+        if assessment["present"]:
+            required.update(REQUIRED_LENSES_BY_RISK[assessment["code"]])
+    return required
+
+
+def validate_coverage_plan(raw: object, *, run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    plan = require_object(raw, "coverage plan")
+    require_exact_keys(
+        plan,
+        {"schema_version", "scope_hash", "workflow_profile", "risk_assessments", "lenses"},
+        "coverage plan",
+    )
+    if plan["schema_version"] != COVERAGE_PLAN_SCHEMA:
+        raise ReviewError("coverage plan has an unsupported schema_version")
+    scope_hash = require_sha256(plan["scope_hash"], "coverage plan.scope_hash")
+    if scope_hash != state.get("scope_hash"):
+        raise ReviewError("coverage plan scope hash does not match the active frozen scope")
+    if plan["workflow_profile"] != WORKFLOW_PROFILE_REVIEW:
+        raise ReviewError("coverage plan workflow_profile must be material_review")
+
+    scope = load_verified_scope(run_dir, state)
+    scope_paths = all_scope_paths(scope["identity"])
+    assessments_raw = require_array(plan["risk_assessments"], "coverage plan.risk_assessments")
+    if len(assessments_raw) != len(RISK_ASSESSMENT_CODES):
+        raise ReviewError("coverage plan must contain every risk assessment code exactly once")
+    assessments: list[dict[str, Any]] = []
+    for index, raw_assessment in enumerate(assessments_raw):
+        context = f"coverage plan.risk_assessments[{index}]"
+        assessment = require_object(raw_assessment, context)
+        require_exact_keys(assessment, {"code", "present", "rationale", "evidence_paths"}, context)
+        code = require_string(assessment["code"], f"{context}.code")
+        if code not in RISK_ASSESSMENT_CODES:
+            raise ReviewError(f"{context}.code is unsupported: {code}")
+        present = require_bool(assessment["present"], f"{context}.present")
+        rationale = require_string(assessment["rationale"], f"{context}.rationale")
+        evidence_paths = [
+            normalize_repo_path(path)
+            for path in require_string_array(assessment["evidence_paths"], f"{context}.evidence_paths")
+        ]
+        if present and not evidence_paths:
+            raise ReviewError(f"{context}.evidence_paths must contain at least one path when present is true")
+        if not present and evidence_paths:
+            raise ReviewError(f"{context}.evidence_paths must be empty when present is false")
+        outside_scope = sorted(set(evidence_paths) - scope_paths)
+        if outside_scope:
+            raise ReviewError(f"{context}.evidence_paths contains paths not in the frozen scope: {', '.join(outside_scope)}")
+        assessments.append(
+            {
+                "code": code,
+                "present": present,
+                "rationale": rationale,
+                "evidence_paths": evidence_paths,
+            }
+        )
+    if {assessment["code"] for assessment in assessments} != RISK_ASSESSMENT_CODES:
+        raise ReviewError("coverage plan assessment codes must equal the required exhaustive set")
+
+    lenses_raw = require_array(plan["lenses"], "coverage plan.lenses")
+    if len(lenses_raw) < 3:
+        raise ReviewError("coverage plan.lenses must contain at least three lenses")
+    lenses: list[dict[str, Any]] = []
+    lens_ids: set[str] = set()
+    for index, raw_lens in enumerate(lenses_raw):
+        context = f"coverage plan.lenses[{index}]"
+        lens = require_object(raw_lens, context)
+        require_exact_keys(
+            lens,
+            {"lens_id", "required", "reviewer_id", "independence_group", "review_mode"},
+            context,
+        )
+        lens_id = require_string(lens["lens_id"], f"{context}.lens_id")
+        if re.fullmatch(r"[a-z][a-z0-9_]*", lens_id) is None:
+            raise ReviewError(f"{context}.lens_id has an invalid format")
+        if lens_id in lens_ids:
+            raise ReviewError("coverage plan lens IDs must be unique")
+        lens_ids.add(lens_id)
+        reviewer_id = require_string(lens["reviewer_id"], f"{context}.reviewer_id")
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", reviewer_id) is None:
+            raise ReviewError(f"{context}.reviewer_id has an invalid format")
+        independence_group = require_string(lens["independence_group"], f"{context}.independence_group")
+        review_mode = require_string(lens["review_mode"], f"{context}.review_mode")
+        if review_mode not in REVIEW_MODES:
+            raise ReviewError(f"{context}.review_mode must be one of {sorted(REVIEW_MODES)}")
+        lenses.append(
+            {
+                "lens_id": lens_id,
+                "required": require_bool(lens["required"], f"{context}.required"),
+                "reviewer_id": reviewer_id,
+                "independence_group": independence_group,
+                "review_mode": review_mode,
+            }
+        )
+    required_lenses = required_lenses_for_assessments(assessments)
+    lenses_by_id = {lens["lens_id"]: lens for lens in lenses}
+    for lens_id in sorted(required_lenses):
+        lens = lenses_by_id.get(lens_id)
+        if lens is None or lens["required"] is not True:
+            raise ReviewError(f"coverage plan requires {lens_id} as a required lens")
+
+    return {
+        "schema_version": COVERAGE_PLAN_SCHEMA,
+        "scope_hash": scope_hash,
+        "workflow_profile": WORKFLOW_PROFILE_REVIEW,
+        "risk_assessments": assessments,
+        "lenses": lenses,
+    }
 
 
 def validate_candidate_set(
@@ -2594,6 +2739,9 @@ def command_init(args: argparse.Namespace) -> int:
         head_ref=args.head,
         include_untracked=not args.exclude_untracked,
     )
+    workflow_profile = getattr(args, "_workflow_profile", WORKFLOW_PROFILE_REVIEW)
+    if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
+        raise ReviewError(f"Unsupported internal workflow profile: {workflow_profile}")
     runs_root.mkdir(parents=True, exist_ok=True)
     temp_run_dir = runs_root / f".{run_id}.initializing-{uuid.uuid4().hex[:8]}"
     temp_run_dir.mkdir(parents=False, exist_ok=False)
@@ -2642,6 +2790,11 @@ def command_init(args: argparse.Namespace) -> int:
                 }
             ],
         }
+        if workflow_profile == WORKFLOW_PROFILE_REVIEW:
+            state["workflow_profile"] = WORKFLOW_PROFILE_REVIEW
+            state["coverage_required"] = True
+        else:
+            state["profile"] = SIMPLIFICATION_PROFILE
         save_state(temp_run_dir, state)
         os.replace(temp_run_dir, run_dir)
     except Exception:
@@ -2655,6 +2808,39 @@ def command_init(args: argparse.Namespace) -> int:
     print(f"Changed files: {len(identity['files'])}")
     print(f"Mutation aligned: {str(identity['mutable']).lower()}")
     return 0
+
+
+def command_record_coverage(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_CONTEXT:
+        raise ReviewError(f"Cannot record coverage in phase {state['phase']}")
+    require_current_material_review_contract(state)
+    check_scope_fresh(repo, run_dir, state)
+    plan = validate_coverage_plan(
+        load_json(Path(args.input).expanduser().resolve()), run_dir=run_dir, state=state
+    )
+    plan_hash = canonical_hash(plan)
+    existing_hash = state["hashes"].get("coverage_plan_hash")
+    if existing_hash:
+        existing = load_recorded_coverage_plan(run_dir, state)
+        if existing_hash == plan_hash and canonical_hash(existing) == plan_hash:
+            print(f"[OK] Coverage plan already recorded: {plan_hash}")
+            return 0
+        raise ReviewError("Coverage plan is already recorded; start a new run to change it")
+    if (run_dir / "coverage-plan.json").exists():
+        raise ReviewError("Coverage plan artifact exists without a valid state binding; start a new run")
+    artifact = {**plan, "coverage_plan_hash": plan_hash}
+    atomic_write_json(run_dir / "coverage-plan.json", artifact)
+    state["hashes"]["coverage_plan_hash"] = plan_hash
+    state["events"].append(
+        {"at": utc_now(), "event": "coverage_plan_recorded", "coverage_plan_hash": plan_hash}
+    )
+    save_state(run_dir, state)
+    print(f"[OK] Coverage plan recorded: {plan_hash}")
+    return 0
+
 
 def command_check_scope(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
@@ -4250,6 +4436,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_run_options(check_parser)
     check_parser.set_defaults(func=command_check_scope)
 
+    coverage_parser = subparsers.add_parser("record-coverage", help="Validate and record the immutable review coverage plan.")
+    add_common_run_options(coverage_parser)
+    coverage_parser.add_argument("--input", required=True, help="Coverage-plan JSON path.")
+    coverage_parser.set_defaults(func=command_record_coverage)
+
     ingest_parser = subparsers.add_parser("ingest-candidates", help="Validate and normalize candidate reviewer JSON outputs.")
     add_common_run_options(ingest_parser)
     ingest_parser.add_argument("--input", action="append", required=True, help="Candidate-set JSON path. Repeat for each reviewer.")
@@ -4343,9 +4534,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    workflow_profile: str = WORKFLOW_PROFILE_REVIEW,
+) -> int:
+    if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
+        raise ValueError(f"Unsupported internal workflow profile: {workflow_profile}")
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "init":
+        args._workflow_profile = workflow_profile
     if hasattr(args, "base") and args.base == "":
         args.base = None
     if hasattr(args, "head") and args.head == "":

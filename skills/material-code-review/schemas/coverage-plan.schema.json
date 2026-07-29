@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "material-review/coverage-plan/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scope_hash", "workflow_profile", "risk_assessments", "lenses"],
+  "properties": {
+    "schema_version": {"const": "material-review/coverage-plan/v1"},
+    "scope_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workflow_profile": {"const": "material_review"},
+    "risk_assessments": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "present", "rationale", "evidence_paths"],
+        "properties": {
+          "code": {"enum": ["user_selectable_output_paths", "persisted_config_semantics"]},
+          "present": {"type": "boolean"},
+          "rationale": {"type": "string", "minLength": 1},
+          "evidence_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        },
+        "allOf": [{"if": {"properties": {"present": {"const": true}}}, "then": {"properties": {"evidence_paths": {"minItems": 1}}}, "else": {"properties": {"evidence_paths": {"maxItems": 0}}}}]
+      }
+    },
+    "lenses": {
+      "type": "array", "minItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["lens_id", "required", "reviewer_id", "independence_group", "review_mode"],
+        "properties": {
+          "lens_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "required": {"type": "boolean"},
+          "reviewer_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+          "independence_group": {"type": "string", "minLength": 1},
+          "review_mode": {"enum": ["subagent", "controller", "external"]}
+        }
+      }
+    }
+  }
+}

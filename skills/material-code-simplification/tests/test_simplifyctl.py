@@ -97,6 +97,14 @@ class SimplifyCtlTest(unittest.TestCase):
             *extra,
         )
 
+    def test_change_scope_init_records_trusted_simplification_profile(self) -> None:
+        (self.repo / "src" / "service.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+        self.run_tool("init", "--repo-root", str(self.repo), "--run-id", self.run_id, "--scope", "uncommitted")
+        state = self.load("state.json")
+        self.assertEqual(state["profile"], "material-code-simplification")
+        self.assertNotIn("coverage_required", state)
+        self.assertNotIn("workflow_profile", state)
+
     def test_init_defaults_to_codebase_scope(self) -> None:
         self.run_tool(
             "init",
@@ -179,8 +187,9 @@ class SimplifyCtlTest(unittest.TestCase):
         captured: list[str] = []
         original = simplifyctl.core.main
 
-        def delegated(values):
+        def delegated(values, *, workflow_profile):
             captured.extend(values)
+            self.assertEqual(workflow_profile, "material-code-simplification")
             return 37
 
         simplifyctl.core.main = delegated

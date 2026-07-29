@@ -83,6 +83,54 @@ class ReviewCtlTest(unittest.TestCase):
         )
         return self.load("state.json")["scope_hash"]
 
+    def coverage_plan(
+        self,
+        scope_hash: str,
+        *,
+        output_paths_present: bool = True,
+        persisted_config_present: bool = True,
+        omit_lens: str | None = None,
+    ) -> dict:
+        assessments = [
+            {
+                "code": "user_selectable_output_paths",
+                "present": output_paths_present,
+                "rationale": "Configurable generated and report destinations were checked.",
+                "evidence_paths": ["calc.py"] if output_paths_present else [],
+            },
+            {
+                "code": "persisted_config_semantics",
+                "present": persisted_config_present,
+                "rationale": "Optional durable configuration semantics were checked.",
+                "evidence_paths": ["calc.py"] if persisted_config_present else [],
+            },
+        ]
+        assignments = (
+            "correctness",
+            "test_adequacy",
+            "standards_alignment",
+            "reliability",
+            "migration_data_safety",
+            "api_config_compatibility",
+        )
+        return {
+            "schema_version": "material-review/coverage-plan/v1",
+            "scope_hash": scope_hash,
+            "workflow_profile": "material_review",
+            "risk_assessments": assessments,
+            "lenses": [
+                {
+                    "lens_id": lens_id,
+                    "required": True,
+                    "reviewer_id": "shared-reviewer" if lens_id in {"migration_data_safety", "api_config_compatibility"} else lens_id,
+                    "independence_group": "model-a",
+                    "review_mode": "subagent",
+                }
+                for lens_id in assignments
+                if lens_id != omit_lens
+            ],
+        }
+
     def candidate_set(self, scope_hash: str, *, include_style: bool = True):
         findings = [
             {
@@ -1224,6 +1272,138 @@ class ReviewCtlTest(unittest.TestCase):
             str(path),
             expected=2,
         )
+
+    def test_coverage_plan_records_exhaustive_risk_assessments(self) -> None:
+        scope_hash = self.init()
+        path = self.write_json("coverage-input.json", self.coverage_plan(scope_hash))
+        self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path))
+        state = self.load("state.json")
+        artifact = self.load("coverage-plan.json")
+        self.assertEqual(state["phase"], "CONTEXT_FROZEN")
+        self.assertEqual(state["hashes"]["coverage_plan_hash"], artifact["coverage_plan_hash"])
+        self.assertEqual({item["code"] for item in artifact["risk_assessments"]}, {
+            "user_selectable_output_paths", "persisted_config_semantics",
+        })
+
+    def test_coverage_plan_requires_each_positive_risk_lens(self) -> None:
+        scope_hash = self.init()
+        for missing in ("reliability", "migration_data_safety", "api_config_compatibility"):
+            path = self.write_json(f"missing-{missing}.json", self.coverage_plan(scope_hash, omit_lens=missing))
+            _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+            self.assertIn(f"requires {missing}", stderr)
+
+    def test_coverage_plan_allows_repeated_reviewer_identity(self) -> None:
+        scope_hash = self.init()
+        path = self.write_json("shared-reviewer.json", self.coverage_plan(scope_hash))
+        self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path))
+
+    def test_coverage_plan_is_idempotent_but_not_replaceable(self) -> None:
+        scope_hash = self.init()
+        original = self.coverage_plan(scope_hash)
+        path = self.write_json("coverage.json", original)
+        self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path))
+        event_count = len(self.load("state.json")["events"])
+        self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path))
+        self.assertEqual(len(self.load("state.json")["events"]), event_count)
+        original["risk_assessments"][0]["rationale"] = "Replacement attempt."
+        replacement = self.write_json("replacement.json", original)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(replacement), expected=2)
+        self.assertIn("Coverage plan is already recorded", stderr)
+
+    def test_coverage_plan_rejects_missing_assessment_code(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        del plan["risk_assessments"][0]["code"]
+        path = self.write_json("missing-assessment-code.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("risk_assessments[0]", stderr)
+
+    def test_coverage_plan_rejects_duplicate_assessment_code(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["risk_assessments"][1]["code"] = "user_selectable_output_paths"
+        path = self.write_json("duplicate-assessment-code.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("assessment codes", stderr)
+
+    def test_coverage_plan_rejects_false_assessment_with_evidence_paths(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash, output_paths_present=False)
+        plan["risk_assessments"][0]["evidence_paths"] = ["calc.py"]
+        path = self.write_json("false-with-paths.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("must be empty", stderr)
+
+    def test_coverage_plan_rejects_true_assessment_without_evidence_paths(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["risk_assessments"][0]["evidence_paths"] = []
+        path = self.write_json("true-without-paths.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("at least one", stderr)
+
+    def test_coverage_plan_rejects_evidence_path_outside_scope(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["risk_assessments"][0]["evidence_paths"] = ["test_calc.py"]
+        path = self.write_json("outside-scope-path.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("not in the frozen scope", stderr)
+
+    def test_coverage_plan_rejects_extra_top_level_or_nested_field(self) -> None:
+        scope_hash = self.init()
+        for name, mutate in (
+            ("extra-top-level", lambda plan: plan.update({"unexpected": True})),
+            ("extra-nested", lambda plan: plan["lenses"][0].update({"unexpected": True})),
+        ):
+            plan = self.coverage_plan(scope_hash)
+            mutate(plan)
+            path = self.write_json(f"{name}.json", plan)
+            _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+            self.assertIn("invalid fields", stderr)
+
+    def test_coverage_plan_rejects_duplicate_lens_ids(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][1]["lens_id"] = plan["lenses"][0]["lens_id"]
+        path = self.write_json("duplicate-lens.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("unique", stderr)
+
+    def test_coverage_plan_rejects_required_core_or_risk_lens_marked_optional(self) -> None:
+        scope_hash = self.init()
+        for lens_id in ("correctness", "reliability", "migration_data_safety"):
+            plan = self.coverage_plan(scope_hash)
+            next(item for item in plan["lenses"] if item["lens_id"] == lens_id)["required"] = False
+            path = self.write_json(f"optional-{lens_id}.json", plan)
+            _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+            self.assertIn(f"requires {lens_id}", stderr)
+
+    def test_coverage_plan_rejects_unsupported_review_mode(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan(scope_hash)
+        plan["lenses"][0]["review_mode"] = "peer"
+        path = self.write_json("unsupported-review-mode.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("review_mode", stderr)
+
+    def test_coverage_plan_rejects_stale_scope_hash(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan("0" * 64)
+        self.assertNotEqual(plan["scope_hash"], scope_hash)
+        path = self.write_json("stale-scope-hash.json", plan)
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("scope hash", stderr)
+
+    def test_coverage_plan_rejects_pre_contract_state(self) -> None:
+        scope_hash = self.init()
+        state = self.load("state.json")
+        state.pop("coverage_required", None)
+        state.pop("workflow_profile", None)
+        (self.run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        path = self.write_json("pre-contract-state.json", self.coverage_plan(scope_hash))
+        _, stderr = self.run_tool("record-coverage", "--repo-root", str(self.repo), "--run-id", self.run_id, "--input", str(path), expected=2)
+        self.assertIn("Run predates required coverage", stderr)
 
 
 if __name__ == "__main__":

@@ -637,7 +637,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("[FAIL] Interrupted", file=sys.stderr)
             return 130
-    return int(core.main(values))
+    return int(core.main(values, workflow_profile=PROFILE_NAME))
 
 
 if __name__ == "__main__":
