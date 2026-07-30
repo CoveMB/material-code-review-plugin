@@ -3050,6 +3050,8 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
         raise ReviewError("At least one --input candidate JSON file is required")
     if not is_simplification_state(state):
         require_current_material_review_contract(state)
+        if "coverage_plan_hash" not in state["hashes"]:
+            raise ReviewError("Coverage plan is not recorded")
         return command_ingest_material_review_candidates(args, repo=repo, run_dir=run_dir, state=state)
 
     reviewer_sets: list[dict[str, Any]] = []

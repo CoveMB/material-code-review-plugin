@@ -325,6 +325,55 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
 
+    def test_shipped_reviewer_prompts_bind_v2_assignments_in_source_and_archive(self) -> None:
+        required_tokens = (
+            "candidate-set-v2.schema.json",
+            "coverage_plan_hash",
+            "lens_id",
+            "reviewer_id",
+            "independence_group",
+            "review_mode",
+            "frozen source bundle",
+            "assigned risk evidence paths",
+            "actual process",
+        )
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            output = temp_root / "full-plugin.zip"
+            package_result = self.run_full_packager(
+                fixture_root,
+                output,
+                standalone_output=temp_root / "standalone.zip",
+            )
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+
+            source_prompts = {
+                path.relative_to(fixture_root).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted((fixture_root / "agents").glob("*-reviewer.md"))
+            }
+            self.assertEqual(
+                set(source_prompts),
+                {
+                    "agents/correctness-reviewer.md",
+                    "agents/risk-reviewer.md",
+                    "agents/standards-reviewer.md",
+                    "agents/test-reviewer.md",
+                },
+            )
+            with zipfile.ZipFile(output) as archive:
+                archive_prompts = {
+                    path: archive.read(path).decode("utf-8")
+                    for path in source_prompts
+                }
+
+        self.assertEqual(archive_prompts, source_prompts)
+        for path, prompt in source_prompts.items():
+            with self.subTest(prompt=path):
+                self.assertNotIn("candidate-set.schema.json", prompt)
+                for token in required_tokens:
+                    self.assertIn(token, prompt)
+
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",

@@ -1347,6 +1347,23 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse((self.run_dir / "candidates.json").exists())
         self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
 
+    def test_ingest_before_recording_coverage_leaves_run_and_candidate_artifacts_unchanged(self) -> None:
+        scope_hash = self.init()
+        candidate_path = self.write_json("unrecorded-candidate.json", self.candidate_set(scope_hash))
+        state_before = self.load("state.json")
+
+        _, stderr = self.ingest_candidate_paths([candidate_path], expected=2)
+
+        self.assertIn("Coverage plan is not recorded", stderr)
+        self.assertEqual(self.load("state.json"), state_before)
+        for artifact in (
+            "candidates.json",
+            "candidate-rejections.json",
+            "candidates.md",
+            "candidate-ingestion-failure.json",
+        ):
+            self.assertFalse((self.run_dir / artifact).exists(), artifact)
+
     def test_ingest_refuses_stale_plan_hash_and_wrong_lens(self) -> None:
         scope_hash = self.init_with_recorded_coverage()
         paths = self.candidate_paths_for_coverage(scope_hash)
