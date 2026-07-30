@@ -179,7 +179,7 @@ The controller writes the immutable plan and verified plan hash. Re-recording an
 
 #### 1.1 Reviewer selection
 
-Candidate generation is one bounded read-only wave. In Codex, use a bounded read-only `explorer` subagent or an installed project-scoped custom reviewer, seeded with `references/reviewer-template.md` and exactly one assigned lens. On another host, use the closest read-only subagent primitive. When subagents are unavailable, run the same assigned lenses sequentially. In every host, provide the frozen scope hash, verified coverage-plan hash, exact assigned lens ID, frozen source bundle, assigned risk evidence paths, repository constraints, and exact material-review/candidate-set/v2 schema.
+Candidate generation is one bounded read-only wave. In Codex, use a bounded read-only `explorer` subagent or an installed project-scoped custom reviewer, seeded with `references/reviewer-template.md` and exactly one assigned lens. On another host, use the closest read-only subagent primitive. When subagents are unavailable, run the same assigned lenses sequentially. In every host, provide the frozen scope hash, verified coverage-plan hash, exact assigned lens ID, assigned `reviewer_id`, `independence_group`, and `review_mode`, frozen source bundle, assigned risk evidence paths, repository constraints, and exact material-review/candidate-set/v2 schema. Reviewers must echo those assigned values unchanged.
 
 Always cover:
 
@@ -220,7 +220,7 @@ Obtain explicit user permission for that egress. A failed or unverifiable extern
 
 #### 1.3 Candidate contract
 
-Each reviewer returns JSON conforming to `schemas/candidate-set-v2.schema.json`, including the verified coverage-plan hash and exact assigned lens ID. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`. A reviewer may not substitute, mention, or return an unassigned lens.
+Each reviewer returns JSON conforming to `schemas/candidate-set-v2.schema.json`, including the verified coverage-plan hash, exact assigned lens ID, and the assigned `reviewer_id`, `independence_group`, and `review_mode`; reviewers must echo those assigned values unchanged. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`. A reviewer may not substitute, mention, or return an unassigned lens.
 
 A reviewer must actively check for:
 

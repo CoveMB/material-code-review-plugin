@@ -36,6 +36,14 @@ class DiscoveryContractTests(unittest.TestCase):
             self.assertIn('nature="risk"', text)
             self.assertIn("do not authorize relaxing the guard", text)
 
+    def test_dispatch_binds_assigned_reviewer_identity(self) -> None:
+        skill = self.read("SKILL.md")
+        reviewer = self.read("references/reviewer-template.md")
+        for text in (skill, reviewer):
+            self.assertIn("assigned `reviewer_id`, `independence_group`, and `review_mode`", text)
+            self.assertIn("echo those assigned values unchanged", text)
+        self.assertNotIn("Use a unique `reviewer_id`", reviewer)
+
 
 if __name__ == "__main__":
     unittest.main()
