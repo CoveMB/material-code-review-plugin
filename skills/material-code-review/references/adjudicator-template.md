@@ -17,6 +17,8 @@ Synthesize the normalized candidate bundle and validator results into a complete
 11. Set both `repair_direction` and `repair_audit` to null for every discarded group.
 12. Select the merge-readiness verdict from actual kept findings.
 
+A stricter guard is a defect only with affirmative supported-state evidence. Sufficient authority includes an explicit requirement or user promise, an accepted schema state, a causal test, or baseline behavior shown to be an accepted or relied-upon compatibility state. Mere historical acceptance or the fact that a guard blocks an input is not enough when intentional fail-closed validation remains plausible. Discard an unsupported medium/low claim as `CONSEQUENCE_UNSUPPORTED`. When the consequence is plausibly blocker/high but support status is genuinely unknown, retain it only as `nature="risk"`, require a user decision and exact pre-fix verification, and do not authorize relaxing the guard until support is established and the plan is revalidated.
+
 ## Output
 
 Return exactly one object conforming to `schemas/adjudication.schema.json`. Every normalized candidate ID must appear in exactly one group. Every kept group must carry a valid bound audit; the controller rejects absent, stale, falsely independent, or ineligible controller-direct records. Kept groups receive stable `F###` identifiers later from the controller; do not assign them yourself.

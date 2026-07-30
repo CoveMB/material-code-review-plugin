@@ -2,11 +2,20 @@
 
 The canonical skill defines the judgment contract. `reviewctl.py` enforces state, hashes, exact IDs, paths, test records, checkpoints, and bounded loops.
 
+Discovery order is fixed:
+
+```text
+init -> context record -> record-coverage -> dispatch assigned lenses ->
+ingest complete candidate wave -> validate -> repair-direction audit ->
+compile-ledger -> Gate A -> validate plan -> Gate B
+```
+
 | State | Command | Result |
 |---|---|---|
 | new | `init` | `CONTEXT_FROZEN` and immutable source/diff bundle |
 | context | `check-scope` | confirms current identity still matches |
-| context | `ingest-candidates --input ...` | validates reviewer JSON and writes normalized candidate bundle |
+| context | `record-coverage --input ...` | validates and records the immutable scope-bound coverage plan; an identical plan is idempotent and a changed plan requires a new run |
+| context with verified coverage plan | `ingest-candidates --input ...` | accepts only a complete valid candidate wave and writes the normalized candidate bundle |
 | candidates | provisional grouping + repair audit | partitions every candidate once and binds every provisionally kept direction to scope, candidate IDs, and direction hash |
 | audited provisional groups | `compile-ledger --input ...` | validates complete final adjudication and assigns stable `F###` IDs |
 | adjudicated | `gate-findings ...` | records user dispositions and Gate A receipt |

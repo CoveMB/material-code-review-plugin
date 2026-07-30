@@ -159,11 +159,27 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .
 
 A mismatch means prior reviewer output is stale. Do not “adjust mentally”; reinitialize or regenerate affected artifacts.
 
+#### 0.4 Record exhaustive targeted coverage
+
+Before reviewer dispatch, make exactly one positive or negative `risk_assessments` entry for each controlled code: `user_selectable_output_paths` and `persisted_config_semantics`. Each entry has explicit boolean `present`, a non-empty rationale, and `evidence_paths`: a positive entry names at least one unique normalized frozen-scope path, while a negative entry has no paths and records the checked non-trigger evidence. Filenames alone do not establish a trigger.
+
+`user_selectable_output_paths` is present when changed behavior writes multiple authoritative or auxiliary artifacts and at least one destination is user-selectable, including when the selectable path predates the diff but a new artifact, writer, cleanup target, or write order creates a new collision opportunity. `persisted_config_semantics` is present when changed behavior alters the accepted shape, serialization, default, missing-key fallback, interpretation, migration, durable output, or downstream local/remote identity of an optional persisted field. Use `references/context-checklist.md` for positive and negative evidence.
+
+Build and record one scope-hash-bound `material-review/coverage-plan/v1` before dispatch. It must assign `correctness`, `test_adequacy`, and `standards_alignment` as required lenses; a present `user_selectable_output_paths` additionally requires `reliability`; and a present `persisted_config_semantics` additionally requires `migration_data_safety` and `api_config_compatibility`. An optional lens cannot replace a required assignment. The plan records the actual `reviewer_id`, `independence_group`, and `review_mode` for each unique `lens_id`; repeated reviewer identities are allowed, but persona labels are not evidence of independent corroboration.
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" record-coverage \
+  --repo-root . \
+  --input /tmp/coverage-plan.json
+```
+
+The controller writes the immutable plan and verified plan hash. Re-recording an identical plan is idempotent; any different, orphaned, missing-bound, or failed-hash plan requires a new run. Recording does not grant repair authority or advance past `CONTEXT_FROZEN`.
+
 ### Phase 1 — Generate candidates
 
 #### 1.1 Reviewer selection
 
-Candidate generation is one bounded read-only wave. In Codex, use a bounded read-only `explorer` subagent or an installed project-scoped custom reviewer, seeded with `references/reviewer-template.md` and exactly one applicable lens. On another host, use the closest read-only subagent primitive. When subagents are unavailable, run the same lenses sequentially. In every host, provide the frozen scope hash, source bundle, repository constraints, and exact output schema.
+Candidate generation is one bounded read-only wave. In Codex, use a bounded read-only `explorer` subagent or an installed project-scoped custom reviewer, seeded with `references/reviewer-template.md` and exactly one assigned lens. On another host, use the closest read-only subagent primitive. When subagents are unavailable, run the same assigned lenses sequentially. In every host, provide the frozen scope hash, verified coverage-plan hash, exact assigned lens ID, frozen source bundle, assigned risk evidence paths, repository constraints, and exact material-review/candidate-set/v2 schema.
 
 Always cover:
 
@@ -171,7 +187,7 @@ Always cover:
 - test adequacy for fragile changed behavior;
 - repository standards and explicit requirement/plan alignment.
 
-Select conditional lenses only when the diff contains a real concern:
+The recorded coverage plan selects the required targeted lenses. Add other conditional lenses only when the diff contains a real concern:
 
 - security/privacy/authorization/input trust;
 - reliability/retries/timeouts/error handling/background work;
@@ -184,7 +200,7 @@ Select conditional lenses only when the diff contains a real concern:
 
 Do not spawn a specialist from a filename alone. Conversely, verification mechanisms that can silently pass while the product is broken warrant an adversarial lens even when the diff is small.
 
-For a trivial, low-risk, code-only diff, an inline controller pass plus correctness and standards may be sufficient. Any unknown scope signal, configuration/schema/CI change, security-sensitive behavior, public contract, concurrency, migration, or uncounted file type fails closed to the fuller roster.
+For a trivial, low-risk, code-only diff, the plan still requires its core assignments. Any unknown scope signal, configuration/schema/CI change, security-sensitive behavior, public contract, concurrency, migration, or uncounted file type fails closed to the fuller roster.
 
 #### 1.2 Independence and scheduling
 
@@ -204,7 +220,7 @@ Obtain explicit user permission for that egress. A failed or unverifiable extern
 
 #### 1.3 Candidate contract
 
-Each reviewer returns JSON conforming to `schemas/candidate-set.schema.json`. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`.
+Each reviewer returns JSON conforming to `schemas/candidate-set-v2.schema.json`, including the verified coverage-plan hash and exact assigned lens ID. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`. A reviewer may not substitute, mention, or return an unassigned lens.
 
 A reviewer must actively check for:
 
@@ -225,7 +241,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" ingest-candidates \
   --input /tmp/reviewer-testing.json
 ```
 
-The tool verifies scope hashes, required fields, changed-path relation, source-side evidence, and ID uniqueness. Malformed findings are rejected visibly in the ingestion report; do not repair their substance during adjudication by guessing.
+The tool validates the complete candidate wave in memory: each required assignment has exactly one identity-matched v2 result, every declared coverage path is frozen-scope-bound, and each targeted lens covers its assigned risk evidence paths. It rejects missing, duplicate, stale, wrong-lens, unassigned, or risk-path-incomplete results without replacing authoritative candidates; missing assignments report `Missing required review coverage`, and an ingestion-failure diagnostic is non-authoritative. Until the complete valid wave exists, do not synthesize, ingest a candidate bundle, validate, or issue any verdict; only non-authoritative failure diagnostics may be recorded. Malformed findings are rejected visibly; do not repair their substance during adjudication by guessing.
 
 ### Phase 2 — Validate and adjudicate
 
@@ -274,6 +290,8 @@ The adjudicator must:
 9. produce no new finding that lacks a candidate ID.
 
 A serious evidenced defect may be kept even when the eventual fix is large or risky; that risk belongs in planning and Gate B. Optional simplification, DRY, or architecture candidates require demonstrated current cost and a change that is safer than leaving the cost in place.
+
+A stricter guard is a defect only with affirmative supported-state evidence. Sufficient authority includes an explicit requirement or user promise, an accepted schema state, a causal test, or baseline behavior shown to be an accepted or relied-upon compatibility state. Mere historical acceptance or the fact that a guard blocks an input is not enough when intentional fail-closed validation remains plausible. Discard an unsupported medium/low claim as `CONSEQUENCE_UNSUPPORTED`. When the consequence is plausibly blocker/high but support status is genuinely unknown, retain it only as `nature="risk"`, require a user decision and exact pre-fix verification, and do not authorize relaxing the guard until support is established and the plan is revalidated.
 
 Compile the ledger:
 
@@ -569,6 +587,8 @@ Read `references/failure-model.md`. In summary:
 Load references only at the stage that needs them:
 
 - `references/context-checklist.md` — Phase 0
+- `references/reliability-output-integrity-lens.md` — assigned `reliability` lens for present `user_selectable_output_paths`
+- `references/persisted-config-migration-lens.md` — assigned `migration_data_safety` or `api_config_compatibility` lens for present `persisted_config_semantics`
 - `references/materiality-rubric.md` — Phases 1–2
 - `references/remediation-rubric.md` — repair-direction audit, adjudication, and planning
 - `references/test-evidence-rubric.md` — coverage findings and repair-test design
