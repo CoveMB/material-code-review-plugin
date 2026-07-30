@@ -101,6 +101,10 @@ A fresh read-only judge checks anonymous artifacts against the frozen source and
 
 The result is trusted-local, directional evidence, not a publication-grade benchmark. The workflow has no Docker containment, CI/CD trigger, automatic resume, numeric score, or automatic publication. An interrupted run is preserved locally and a later attempt requires a new invocation. Raw ignored `.evaluation-runs/` artifacts may contain machine paths and are not automatically sanitized. Packaging excludes the evaluator skill, evaluation assets, and local run data from every full and standalone archive.
 
+### Targeted-review confirmation note
+
+In the prior single trial, the migration finding was mechanistically associated with adding a specialist lens, while the report-alias and precision results reflected attention variance converted into explicit checks. The base remained stronger overall in that run. These observations are directional and mechanistic evidence only, not causal proof or a claim of general performance.
+
 This explicit workflow invokes the selected materialized skill. It does not evaluate or prove implicit skill selection, which remains model-mediated. The full live comparison is manual because it consumes agent resources; `make validate` and CI exercise only source and package boundaries.
 
 ### Known macOS packaging fixture failure

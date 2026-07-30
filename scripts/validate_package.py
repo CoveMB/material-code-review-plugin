@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -33,6 +33,16 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Implicit eligibility requires both conditions in the prompt itself.**",
     "**Context cannot create eligibility.**",
     "**Fail closed before initialization.**",
+)
+CONTROLLED_WORKFLOW_MARKERS = (
+    "risk_assessments",
+    "record-coverage",
+    "material-review/candidate-set/v2",
+    "user_selectable_output_paths",
+    "persisted_config_semantics",
+    "Missing required review coverage",
+    "CONSEQUENCE_UNSUPPORTED",
+    "plausibly blocker/high",
 )
 
 DISTRIBUTABLE_REQUIRED = {
@@ -57,13 +67,18 @@ DISTRIBUTABLE_REQUIRED = {
     "skills/material-code-review/agents/openai.yaml",
     "skills/material-code-review/scripts/reviewctl.py",
     "skills/material-code-review/tests/test_reviewctl.py",
+    "skills/material-code-review/tests/test_discovery_contract.py",
     "skills/material-code-review/schemas/candidate-set.schema.json",
+    "skills/material-code-review/schemas/candidate-set-v2.schema.json",
+    "skills/material-code-review/schemas/coverage-plan.schema.json",
     "skills/material-code-review/schemas/adjudication.schema.json",
     "skills/material-code-review/schemas/fix-plan.schema.json",
     "skills/material-code-review/schemas/verification.schema.json",
     "skills/material-code-review/references/remediation-rubric.md",
     "skills/material-code-review/references/test-evidence-rubric.md",
     "skills/material-code-review/references/remediation-auditor-template.md",
+    "skills/material-code-review/references/reliability-output-integrity-lens.md",
+    "skills/material-code-review/references/persisted-config-migration-lens.md",
     "examples/codex-project-config/.codex/config.toml",
     "examples/codex-project-config/.codex/agents/material_candidate.toml",
     "examples/codex-project-config/.codex/agents/material_validator.toml",
@@ -761,6 +776,9 @@ def check_source_package(
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 fail(errors, f"canonical skill activation preflight missing marker: {marker}")
+        for marker in CONTROLLED_WORKFLOW_MARKERS:
+            if marker not in text:
+                fail(errors, f"canonical skill controlled workflow marker missing: {marker}")
 
     for path in sorted((root / "skills/material-code-review/schemas").glob("*.json")):
         data = load_json(path, errors)
@@ -853,7 +871,17 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                 if raw_name == canonical_name
             }
             required = (
-                {"SKILL.md", "agents/openai.yaml", "scripts/reviewctl.py", "schemas/candidate-set.schema.json"}
+                {
+                    "SKILL.md",
+                    "agents/openai.yaml",
+                    "scripts/reviewctl.py",
+                    "schemas/candidate-set.schema.json",
+                    "schemas/candidate-set-v2.schema.json",
+                    "schemas/coverage-plan.schema.json",
+                    "references/reliability-output-integrity-lens.md",
+                    "references/persisted-config-migration-lens.md",
+                    "tests/test_discovery_contract.py",
+                }
                 if standalone
                 else {
                     "SKILL.md",
@@ -862,6 +890,11 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                     "skills/material-code-review/SKILL.md",
                     "skills/material-code-review/agents/openai.yaml",
                     "scripts/package_plugin.py",
+                    "skills/material-code-review/schemas/candidate-set-v2.schema.json",
+                    "skills/material-code-review/schemas/coverage-plan.schema.json",
+                    "skills/material-code-review/references/reliability-output-integrity-lens.md",
+                    "skills/material-code-review/references/persisted-config-migration-lens.md",
+                    "skills/material-code-review/tests/test_discovery_contract.py",
                 }
             )
             for rel in sorted(required - names):

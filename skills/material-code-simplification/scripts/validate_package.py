@@ -16,7 +16,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+CORE_VERSION = "1.3.0"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -43,6 +44,8 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "SECURITY.md",
     "core/reviewctl.py",
     "core/schemas/candidate-set.schema.json",
+    "core/schemas/candidate-set-v2.schema.json",
+    "core/schemas/coverage-plan.schema.json",
     "core/schemas/adjudication.schema.json",
     "core/schemas/fix-plan.schema.json",
     "core/schemas/verification.schema.json",
@@ -204,6 +207,18 @@ def validate_archive(archive_path: Path) -> list[str]:
                 )
                 if "$material-code-simplification" not in yaml_text:
                     errors.append(f"{archive_path.name}: openai.yaml invocation mismatch")
+            if "core/reviewctl.py" in seen:
+                controller_text = archive.read(info_by_name["core/reviewctl.py"]).decode(
+                    "utf-8", errors="replace"
+                )
+                if f'TOOL_VERSION = "{CORE_VERSION}"' not in controller_text:
+                    errors.append(f"{archive_path.name}: embedded reviewctl version mismatch")
+            if "scripts/simplifyctl.py" in seen:
+                adapter_text = archive.read(info_by_name["scripts/simplifyctl.py"]).decode(
+                    "utf-8", errors="replace"
+                )
+                if f'ADAPTER_VERSION = "{VERSION}"' not in adapter_text:
+                    errors.append(f"{archive_path.name}: embedded simplifyctl version mismatch")
 
             if not errors:
                 errors.extend(validate_extracted_archive(archive, members, archive_path))
@@ -264,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         layout, controller, schema_dir, core_reference_dir = core_layout
         for name in (
             "candidate-set.schema.json",
+            "candidate-set-v2.schema.json",
+            "coverage-plan.schema.json",
             "adjudication.schema.json",
             "fix-plan.schema.json",
             "verification.schema.json",
@@ -277,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if not (core_reference_dir / name).is_file():
                 errors.append(f"missing shared repair-direction reference: {core_reference_dir / name}")
+        if controller.is_file() and f'TOOL_VERSION = "{CORE_VERSION}"' not in controller.read_text(encoding="utf-8"):
+            errors.append("shared reviewctl version mismatch")
 
     skill = ROOT / "SKILL.md"
     if skill.is_file():
@@ -286,6 +305,10 @@ def main(argv: list[str] | None = None) -> int:
         for rel in sorted(set(re.findall(r"`((?:references|examples)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")
+
+    adapter = ROOT / "scripts" / "simplifyctl.py"
+    if adapter.is_file() and f'ADAPTER_VERSION = "{VERSION}"' not in adapter.read_text(encoding="utf-8"):
+        errors.append("simplifyctl version mismatch")
 
     if schema_dir.is_dir():
         for path in schema_dir.glob("*.json"):

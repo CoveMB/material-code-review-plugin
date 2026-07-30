@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.3.0"
 STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"

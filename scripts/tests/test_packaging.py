@@ -99,6 +99,8 @@ class StandalonePackagingTests(unittest.TestCase):
         self,
         fixture_root: Path,
         output: Path,
+        *,
+        standalone_output: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         packager = fixture_root / FULL_PACKAGER.relative_to(REPOSITORY_ROOT)
         return subprocess.run(
@@ -111,7 +113,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 "--output",
                 str(output),
                 "--standalone-output",
-                "",
+                "" if standalone_output is None else str(standalone_output),
             ],
             capture_output=True,
             text=True,
@@ -1245,6 +1247,37 @@ class StandalonePackagingTests(unittest.TestCase):
                     relative,
                 )
 
+    def test_review_archives_ship_targeted_coverage_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            full_output = temp_root / "full-plugin.zip"
+            standalone_output = temp_root / "material-review.zip"
+            result = self.run_full_packager(
+                fixture_root,
+                full_output,
+                standalone_output=standalone_output,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            full_required = {
+                "skills/material-code-review/schemas/coverage-plan.schema.json",
+                "skills/material-code-review/schemas/candidate-set-v2.schema.json",
+                "skills/material-code-review/references/reliability-output-integrity-lens.md",
+                "skills/material-code-review/references/persisted-config-migration-lens.md",
+                "skills/material-code-review/tests/test_discovery_contract.py",
+            }
+            with zipfile.ZipFile(full_output) as archive:
+                self.assertTrue(full_required.issubset(set(archive.namelist())))
+            standalone_required = {
+                "schemas/coverage-plan.schema.json",
+                "schemas/candidate-set-v2.schema.json",
+                "references/reliability-output-integrity-lens.md",
+                "references/persisted-config-migration-lens.md",
+                "tests/test_discovery_contract.py",
+            }
+            with zipfile.ZipFile(standalone_output) as archive:
+                self.assertTrue(standalone_required.issubset(set(archive.namelist())))
+
     def test_extracted_full_archive_runs_retained_validation_surface(self) -> None:
         if DISTRIBUTION_LAYOUT:
             for relative in (
@@ -1299,7 +1332,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertIn(
-                "material-code-review package 1.2.0 is structurally valid",
+                "material-code-review package 1.3.0 is structurally valid",
                 validation_result.stdout,
             )
             targeted_test_result = subprocess.run(
@@ -1363,7 +1396,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertTrue(
-                (distribution_directory / "material-code-review-plugin-1.2.0.zip").is_file()
+                (distribution_directory / "material-code-review-plugin-1.3.0.zip").is_file()
             )
 
     @unittest.skipIf(
@@ -1536,6 +1569,8 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertEqual(package_result.returncode, 0, package_result.stderr)
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
+                controller = archive.read("core/reviewctl.py").decode("utf-8")
+                adapter = archive.read("scripts/simplifyctl.py").decode("utf-8")
             self.assertTrue(
                 {
                     "core/references/remediation-auditor-template.md",
@@ -1543,10 +1578,25 @@ class StandalonePackagingTests(unittest.TestCase):
                     "core/references/test-evidence-rubric.md",
                 }.issubset(names)
             )
+            self.assertTrue(
+                {
+                    "core/schemas/candidate-set.schema.json",
+                    "core/schemas/candidate-set-v2.schema.json",
+                    "core/schemas/coverage-plan.schema.json",
+                }.issubset(names)
+            )
+            self.assertIn(
+                'TOOL_VERSION = "1.3.0"',
+                controller,
+            )
+            self.assertIn(
+                'ADAPTER_VERSION = "1.2.0"',
+                adapter,
+            )
 
     def test_release_versions_are_aligned_and_independent(self) -> None:
-        full_version = "1.2.0"
-        simplification_version = "1.1.0"
+        full_version = "1.3.0"
+        simplification_version = "1.2.0"
 
         for relative in (
             ".codex-plugin/plugin.json",

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 — 2026-07-29
+
+- Added immutable exhaustive coverage plans and candidate-set/v2 bindings, including targeted reliability and persisted-configuration/migration lenses.
+- Added strict-guard evidence handling, including the visible high-impact risk exception and `CONSEQUENCE_UNSUPPORTED` disposition for unsupported lower-impact claims.
+- Legacy material-review runs restart under the new contract; they are not migrated. Existing checkpointed work remains safely restorable before a new run begins.
+- Ambiguous delegated material-simplification runs restart rather than inherit material-review v2 coverage semantics; simplification remains on candidate-set/v1.
+- Preserved Gate A and Gate B, no mutation before Gate B, bounded repair/restoration, publication controls, and source-egress authorization requirements.
+- Released the full plugin and standalone material-review skill as 1.3.0, and the standalone material-simplification skill as 1.2.0 with embedded shared-controller provenance.
+
 ## 1.2.0 — 2026-07-26
 
 - Added provisional grouping followed by a mandatory, hash-bound repair-direction audit for every retained finding.

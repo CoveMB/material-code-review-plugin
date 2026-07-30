@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 SKILL_NAME = "material-code-simplification"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 FIXED_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
 EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}

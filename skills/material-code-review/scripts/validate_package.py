@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -24,17 +24,32 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Context cannot create eligibility.**",
     "**Fail closed before initialization.**",
 )
+CONTROLLED_WORKFLOW_MARKERS = (
+    "risk_assessments",
+    "record-coverage",
+    "material-review/candidate-set/v2",
+    "user_selectable_output_paths",
+    "persisted_config_semantics",
+    "Missing required review coverage",
+    "CONSEQUENCE_UNSUPPORTED",
+    "plausibly blocker/high",
+)
 REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
     "scripts/reviewctl.py",
     "scripts/validate_package.py",
     "tests/test_reviewctl.py",
+    "tests/test_discovery_contract.py",
     "schemas/candidate-set.schema.json",
+    "schemas/candidate-set-v2.schema.json",
+    "schemas/coverage-plan.schema.json",
     "schemas/adjudication.schema.json",
     "schemas/fix-plan.schema.json",
     "schemas/verification.schema.json",
     "references/context-checklist.md",
+    "references/reliability-output-integrity-lens.md",
+    "references/persisted-config-migration-lens.md",
     "references/materiality-rubric.md",
     "references/remediation-rubric.md",
     "references/test-evidence-rubric.md",
@@ -104,6 +119,9 @@ def main() -> int:
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 errors.append(f"SKILL.md activation preflight missing marker: {marker}")
+        for marker in CONTROLLED_WORKFLOW_MARKERS:
+            if marker not in text:
+                errors.append(f"SKILL.md controlled workflow marker missing: {marker}")
         for rel in sorted(set(re.findall(r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")

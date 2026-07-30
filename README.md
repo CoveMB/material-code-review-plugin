@@ -2,7 +2,7 @@
 
 `material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact scope, gathers repository context, captures candidates, independently validates them, and produces a complete kept/discarded ledger. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
+The package freezes the exact scope, records exhaustive review coverage before the candidate wave, independently validates candidates, and produces a complete kept/discarded ledger. Candidate-set/v2 binds each assigned lens and risk path; targeted reliability and persisted-configuration lenses run when the recorded risk assessment requires them. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -67,7 +67,7 @@ The controller uses only the Python standard library.
 Extract the archive first:
 
 ```bash
-unzip material-code-review-plugin-1.2.0.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.3.0.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a local Codex marketplace:
@@ -95,7 +95,7 @@ Use the smaller archive for direct Codex skill installation:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.2.0.zip \
+unzip material-code-review-codex-skill-1.3.0.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -122,11 +122,11 @@ The full plugin already includes material simplification. For a compact direct S
 ```bash
 make package-simplification
 mkdir -p "$HOME/.agents/skills/material-code-simplification"
-unzip material-code-simplification-codex-skill-1.1.0.zip \
+unzip material-code-simplification-codex-skill-1.2.0.zip \
   -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-Its `core/` directory contains the shared controller, schemas, remediation auditor, remediation rubric, and causal test-evidence rubric needed to preserve the same two-gate lifecycle without the full plugin layout.
+Its `core/` directory embeds the shared 1.3.0 controller and all core schemas for runtime provenance and layout. New simplification runs remain on candidate-set/v1 semantics: the material-review v2 coverage policy and specialist lenses do not apply to simplification.
 
 ## Optional project-scoped Codex reviewers
 
@@ -276,12 +276,12 @@ Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may co
 Packaging produces:
 
 ```text
-material-code-review-plugin-1.2.0.zip
-material-code-review-plugin-1.2.0.zip.sha256
-material-code-review-codex-skill-1.2.0.zip
-material-code-review-codex-skill-1.2.0.zip.sha256
-material-code-simplification-codex-skill-1.1.0.zip
-material-code-simplification-codex-skill-1.1.0.zip.sha256
+material-code-review-plugin-1.3.0.zip
+material-code-review-plugin-1.3.0.zip.sha256
+material-code-review-codex-skill-1.3.0.zip
+material-code-review-codex-skill-1.3.0.zip.sha256
+material-code-simplification-codex-skill-1.2.0.zip
+material-code-simplification-codex-skill-1.2.0.zip.sha256
 ```
 
 The full ZIP is the recommended dual-host distribution. The material-review and independently versioned material-simplification ZIPs are compact Agent Skills/Codex imports.
