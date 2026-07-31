@@ -2,7 +2,7 @@
 
 ## Compatibility decision
 
-Version 1.3.0 is natively compatible with the current Codex plugin system and also remains portable as an Agent Skill. It adds immutable exhaustive review coverage, candidate-set/v2 binding, targeted reliability and persisted-configuration lenses, and strict-guard evidence while retaining the two mandatory user gates and restoration model. The full plugin also contains material simplification, whose standalone archive is independently versioned at 1.2.0.
+Version 1.3.0 is natively compatible with the current Codex plugin system and also remains portable as an Agent Skill. It adds immutable exhaustive review coverage, candidate-set/v2 binding, deterministic candidate lens provenance, targeted reliability and persisted-configuration lenses, and strict-guard evidence while retaining the two mandatory user gates and restoration model. New material-review runs use state/v2 with candidates-normalized/v2, adjudication/v4, and ledger/v4; source lenses are derived exactly from candidate IDs. Material-review state/v1 and old or lens-less current artifacts are not migrated or backfilled. Unmarked runs remain limited to observation and checkpointed restoration, while marked final-repair runs may refresh approved tests and complete verification without reopening attempts. The full plugin also contains material simplification, whose explicit-profile state/v1 and candidates-normalized/v1, adjudication/v3, ledger/v3 contracts plus standalone archive version 1.2.0 remain unchanged.
 
 The native package surfaces are:
 
@@ -52,7 +52,7 @@ Restart Codex if it does not detect the skill immediately. An OpenAI Skills surf
 
 Its archive root contains the canonical `SKILL.md`, `agents/openai.yaml`, controller, schemas, references, examples, and tests.
 
-For a simplification-only installation, use `material-code-simplification-codex-skill-1.2.0.zip`. Its `core/` layout carries the shared 1.3.0 controller, all core schemas, and repair-direction references; new simplification runs retain candidate-set/v1 semantics and do not adopt material-review v2 coverage or specialist policy.
+For a simplification-only installation, use `material-code-simplification-codex-skill-1.2.0.zip`. Its `core/` layout carries the shared 1.3.0 controller, all core schemas, and repair-direction references; new explicitly profiled simplification runs retain state/v1, candidate-set/v1, candidates-normalized/v1, adjudication/v3, and ledger/v3 semantics and do not adopt material-review state/v2, source-lens provenance, coverage, or specialist policy.
 
 ## Invocation
 

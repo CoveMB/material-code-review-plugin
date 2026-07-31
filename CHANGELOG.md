@@ -3,8 +3,11 @@
 ## 1.3.0 — 2026-07-29
 
 - Added immutable exhaustive coverage plans and candidate-set/v2 bindings, including targeted reliability and persisted-configuration/migration lenses.
+- Added deterministic material-review lens provenance through candidates-normalized/v2, adjudication/v4, and ledger/v4, including exact candidate-derived source lenses and stable tied-candidate IDs.
+- Kept explicit material simplification isolated on candidates-normalized/v1, adjudication/v3, and ledger/v3; legacy or lens-less material-review artifacts are never backfilled or rewritten and require restart except for bounded final-repair completion.
+- New material-review runs use state/v2 so controller 1.2 rejects them before forward mutation; material-review state/v1 is not migrated, while marked final-repair runs may refresh approved tests and complete verification without reopening attempts. Explicitly profiled simplification stays fully functional on state/v1.
 - Added strict-guard evidence handling, including the visible high-impact risk exception and `CONSEQUENCE_UNSUPPORTED` disposition for unsupported lower-impact claims.
-- Legacy material-review runs restart under the new contract; they are not migrated. Existing checkpointed work remains safely restorable before a new run begins.
+- Unmarked legacy material-review runs restart under the new contract; they are not migrated. Existing checkpointed work remains safely restorable before a new run begins.
 - Ambiguous delegated material-simplification runs restart rather than inherit material-review v2 coverage semantics; simplification remains on candidate-set/v1.
 - Preserved Gate A and Gate B, no mutation before Gate B, bounded repair/restoration, publication controls, and source-egress authorization requirements.
 - Released the full plugin and standalone material-review skill as 1.3.0, and the standalone material-simplification skill as 1.2.0 with embedded shared-controller provenance.

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -47,6 +48,7 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "core/schemas/candidate-set-v2.schema.json",
     "core/schemas/coverage-plan.schema.json",
     "core/schemas/adjudication.schema.json",
+    "core/schemas/adjudication-v4.schema.json",
     "core/schemas/fix-plan.schema.json",
     "core/schemas/verification.schema.json",
     "core/references/remediation-auditor-template.md",
@@ -67,6 +69,230 @@ ARCHIVE_FORBIDDEN_PARTS = {
 }
 ARCHIVE_FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
 ARCHIVE_COMMENT = f"material-code-simplification standalone Agent Skill {VERSION}".encode("utf-8")
+
+
+def validate_static_version_declaration(
+    source: str | bytes,
+    constant_name: str,
+    expected_value: str,
+    inspected_path: str,
+) -> str | None:
+    """Statically certify one direct module-scope string declaration.
+
+    This deliberately does not model dynamic rebinding performed by later calls,
+    ``exec``, ``globals()``, or import hooks; it never executes inspected source.
+    """
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{inspected_path}: {constant_name} declaration has invalid UTF-8"
+    try:
+        tree = ast.parse(source, filename=inspected_path)
+    except SyntaxError:
+        return f"{inspected_path}: {constant_name} declaration has invalid syntax"
+
+    class BindingVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.bindings: list[bool] = []
+            self.direct_values: list[str] = []
+            self.recording_module_bindings = True
+            self.accepting_direct_declaration = True
+
+        def record_binding(self, *, direct: bool = False) -> None:
+            if self.recording_module_bindings:
+                self.bindings.append(direct)
+
+        def record_target(self, target: ast.AST, *, direct: bool = False) -> None:
+            if isinstance(target, ast.Name):
+                if (
+                    target.id == constant_name
+                    and isinstance(target.ctx, (ast.Store, ast.Del))
+                ):
+                    self.record_binding(direct=direct)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for element in target.elts:
+                    self.record_target(element)
+            elif isinstance(target, ast.Starred):
+                self.record_target(target.value)
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            direct = (
+                self.accepting_direct_declaration
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == constant_name
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            )
+            for target in node.targets:
+                self.record_target(target, direct=direct and target is node.targets[0])
+            if direct:
+                self.direct_values.append(node.value.value)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        def visit_Delete(self, node: ast.Delete) -> None:
+            for target in node.targets:
+                self.record_target(target)
+            self.generic_visit(node)
+
+        def visit_For(self, node: ast.For) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        visit_AsyncFor = visit_For
+
+        def visit_With(self, node: ast.With) -> None:
+            for item in node.items:
+                if item.optional_vars is not None:
+                    self.record_target(item.optional_vars)
+            self.generic_visit(node)
+
+        visit_AsyncWith = visit_With
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                if (alias.asname or alias.name.split(".", 1)[0]) == constant_name:
+                    self.record_binding()
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for alias in node.names:
+                if alias.name == "*" or (alias.asname or alias.name) == constant_name:
+                    self.record_binding()
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.name == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def visit_MatchAs(self, node: ast.MatchAs) -> None:
+            if node.name == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def visit_MatchStar(self, node: ast.MatchStar) -> None:
+            if node.name == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+            if node.rest == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def record_definition_name(self, name: str) -> None:
+            if name == constant_name:
+                self.record_binding()
+
+        def class_body_declares_global(self, statements: list[ast.stmt]) -> bool:
+            class GlobalFinder(ast.NodeVisitor):
+                def __init__(self) -> None:
+                    self.found = False
+
+                def visit_Global(self, node: ast.Global) -> None:
+                    if constant_name in node.names:
+                        self.found = True
+
+                def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                    pass
+
+                visit_AsyncFunctionDef = visit_FunctionDef
+
+                def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                    pass
+
+                def visit_Lambda(self, node: ast.Lambda) -> None:
+                    pass
+
+            finder = GlobalFinder()
+            for statement in statements:
+                finder.visit(statement)
+            return finder.found
+
+        def visit_function_expressions(
+            self, node: ast.FunctionDef | ast.AsyncFunctionDef
+        ) -> None:
+            self.record_definition_name(node.name)
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            arguments = node.args
+            for default in (*arguments.defaults, *arguments.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+            for argument in (
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            ):
+                if argument.annotation is not None:
+                    self.visit(argument.annotation)
+            for argument in (arguments.vararg, arguments.kwarg):
+                if argument is not None and argument.annotation is not None:
+                    self.visit(argument.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
+            for type_parameter in getattr(node, "type_params", ()):
+                self.visit(type_parameter)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.visit_function_expressions(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self.visit_function_expressions(node)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self.record_definition_name(node.name)
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for base in node.bases:
+                self.visit(base)
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+            for type_parameter in getattr(node, "type_params", ()):
+                self.visit(type_parameter)
+            previous_recording = self.recording_module_bindings
+            previous_accepting = self.accepting_direct_declaration
+            self.recording_module_bindings = self.class_body_declares_global(node.body)
+            self.accepting_direct_declaration = False
+            try:
+                for statement in node.body:
+                    self.visit(statement)
+            finally:
+                self.recording_module_bindings = previous_recording
+                self.accepting_direct_declaration = previous_accepting
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+
+    visitor = BindingVisitor()
+    visitor.visit(tree)
+    if not visitor.bindings:
+        return f"{inspected_path}: {constant_name} declaration is missing"
+    if len(visitor.bindings) != 1:
+        return f"{inspected_path}: {constant_name} declaration is duplicate/competing"
+    if not visitor.bindings[0]:
+        return f"{inspected_path}: {constant_name} declaration is non-direct/nonliteral"
+    actual_value = visitor.direct_values[0]
+    if actual_value != expected_value:
+        return (
+            f"{inspected_path}: {constant_name} declaration has wrong value "
+            f"{actual_value!r}; expected {expected_value!r}"
+        )
+    return None
 
 
 def normalize_archive_member(name: str) -> str:
@@ -197,6 +423,9 @@ def validate_archive(archive_path: Path) -> list[str]:
                 if info.create_system != 3 or not ((info.external_attr >> 16) & stat.S_IXUSR):
                     errors.append(f"{archive_path.name}: executable mode missing: {name}")
 
+            if errors:
+                return errors
+
             if "SKILL.md" in seen:
                 skill_text = archive.read(info_by_name["SKILL.md"]).decode("utf-8", errors="replace")
                 if not skill_text.startswith("---\n") or "name: material-code-simplification" not in skill_text.split("---", 2)[1]:
@@ -208,17 +437,23 @@ def validate_archive(archive_path: Path) -> list[str]:
                 if "$material-code-simplification" not in yaml_text:
                     errors.append(f"{archive_path.name}: openai.yaml invocation mismatch")
             if "core/reviewctl.py" in seen:
-                controller_text = archive.read(info_by_name["core/reviewctl.py"]).decode(
-                    "utf-8", errors="replace"
+                declaration_error = validate_static_version_declaration(
+                    archive.read(info_by_name["core/reviewctl.py"]),
+                    "TOOL_VERSION",
+                    CORE_VERSION,
+                    f"{archive_path.name}: core/reviewctl.py",
                 )
-                if f'TOOL_VERSION = "{CORE_VERSION}"' not in controller_text:
-                    errors.append(f"{archive_path.name}: embedded reviewctl version mismatch")
+                if declaration_error is not None:
+                    errors.append(declaration_error)
             if "scripts/simplifyctl.py" in seen:
-                adapter_text = archive.read(info_by_name["scripts/simplifyctl.py"]).decode(
-                    "utf-8", errors="replace"
+                declaration_error = validate_static_version_declaration(
+                    archive.read(info_by_name["scripts/simplifyctl.py"]),
+                    "ADAPTER_VERSION",
+                    VERSION,
+                    f"{archive_path.name}: scripts/simplifyctl.py",
                 )
-                if f'ADAPTER_VERSION = "{VERSION}"' not in adapter_text:
-                    errors.append(f"{archive_path.name}: embedded simplifyctl version mismatch")
+                if declaration_error is not None:
+                    errors.append(declaration_error)
 
             if not errors:
                 errors.extend(validate_extracted_archive(archive, members, archive_path))
@@ -282,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
             "candidate-set-v2.schema.json",
             "coverage-plan.schema.json",
             "adjudication.schema.json",
+            "adjudication-v4.schema.json",
             "fix-plan.schema.json",
             "verification.schema.json",
         ):
@@ -294,8 +530,15 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if not (core_reference_dir / name).is_file():
                 errors.append(f"missing shared repair-direction reference: {core_reference_dir / name}")
-        if controller.is_file() and f'TOOL_VERSION = "{CORE_VERSION}"' not in controller.read_text(encoding="utf-8"):
-            errors.append("shared reviewctl version mismatch")
+        if controller.is_file():
+            declaration_error = validate_static_version_declaration(
+                controller.read_bytes(),
+                "TOOL_VERSION",
+                CORE_VERSION,
+                controller.as_posix(),
+            )
+            if declaration_error is not None:
+                errors.append(declaration_error)
 
     skill = ROOT / "SKILL.md"
     if skill.is_file():
@@ -307,8 +550,15 @@ def main(argv: list[str] | None = None) -> int:
                 errors.append(f"SKILL.md references missing file: {rel}")
 
     adapter = ROOT / "scripts" / "simplifyctl.py"
-    if adapter.is_file() and f'ADAPTER_VERSION = "{VERSION}"' not in adapter.read_text(encoding="utf-8"):
-        errors.append("simplifyctl version mismatch")
+    if adapter.is_file():
+        declaration_error = validate_static_version_declaration(
+            adapter.read_bytes(),
+            "ADAPTER_VERSION",
+            VERSION,
+            adapter.relative_to(ROOT).as_posix(),
+        )
+        if declaration_error is not None:
+            errors.append(declaration_error)
 
     if schema_dir.is_dir():
         for path in schema_dir.glob("*.json"):

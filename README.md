@@ -2,7 +2,7 @@
 
 `material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact scope, records exhaustive review coverage before the candidate wave, independently validates candidates, and produces a complete kept/discarded ledger. Candidate-set/v2 binds each assigned lens and risk path; targeted reliability and persisted-configuration lenses run when the recorded risk assessment requires them. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
+The package freezes the exact scope, records exhaustive review coverage before the candidate wave, independently validates candidates, and produces a complete kept/discarded ledger. Candidate-set/v2 binds each assigned lens and risk path; after the complete wave is validated, material review carries that lens through candidates-normalized/v2, adjudication/v4, and ledger/v4. Each adjudicated group's exact sorted source lenses are derived from its candidate IDs and rendered alongside its existing reviewer and independence provenance. Targeted reliability and persisted-configuration lenses run when the recorded risk assessment requires them. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -19,6 +19,8 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 | Other Agent Skills hosts | Portable skill | `skills/material-code-review/` |
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
+
+The artifact version split is deliberate: current material review state/v2 uses candidates-normalized/v2, adjudication/v4, and ledger/v4; explicitly profiled material simplification state/v1 remains on candidates-normalized/v1, adjudication/v3, and ledger/v3 without lens fields. Legacy material-review artifacts are not inferred, backfilled, renumbered, rehashed, or rewritten. Unmarked legacy runs remain observation/restoration-only. A marked run already in final repair may refresh approved fixed-finding tests and complete verification without changing its schema; all other forward progress requires a new run.
 
 ## Invocation and activation boundary
 
@@ -126,7 +128,7 @@ unzip material-code-simplification-codex-skill-1.2.0.zip \
   -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-Its `core/` directory embeds the shared 1.3.0 controller and all core schemas for runtime provenance and layout. New simplification runs remain on candidate-set/v1 semantics: the material-review v2 coverage policy and specialist lenses do not apply to simplification.
+Its `core/` directory embeds the shared 1.3.0 controller and all core schemas for runtime provenance and layout. New simplification runs remain on state/v1 and candidate-set/v1 semantics with the explicit `material-code-simplification` profile: the material-review v2 state and coverage policy do not apply to simplification. The standalone simplification adapter remains version 1.2.0.
 
 ## Optional project-scoped Codex reviewers
 
@@ -183,6 +185,8 @@ git rev-parse --git-path material-code-review
 This keeps source snapshots, evidence, hashes, test logs, checkpoints, and user-gate receipts outside the product diff and supports linked worktrees. A custom `--artifact-root` must be outside the worktree or inside the repository’s Git directory. Runs are bound to their originating repository and cannot be reused against another checkout.
 
 ## State machine
+
+New material-review runs use `material-review/state/v2`. Existing material-review `state/v1` runs are not migrated. Unmarked runs retain only status, scope observation, and checkpointed restoration. Marked runs already in final repair may refresh fixed-finding tests, rerun global tests, prepare verification, and record verification without reopening attempts; every other forward command requires a new run. The shared controller continues to authorize explicitly profiled simplification runs on `state/v1`.
 
 ```text
 CONTEXT_FROZEN

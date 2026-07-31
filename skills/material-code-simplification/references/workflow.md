@@ -2,6 +2,8 @@
 
 The canonical skill defines simplification judgment. `simplifyctl.py` adds bounded current-codebase selection and delegates lifecycle enforcement to the shared `reviewctl.py`.
 
+Both codebase and delegated change scopes use `material-review/state/v1` and candidate-set/v1 only when state carries the exact `profile=material-code-simplification`. The adapter does not grant authority to an unprofiled or contradictory v1 run; it must restart. This profile-specific v1 contract is independent of current material-review `state/v2`.
+
 | State | Command | Result |
 |---|---|---|
 | new | `init --scope codebase --path ...` | selected current files frozen and hashed; `CONTEXT_FROZEN` |

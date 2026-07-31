@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -104,6 +106,151 @@ class SimplifyCtlTest(unittest.TestCase):
         self.assertEqual(state["profile"], "material-code-simplification")
         self.assertNotIn("coverage_required", state)
         self.assertNotIn("workflow_profile", state)
+
+    def test_simplification_profile_does_not_require_material_review_core_lenses(self) -> None:
+        self.init_src("--exclude-untracked")
+        scope_hash = self.load("state.json")["scope_hash"]
+        candidate = {
+            "schema_version": "material-review/candidate-set/v1",
+            "scope_hash": scope_hash,
+            "reviewer_id": "simplification-reviewer",
+            "independence_group": "fixture-reviewer",
+            "review_mode": "subagent",
+            "findings": [],
+            "coverage": {
+                "files_reviewed": [],
+                "areas": ["simplification"],
+                "limitations": ["No material simplification candidate was found."],
+            },
+        }
+        candidate_path = self.write_json("simplification-v1-candidate.json", candidate)
+
+        self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(candidate_path),
+        )
+
+        state = self.load("state.json")
+        reviewer_set = self.load("candidates.json")["reviewer_sets"][0]
+        self.assertEqual(state["phase"], "CANDIDATES_CAPTURED")
+        self.assertEqual(reviewer_set["coverage"]["files_reviewed"], [])
+        self.assertNotIn("lens_id", reviewer_set)
+        self.assertNotIn("coverage_plan_hash", state["hashes"])
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+
+    def test_candidate_set_v1_path_alias_behavior_is_unchanged(self) -> None:
+        source_controller = simplifyctl.core
+        controller_path = (
+            Path(__file__).resolve().parents[2]
+            / "material-code-review"
+            / "scripts"
+            / "reviewctl.py"
+        )
+        embedded_path = self.root / "standalone" / "core" / "reviewctl.py"
+        embedded_path.parent.mkdir(parents=True)
+        shutil.copy2(controller_path, embedded_path)
+        embedded_spec = importlib.util.spec_from_file_location(
+            "material_reviewctl_embedded_v1_alias_control", embedded_path
+        )
+        assert embedded_spec and embedded_spec.loader
+        embedded_controller = importlib.util.module_from_spec(embedded_spec)
+        embedded_spec.loader.exec_module(embedded_controller)
+
+        for layout, controller in (
+            ("source", source_controller),
+            ("embedded-core", embedded_controller),
+        ):
+            with self.subTest(layout=layout):
+                self.run_id = f"v1-alias-{layout}"
+                (self.repo / "src" / "service.py").write_text(
+                    "def value():\n    return 1\n# alias-control\n",
+                    encoding="utf-8",
+                )
+                self.run_tool(
+                    "init",
+                    "--repo-root",
+                    str(self.repo),
+                    "--scope",
+                    "uncommitted",
+                    "--run-id",
+                    self.run_id,
+                )
+                scope_hash = self.load("state.json")["scope_hash"]
+                alias = " ./src\\service.py "
+                payload = {
+                    "schema_version": "material-review/candidate-set/v1",
+                    "scope_hash": scope_hash,
+                    "reviewer_id": "simplification-reviewer",
+                    "independence_group": "fixture-reviewer",
+                    "review_mode": "subagent",
+                    "findings": [
+                        {
+                            "local_id": "service-value",
+                            "title": "service exposes the fixture value",
+                            "nature": "defect",
+                            "category": "correctness",
+                            "severity": "medium",
+                            "confidence": "certain",
+                            "file": alias,
+                            "line_start": 2,
+                            "line_end": 2,
+                            "evidence_side": "comparison",
+                            "evidence_quote": "    return 1",
+                            "scope_relation": "primary",
+                            "related_changed_files": [alias],
+                            "direct_dependency": True,
+                            "observable_consequence": "The fixture value remains observable.",
+                            "trigger_conditions": "Call value().",
+                            "counterevidence_checked": ["No wrapper changes the value."],
+                            "why_not_preference": "The fixture establishes the expected behavior.",
+                            "proposed_resolution": "Retain the candidate for adjudication.",
+                            "estimated_fix_risk": "low",
+                            "requires_user_decision": False,
+                            "assumptions": [],
+                        }
+                    ],
+                    "coverage": {
+                        "files_reviewed": [alias],
+                        "areas": ["simplification"],
+                        "limitations": [],
+                    },
+                }
+                candidate_path = self.write_json(f"candidate-v1-alias-{layout}.json", payload)
+                arguments = [
+                    "ingest-candidates",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--input",
+                    str(candidate_path),
+                ]
+                if layout == "source":
+                    self.run_tool(*arguments)
+                else:
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        result = controller.main(
+                            arguments,
+                            workflow_profile="material-code-simplification",
+                        )
+                    self.assertEqual(result, 0, stderr.getvalue())
+
+                bundle = self.load("candidates.json")
+                reviewer_set = bundle["reviewer_sets"][0]
+                candidate = bundle["candidates"][0]
+                self.assertEqual(reviewer_set["coverage"]["files_reviewed"], ["src/service.py"])
+                self.assertEqual(candidate["file"], "src/service.py")
+                self.assertEqual(
+                    candidate["related_changed_files"],
+                    ["src/service.py"],
+                )
 
     def test_init_defaults_to_codebase_scope(self) -> None:
         self.run_tool(
@@ -511,7 +658,9 @@ class SimplifyCtlTest(unittest.TestCase):
         self.assertEqual(len(ls_files_calls), 1)
         self.assertFalse(any(argument.startswith(":(literal)") for argument in ls_files_calls[0]))
 
-    def complete_full_gated_repair_lifecycle(self, *init_arguments: str) -> dict:
+    def complete_full_gated_repair_lifecycle(
+        self, *init_arguments: str, exercise_restoration: bool = False
+    ) -> dict:
         self.run_tool("init", "--repo-root", str(self.repo), "--run-id", self.run_id, *init_arguments)
         scope_hash = self.load("state.json")["scope_hash"]
         candidate = {
@@ -748,6 +897,37 @@ class SimplifyCtlTest(unittest.TestCase):
             "--finding",
             "F001",
         )
+        if exercise_restoration:
+            source_before_attempt = (self.repo / "src" / "service.py").read_bytes()
+            (self.repo / "src" / "service.py").write_text(
+                "def value():\n    return 999\n", encoding="utf-8"
+            )
+            self.run_tool(
+                "rollback-finding",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                "--finding",
+                "F001",
+                "--reason",
+                "Exercise state/v1 simplification restoration.",
+            )
+            self.assertEqual(
+                (self.repo / "src" / "service.py").read_bytes(), source_before_attempt
+            )
+            self.assertEqual(
+                self.load("state.json")["schema_version"], "material-review/state/v1"
+            )
+            self.run_tool(
+                "start-finding",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                "--finding",
+                "F001",
+            )
         (self.repo / "src" / "service.py").write_text(
             "def value():\n    return 2\n", encoding="utf-8"
         )
@@ -848,6 +1028,301 @@ class SimplifyCtlTest(unittest.TestCase):
         self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "codebase")
         self.assertEqual(state["profile"], "material-code-simplification")
 
+    def test_artifact_version_matrix_preserves_simplification_v1_v3_v3(self) -> None:
+        state = self.complete_full_gated_repair_lifecycle(
+            "--scope",
+            "codebase",
+            "--path",
+            "src",
+            "--exclude-untracked",
+            exercise_restoration=True,
+        )
+        candidates = self.load("candidates.json")
+        adjudication = self.load("adjudication.normalized.json")
+        ledger = self.load("ledger.json")
+
+        self.assertEqual(state["schema_version"], "material-review/state/v1")
+        self.assertEqual(
+            candidates["schema_version"],
+            "material-review/candidates-normalized/v1",
+        )
+        self.assertEqual(adjudication["schema_version"], "material-review/adjudication/v3")
+        self.assertEqual(ledger["schema_version"], "material-review/ledger/v3")
+        self.assertTrue(all("lens_id" not in item for item in candidates["candidates"]))
+        self.assertTrue(
+            all("lens_id" not in reviewer_set for reviewer_set in candidates["reviewer_sets"])
+        )
+        self.assertTrue(
+            all("source_lenses" not in group for group in adjudication["groups"])
+        )
+        self.assertTrue(
+            all("source_lenses" not in finding for finding in ledger["findings"])
+        )
+
+        candidate_template = json.loads(
+            (self.root / "codebase-candidate.json").read_text(encoding="utf-8")
+        )
+        adjudication_template = json.loads(
+            (self.root / "codebase-adjudication.json").read_text(encoding="utf-8")
+        )
+        (self.repo / "src" / "service.py").write_text(
+            "def value():\n    return 1\n", encoding="utf-8"
+        )
+        self.run_id = "simplification-profile-isolation"
+        self.init_src("--exclude-untracked")
+        scope_hash = self.load("state.json")["scope_hash"]
+        candidate_template["scope_hash"] = scope_hash
+        candidate_path = self.write_json(
+            "simplification-profile-candidate.json", candidate_template
+        )
+        self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(candidate_path),
+        )
+        candidate_bundle_path = self.run_dir / "candidates.json"
+        state_path = self.run_dir / "state.json"
+        original_bundle = self.load("candidates.json")
+        original_bundle_bytes = candidate_bundle_path.read_bytes()
+        original_state_bytes = state_path.read_bytes()
+
+        def persisted_run_bytes() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.run_dir).as_posix(): path.read_bytes()
+                for path in self.run_dir.rglob("*")
+                if path.is_file()
+            }
+
+        candidate_profile_cases = (
+            (
+                "wrong-normalized-version",
+                lambda payload: payload.update(
+                    {"schema_version": "material-review/candidates-normalized/v2"}
+                ),
+                "normalized candidates schema_version does not match the active workflow "
+                "profile: expected material-review/candidates-normalized/v1, got "
+                "material-review/candidates-normalized/v2",
+            ),
+            (
+                "forbidden-coverage-plan-hash",
+                lambda payload: payload.update({"coverage_plan_hash": "0" * 64}),
+                "Simplification normalized candidates must not contain coverage_plan_hash",
+            ),
+            (
+                "forbidden-reviewer-lens",
+                lambda payload: payload["reviewer_sets"][0].update(
+                    {"lens_id": "correctness"}
+                ),
+                "Simplification normalized reviewer sets must not contain lens_id",
+            ),
+            (
+                "forbidden-candidate-lens",
+                lambda payload: payload["candidates"][0].update(
+                    {"lens_id": "correctness"}
+                ),
+                "Simplification normalized candidates must not contain lens_id",
+            ),
+        )
+        for name, mutate, expected_error in candidate_profile_cases:
+            with self.subTest(simplification_candidates=name):
+                mutated_bundle = copy.deepcopy(original_bundle)
+                mutate(mutated_bundle)
+                mutated_bundle.pop("candidate_bundle_hash")
+                mutated_bundle.pop("generated_at")
+                mutated_hash = simplifyctl.core.canonical_hash(mutated_bundle)
+                mutated_bundle["candidate_bundle_hash"] = mutated_hash
+                mutated_bundle["generated_at"] = original_bundle["generated_at"]
+                candidate_bundle_path.write_text(
+                    json.dumps(mutated_bundle), encoding="utf-8"
+                )
+                mutated_state = json.loads(original_state_bytes)
+                mutated_state["hashes"]["candidate_bundle_hash"] = mutated_hash
+                state_path.write_text(json.dumps(mutated_state), encoding="utf-8")
+                mutated_authority = persisted_run_bytes()
+                expected_events = copy.deepcopy(mutated_state["events"])
+                mutated_adjudication = copy.deepcopy(adjudication_template)
+                mutated_adjudication["scope_hash"] = scope_hash
+                mutated_adjudication["candidate_bundle_hash"] = mutated_hash
+                mutated_adjudication["groups"][0]["repair_audit"]["scope_hash"] = scope_hash
+                adjudication_path = self.write_json(
+                    f"simplification-{name}-adjudication.json",
+                    mutated_adjudication,
+                )
+
+                _, stderr = self.run_tool(
+                    "compile-ledger",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--input",
+                    str(adjudication_path),
+                    expected=2,
+                )
+                self.assertEqual(stderr, f"[FAIL] {expected_error}\n")
+                self.assertEqual(persisted_run_bytes(), mutated_authority)
+                self.assertEqual(self.load("state.json")["events"], expected_events)
+                self.assertFalse((self.run_dir / "ledger.json").exists())
+
+                _, retry_stderr = self.run_tool(
+                    "ingest-candidates",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--input",
+                    str(candidate_path),
+                    expected=2,
+                )
+                self.assertEqual(
+                    retry_stderr,
+                    "[FAIL] Existing normalized candidate authority is incompatible with "
+                    "the active workflow profile; start a new run. Cause: "
+                    f"{expected_error}\n",
+                )
+                self.assertEqual(persisted_run_bytes(), mutated_authority)
+                self.assertEqual(self.load("state.json")["events"], expected_events)
+                candidate_bundle_path.write_bytes(original_bundle_bytes)
+                state_path.write_bytes(original_state_bytes)
+
+        valid_adjudication = copy.deepcopy(adjudication_template)
+        valid_adjudication["scope_hash"] = scope_hash
+        valid_adjudication["candidate_bundle_hash"] = original_bundle["candidate_bundle_hash"]
+        valid_adjudication["groups"][0]["repair_audit"]["scope_hash"] = scope_hash
+        for name, mutate, expected_error in (
+            (
+                "wrong-adjudication-version",
+                lambda payload: payload.update(
+                    {"schema_version": "material-review/adjudication/v4"}
+                ),
+                "Adjudication schema_version does not match the active workflow profile: "
+                "expected material-review/adjudication/v3, got material-review/adjudication/v4",
+            ),
+            (
+                "forbidden-adjudication-source-lenses",
+                lambda payload: payload["groups"][0].update(
+                    {"source_lenses": ["correctness"]}
+                ),
+                "adjudication.groups[0] has invalid fields: unexpected source_lenses",
+            ),
+        ):
+            with self.subTest(simplification_adjudication=name):
+                invalid_adjudication = copy.deepcopy(valid_adjudication)
+                mutate(invalid_adjudication)
+                adjudication_path = self.write_json(
+                    f"simplification-{name}.json", invalid_adjudication
+                )
+                unchanged_authority = persisted_run_bytes()
+                unchanged_events = copy.deepcopy(self.load("state.json")["events"])
+
+                _, stderr = self.run_tool(
+                    "compile-ledger",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--input",
+                    str(adjudication_path),
+                    expected=2,
+                )
+                self.assertEqual(stderr, f"[FAIL] {expected_error}\n")
+                self.assertEqual(persisted_run_bytes(), unchanged_authority)
+                self.assertEqual(self.load("state.json")["events"], unchanged_events)
+                self.assertFalse((self.run_dir / "ledger.json").exists())
+
+        valid_adjudication_path = self.write_json(
+            "simplification-valid-v3-adjudication.json", valid_adjudication
+        )
+        self.run_tool(
+            "compile-ledger",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(valid_adjudication_path),
+        )
+        self.assertEqual(
+            self.load("adjudication.normalized.json")["schema_version"],
+            "material-review/adjudication/v3",
+        )
+        valid_ledger = self.load("ledger.json")
+        self.assertEqual(valid_ledger["schema_version"], "material-review/ledger/v3")
+        self.assertTrue(
+            all("source_lenses" not in item for item in valid_ledger["findings"])
+        )
+
+        ledger_path = self.run_dir / "ledger.json"
+        original_ledger_bytes = ledger_path.read_bytes()
+        adjudicated_state_bytes = state_path.read_bytes()
+        for name, mutate, expected_error in (
+            (
+                "wrong-ledger-version",
+                lambda payload: payload.update(
+                    {"schema_version": "material-review/ledger/v4"}
+                ),
+                "ledger schema_version does not match the active workflow profile: expected "
+                "material-review/ledger/v3, got material-review/ledger/v4",
+            ),
+            (
+                "forbidden-ledger-source-lenses",
+                lambda payload: payload["findings"][0].update(
+                    {"source_lenses": ["correctness"]}
+                ),
+                "Simplification ledger/v3 entries must not contain source_lenses",
+            ),
+        ):
+            with self.subTest(simplification_ledger=name):
+                invalid_ledger = copy.deepcopy(valid_ledger)
+                mutate(invalid_ledger)
+                invalid_ledger.pop("ledger_hash")
+                invalid_ledger.pop("generated_at")
+                invalid_hash = simplifyctl.core.canonical_hash(invalid_ledger)
+                invalid_ledger["ledger_hash"] = invalid_hash
+                invalid_ledger["generated_at"] = valid_ledger["generated_at"]
+                ledger_path.write_text(json.dumps(invalid_ledger), encoding="utf-8")
+                invalid_state = json.loads(adjudicated_state_bytes)
+                invalid_state["hashes"]["ledger_hash"] = invalid_hash
+                state_path.write_text(json.dumps(invalid_state), encoding="utf-8")
+                invalid_authority = persisted_run_bytes()
+                expected_events = copy.deepcopy(invalid_state["events"])
+
+                _, stderr = self.run_tool(
+                    "gate-findings",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--approve",
+                    "F001",
+                    "--user-statement",
+                    "Reject simplification profile contamination.",
+                    expected=2,
+                )
+                self.assertEqual(stderr, f"[FAIL] {expected_error}\n")
+                self.assertEqual(persisted_run_bytes(), invalid_authority)
+                self.assertEqual(self.load("state.json")["events"], expected_events)
+                self.assertFalse((self.run_dir / "gates" / "findings.json").exists())
+                ledger_path.write_bytes(original_ledger_bytes)
+                state_path.write_bytes(adjudicated_state_bytes)
+
+        self.run_tool(
+            "gate-findings",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--approve",
+            "F001",
+            "--user-statement",
+            "Approve the uncontaminated simplification v1/v3/v3 artifacts.",
+        )
+        self.assertTrue((self.run_dir / "gates" / "findings.json").is_file())
+
     def test_change_scope_completes_full_gated_repair_lifecycle(self) -> None:
         (self.repo / "src" / "service.py").write_text(
             "def value():\n    return 1\n# selected uncommitted change\n", encoding="utf-8"
@@ -855,6 +1330,87 @@ class SimplifyCtlTest(unittest.TestCase):
         state = self.complete_full_gated_repair_lifecycle("--scope", "uncommitted")
         self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "uncommitted")
         self.assertEqual(state["profile"], "material-code-simplification")
+
+    def test_state_v1_simplification_remains_compatible(self) -> None:
+        lifecycle_cases = (
+            (
+                "codebase",
+                ("--scope", "codebase", "--path", "src", "--exclude-untracked"),
+            ),
+            ("delegated-change", ("--scope", "uncommitted")),
+        )
+        for name, init_arguments in lifecycle_cases:
+            with self.subTest(scope_mode=name):
+                (self.repo / "src" / "service.py").write_text(
+                    "def value():\n    return 1\n", encoding="utf-8"
+                )
+                if name == "delegated-change":
+                    (self.repo / "src" / "service.py").write_text(
+                        "def value():\n    return 1\n# delegated simplification scope\n",
+                        encoding="utf-8",
+                    )
+                self.run_id = f"simplification-v1-{name}"
+                state = self.complete_full_gated_repair_lifecycle(
+                    *init_arguments, exercise_restoration=True
+                )
+                self.assertEqual(state["schema_version"], "material-review/state/v1")
+                self.assertEqual(state["profile"], "material-code-simplification")
+                self.assertNotIn("coverage_required", state)
+                self.assertNotIn("workflow_profile", state)
+                self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+                history = state["finding_status"]["F001"]["history"]
+                self.assertEqual([entry["outcome"] for entry in history], ["rolled_back", "fixed"])
+
+        (self.repo / "src" / "service.py").write_text(
+            "def value():\n    return 1\n# ambiguous delegated scope\n", encoding="utf-8"
+        )
+        self.run_id = "simplification-v1-ambiguous"
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--scope",
+            "uncommitted",
+        )
+        state = self.load("state.json")
+        self.assertEqual(state["schema_version"], "material-review/state/v1")
+        state.pop("profile")
+        state_path = self.run_dir / "state.json"
+        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        state_before = state_path.read_bytes()
+        source_before = (self.repo / "src" / "service.py").read_bytes()
+        candidate_path = self.write_json(
+            "ambiguous-delegated-candidate.json",
+            {
+                "schema_version": "material-review/candidate-set/v1",
+                "scope_hash": state["scope_hash"],
+                "reviewer_id": "ambiguous-reviewer",
+                "independence_group": "ambiguous-reviewer",
+                "review_mode": "subagent",
+                "findings": [],
+                "coverage": {
+                    "files_reviewed": ["src/service.py"],
+                    "areas": ["simplification"],
+                    "limitations": [],
+                },
+            },
+        )
+        _, stderr = self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(candidate_path),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertEqual(state_path.read_bytes(), state_before)
+        self.assertEqual((self.repo / "src" / "service.py").read_bytes(), source_before)
+        self.assertFalse((self.run_dir / "candidates.json").exists())
 
     def test_unprofiled_delegated_legacy_state_must_restart(self) -> None:
         self.init_src("--exclude-untracked")

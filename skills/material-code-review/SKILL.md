@@ -73,6 +73,8 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" --help
 
 The control tool requires Python 3.10 or newer and uses only the standard library. It writes runs below `git rev-parse --git-path material-code-review` unless `--artifact-root` is explicitly supplied. A custom artifact root must be outside the worktree or inside the active Git directory.
 
+New material-review runs use `material-review/state/v2` with `coverage_required=true` and `workflow_profile=material_review`. A material-review `state/v1` run is never migrated. An unmarked run may use only `status`, `check-scope`, active `rollback-finding`, and `abort-fixes` under their existing controls. A marked run already in the final repair state may also refresh fixed-finding tests, rerun global tests, prepare verification, and record verification. All other forward progress requires a new run. Unsupported or contradictory state/profile combinations fail before command dispatch.
+
 After `init`, preserve the printed run ID in working memory and in `MATERIAL_REVIEW_RUN_ID` when the shell permits:
 
 ```bash
@@ -220,7 +222,7 @@ Obtain explicit user permission for that egress. A failed or unverifiable extern
 
 #### 1.3 Candidate contract
 
-Each reviewer returns JSON conforming to `schemas/candidate-set-v2.schema.json`, including the verified coverage-plan hash, exact assigned lens ID, and the assigned `reviewer_id`, `independence_group`, and `review_mode`; reviewers must echo those assigned values unchanged. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`. A reviewer may not substitute, mention, or return an unassigned lens.
+Each reviewer returns JSON conforming to `schemas/candidate-set-v2.schema.json`, including the verified coverage-plan hash, exact assigned lens ID, and the assigned `reviewer_id`, `independence_group`, and `review_mode`; reviewers must echo those assigned values unchanged. Every result must name at least one normalized frozen-scope path in `coverage.files_reviewed`, even when `findings` is empty. Partial coverage may remain explicit in `coverage.limitations`, and assigned risk evidence paths are additional requirements. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`. A reviewer may not substitute, mention, or return an unassigned lens.
 
 A reviewer must actively check for:
 
@@ -241,7 +243,11 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" ingest-candidates \
   --input /tmp/reviewer-testing.json
 ```
 
-The tool validates the complete candidate wave in memory: each required assignment has exactly one identity-matched v2 result, every declared coverage path is frozen-scope-bound, and each targeted lens covers its assigned risk evidence paths. It rejects missing, duplicate, stale, wrong-lens, unassigned, or risk-path-incomplete results without replacing authoritative candidates; missing assignments report `Missing required review coverage`, and an ingestion-failure diagnostic is non-authoritative. Until the complete valid wave exists, do not synthesize, ingest a candidate bundle, validate, or issue any verdict; only non-authoritative failure diagnostics may be recorded. Malformed findings are rejected visibly; do not repair their substance during adjudication by guessing.
+The tool validates the complete candidate wave in memory: each required assignment has exactly one identity-matched v2 result, every result names at least one normalized frozen-scope path, every declared coverage path is frozen-scope-bound, and each targeted lens covers its assigned risk evidence paths. It rejects missing, duplicate, stale, wrong-lens, unassigned, zero-file, or risk-path-incomplete results without replacing authoritative candidates; missing assignments report `Missing required review coverage`, and an ingestion-failure diagnostic is non-authoritative. Until the complete valid wave exists, do not synthesize, ingest a candidate bundle, validate, or issue any verdict; only non-authoritative failure diagnostics may be recorded. Malformed findings are rejected visibly; do not repair their substance during adjudication by guessing.
+
+The first complete valid normalized wave is the run's write-once candidate authority. A later complete wave is normalized in full, including validated lens provenance, before comparison. An exact canonical retry succeeds without rewriting candidate artifacts, state, hashes, timestamps, events, or IDs; temporary input filenames and command-line input order are not authority. A different complete wave cannot replace or renumber the first bundle and requires a new run. An incomplete, invalid, or unavailable-input retry may update only `candidate-ingestion-failure.json`; a missing, tampered, or state-mismatched existing authority fails closed and is never backfilled from retry input.
+
+After the complete wave passes those checks, the controller stamps each finding with its validated set-level `lens_id`, then flattens it into `material-review/candidates-normalized/v2`. The lens is the final candidate-ID sort tie-breaker after the established reviewer, independence-group, local-ID, file, and starting-line dimensions. Reviewer sets are ordered by their validated assignment identity, and temporary source filenames are omitted from normalized candidates, so equivalent waves have one canonical authority identity. Empty reviewer sets retain their lens-bound coverage record without creating a synthetic candidate. `coverage_plan_hash` remains at the reviewer-set and bundle levels and is never duplicated per candidate.
 
 ### Phase 2 — Validate and adjudicate
 
@@ -275,13 +281,13 @@ The audit must compare the literal candidate suggestion with the smallest safe r
 
 #### 2.4 Final adjudication
 
-Use `references/adjudicator-template.md` and `schemas/adjudication.schema.json`. In Codex, use a fresh read-only `default` subagent or installed project-scoped adjudicator when available. The adjudicator must not have generated or validated the same candidates and may not invent a finding. When no fresh role exists, the controller adjudicates and records the weaker independence accurately.
+Use `references/adjudicator-template.md` and `schemas/adjudication-v4.schema.json`. In Codex, use a fresh read-only `default` subagent or installed project-scoped adjudicator when available. The adjudicator must not have generated or validated the same candidates and may not invent a finding. When no fresh role exists, the controller adjudicates and records the weaker independence accurately.
 
 The adjudicator must:
 
 1. reuse the audited provisional groups without merging distinct failure modes;
 2. include every candidate ID exactly once and reject group or disposition drift after audit;
-3. preserve source reviewers and independence groups;
+3. preserve source reviewers and independence groups, and provide the exact sorted unique `source_lenses` derived from each group's candidate IDs;
 4. attach the independent validation result;
 5. apply the nature-specific materiality tests;
 6. choose `keep` or `discard` with a reason code;
@@ -301,7 +307,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" compile-ledger \
   --input /tmp/adjudication.json
 ```
 
-The tool writes a stable finding ledger in JSON and Markdown, with `F###` IDs for kept findings and explicit discarded groups/reasons.
+The tool writes `material-review/ledger/v4` in JSON and Markdown, with `F###` IDs for kept findings, explicit discarded groups/reasons, and the derived source lenses on both. Material-review state/v1 artifacts and current runs containing candidates-normalized/v1, adjudication/v3, ledger/v3, or lens-less current artifacts are never migrated, backfilled, or rehashed. They require a new run except for the bounded final-repair completion path described above, which does not rewrite those artifacts. Explicit material simplification remains on its separate candidates-normalized/v1, adjudication/v3, and ledger/v3 contracts.
 
 #### 2.5 Merge-readiness decision
 
@@ -503,6 +509,19 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" run-global-test \
 
 A green command is not conclusive proof for authorization, migrations, distributed effects, public contracts, or concurrency. Preserve those residual verification limits in the final report.
 
+#### 4.4 Refresh tests invalidated by later shared-file repairs
+
+When a later approved finding changes a path shared with an already-fixed finding, rerun the earlier finding's exact Gate-B-approved test at the final repair state:
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" refresh-finding-test \
+  --repo-root . \
+  --finding F001 \
+  --test unit-regression
+```
+
+This command is available only in `FIXING` with no active finding and after every approved finding is fixed. It does not reopen the finding, change its status or history, consume an attempt, or authorize a different command. The controller records the refreshed evidence separately, rejects and restores test-caused workspace or repository-control mutations, and binds the result to the retained attempt and current approved-path hash.
+
 ### Phase 5 — Post-fix verification
 
 Prepare the bounded verification bundle:
@@ -511,7 +530,7 @@ Prepare the bounded verification bundle:
 python3 "$SKILL_DIR/scripts/reviewctl.py" prepare-verification --repo-root .
 ```
 
-This checks that all approved findings are marked fixed, global required tests passed, and the aggregate repair delta remains inside Gate-B paths. It writes a fix-only diff/snapshot summary.
+This checks that all approved findings are marked fixed, each required finding test is current through its retained attempt or a final-state refresh, global required tests passed, and the aggregate repair delta remains inside Gate-B paths. It writes a fix-only diff/snapshot summary that includes the refreshed evidence.
 
 Use `references/postfix-verifier-template.md` and `schemas/verification.schema.json`. In Codex, prefer a fresh read-only `explorer` subagent or installed project-scoped post-fix verifier that did not implement the repair. Record degraded self-audit when no fresh verifier is available. The verifier must evaluate:
 

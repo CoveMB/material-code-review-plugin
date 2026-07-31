@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -45,51 +46,11 @@ CONTROLLED_WORKFLOW_MARKERS = (
     "plausibly blocker/high",
 )
 
-DISTRIBUTABLE_REQUIRED = {
-    ".codex-plugin/plugin.json",
-    ".agents/plugins/marketplace.json",
-    ".claude-plugin/plugin.json",
-    ".claude-plugin/marketplace.json",
-    "SKILL.md",
-    "AGENTS.md",
-    "README.md",
-    "CODEX.md",
-    "LICENSE",
-    "THIRD_PARTY.md",
-    "CHANGELOG.md",
-    "Makefile",
-    "bin/material-reviewctl",
-    "bin/material-reviewctl.cmd",
-    "bin/material-reviewctl.ps1",
-    "scripts/package_plugin.py",
-    "scripts/validate_package.py",
-    "skills/material-code-review/SKILL.md",
-    "skills/material-code-review/agents/openai.yaml",
-    "skills/material-code-review/scripts/reviewctl.py",
-    "skills/material-code-review/tests/test_reviewctl.py",
-    "skills/material-code-review/tests/test_discovery_contract.py",
-    "skills/material-code-review/schemas/candidate-set.schema.json",
-    "skills/material-code-review/schemas/candidate-set-v2.schema.json",
-    "skills/material-code-review/schemas/coverage-plan.schema.json",
-    "skills/material-code-review/schemas/adjudication.schema.json",
-    "skills/material-code-review/schemas/fix-plan.schema.json",
-    "skills/material-code-review/schemas/verification.schema.json",
-    "skills/material-code-review/references/remediation-rubric.md",
-    "skills/material-code-review/references/test-evidence-rubric.md",
-    "skills/material-code-review/references/remediation-auditor-template.md",
-    "skills/material-code-review/references/reliability-output-integrity-lens.md",
-    "skills/material-code-review/references/persisted-config-migration-lens.md",
-    "examples/codex-project-config/.codex/config.toml",
-    "examples/codex-project-config/.codex/agents/material_candidate.toml",
-    "examples/codex-project-config/.codex/agents/material_validator.toml",
-    "examples/codex-project-config/.codex/agents/material_adjudicator.toml",
-    "examples/codex-project-config/.codex/agents/material_postfix.toml",
-}
+LAYOUT_MANIFEST_SOURCE = Path("skills/material-code-review/package-layouts.json")
+LAYOUT_NAMES = ("full-plugin", "standalone")
 MAINTAINER_SOURCE_REQUIRED = {
     ".agents/skills/material-review-evaluation/SKILL.md",
     "EVALUATION.md",
-    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
-    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
     "evaluations/material-code-review/README.md",
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
     "evaluations/material-code-review/prompts/reviewer.md",
@@ -138,9 +99,13 @@ EVALUATOR_CONTEXT_FREE_DOC_MARKER = (
 EVALUATOR_CONTEXT_FREE_DOCS = (
     "README.md",
     "EVALUATION.md",
-    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
-    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
     "evaluations/material-code-review/README.md",
+)
+RETIRED_MAINTAINER_SOURCE_PATHS = frozenset(
+    {
+        "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
+        "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
+    }
 )
 EVALUATOR_GATE_DISPOSITION_CONTRACT_START = (
     "<!-- evaluator-gate-disposition-contract:start"
@@ -187,6 +152,8 @@ EVALUATOR_JUDGE_DOC_MARKER = (
 
 FORBIDDEN_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
+LAYOUT_EXCLUDED_PARTS = FORBIDDEN_PARTS | {".hypothesis", ".tox", ".nox", "dist"}
+LAYOUT_EXCLUDED_SUFFIXES = FORBIDDEN_SUFFIXES | {".zip", ".sha256"}
 MAINTAINER_ONLY_ARCHIVE_PREFIXES = (
     ".agents/skills/material-review-evaluation/",
     ".evaluation-runs/",
@@ -198,6 +165,15 @@ LOCAL_RUNTIME_JSON_PREFIXES = (
     ".evaluation-runs/",
     ".superpowers/",
 )
+WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
+WORKFLOW_BLOCK_END = "\n```"
+WORKFLOW_DISCOVERY_MARKERS = (
+    "init",
+    "context record (manual; see references/context-checklist.md)",
+    'python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .',
+    "record-coverage",
+    "dispatch assigned lenses",
+)
 
 
 def is_maintainer_only_archive_entry(name: str) -> bool:
@@ -206,6 +182,385 @@ def is_maintainer_only_archive_entry(name: str) -> bool:
 
 def fail(errors: list[str], message: str) -> None:
     errors.append(message)
+
+
+def normalize_layout_path(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError(f"unsafe layout {label}: {value!r}")
+    path = PurePosixPath(value)
+    normalized = path.as_posix()
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or normalized in {"", "."}
+        or normalized != value
+    ):
+        raise ValueError(f"unsafe layout {label}: {value}")
+    return normalized
+
+
+def load_layout_manifest(
+    root: Path,
+    errors: list[str],
+) -> dict[str, dict[str, object]] | None:
+    manifest_path = root / LAYOUT_MANIFEST_SOURCE
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail(errors, f"missing package layout manifest: {LAYOUT_MANIFEST_SOURCE.as_posix()}")
+        return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(errors, f"invalid package layout manifest: {exc}")
+        return None
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        fail(errors, "package layout manifest schema_version must be 1")
+        return None
+    layouts = manifest.get("layouts")
+    if not isinstance(layouts, dict) or set(layouts) != set(LAYOUT_NAMES):
+        fail(errors, "package layout manifest must define full-plugin and standalone")
+        return None
+
+    normalized_layouts: dict[str, dict[str, object]] = {}
+    try:
+        for layout_name in LAYOUT_NAMES:
+            layout = layouts[layout_name]
+            if not isinstance(layout, dict):
+                raise ValueError(f"layout {layout_name} must be an object")
+            canonical_skill = normalize_layout_path(
+                layout.get("canonical_skill"),
+                f"canonical skill for {layout_name}",
+            )
+            mappings = layout.get("required_mappings")
+            if not isinstance(mappings, list) or not mappings:
+                raise ValueError(
+                    f"layout {layout_name} required_mappings must be a non-empty array"
+                )
+            seen_sources: set[str] = set()
+            seen_destinations: set[str] = set()
+            normalized_mappings: list[dict[str, str]] = []
+            for index, mapping in enumerate(mappings):
+                if not isinstance(mapping, dict) or set(mapping) != {
+                    "source",
+                    "destination",
+                }:
+                    raise ValueError(
+                        f"layout {layout_name} mapping {index} must contain source and destination"
+                    )
+                source = normalize_layout_path(mapping["source"], "source")
+                destination = normalize_layout_path(
+                    mapping["destination"], "destination"
+                )
+                if source in seen_sources:
+                    raise ValueError(f"duplicate layout source: {source}")
+                if destination in seen_destinations:
+                    raise ValueError(f"duplicate layout destination: {destination}")
+                seen_sources.add(source)
+                seen_destinations.add(destination)
+                source_path = PurePosixPath(source)
+                destination_path = PurePosixPath(destination)
+                if is_maintainer_only_archive_entry(source) or is_maintainer_only_archive_entry(
+                    destination
+                ):
+                    raise ValueError(
+                        f"maintainer-only layout mapping: {source} -> {destination}"
+                    )
+                if (
+                    any(part in LAYOUT_EXCLUDED_PARTS for part in source_path.parts)
+                    or any(
+                        part in LAYOUT_EXCLUDED_PARTS
+                        for part in destination_path.parts
+                    )
+                    or source_path.suffix in LAYOUT_EXCLUDED_SUFFIXES
+                    or destination_path.suffix in LAYOUT_EXCLUDED_SUFFIXES
+                ):
+                    raise ValueError(
+                        f"excluded layout mapping: {source} -> {destination}"
+                    )
+                normalized_mappings.append(
+                    {"source": source, "destination": destination}
+                )
+            if canonical_skill not in seen_destinations:
+                raise ValueError(
+                    f"layout {layout_name} canonical skill is not a required destination: "
+                    f"{canonical_skill}"
+                )
+            normalized_layouts[layout_name] = {
+                "canonical_skill": canonical_skill,
+                "required_mappings": normalized_mappings,
+            }
+    except ValueError as exc:
+        fail(errors, f"invalid package layout manifest: {exc}")
+        return None
+    return normalized_layouts
+
+
+def validate_workflow_discovery_order(
+    source: str | bytes,
+    inspected_path: str,
+) -> str | None:
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{inspected_path}: workflow discovery order has invalid UTF-8"
+    if source.count(WORKFLOW_BLOCK_START) != 1:
+        return f"{inspected_path}: workflow discovery order block missing or duplicate"
+    block, separator, _ = source.split(WORKFLOW_BLOCK_START, 1)[1].partition(
+        WORKFLOW_BLOCK_END
+    )
+    if not separator:
+        return f"{inspected_path}: workflow discovery order block is unterminated"
+    lines = block.splitlines()
+    for marker in WORKFLOW_DISCOVERY_MARKERS:
+        if lines.count(marker) != 1:
+            return (
+                f"{inspected_path}: workflow discovery order marker missing or "
+                f"duplicate: {marker}"
+            )
+    positions = [lines.index(marker) for marker in WORKFLOW_DISCOVERY_MARKERS]
+    if positions != sorted(positions):
+        return f"{inspected_path}: workflow discovery order markers out of order"
+    return None
+
+
+def validate_static_version_declaration(
+    source: str | bytes,
+    constant_name: str,
+    expected_value: str,
+    inspected_path: str,
+) -> str | None:
+    """Statically certify one direct module-scope string declaration.
+
+    This deliberately does not model dynamic rebinding performed by later calls,
+    ``exec``, ``globals()``, or import hooks; it never executes inspected source.
+    """
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{inspected_path}: {constant_name} declaration has invalid UTF-8"
+    try:
+        tree = ast.parse(source, filename=inspected_path)
+    except SyntaxError:
+        return f"{inspected_path}: {constant_name} declaration has invalid syntax"
+
+    class BindingVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.bindings: list[bool] = []
+            self.direct_values: list[str] = []
+            self.recording_module_bindings = True
+            self.accepting_direct_declaration = True
+
+        def record_binding(self, *, direct: bool = False) -> None:
+            if self.recording_module_bindings:
+                self.bindings.append(direct)
+
+        def record_target(self, target: ast.AST, *, direct: bool = False) -> None:
+            if isinstance(target, ast.Name):
+                if (
+                    target.id == constant_name
+                    and isinstance(target.ctx, (ast.Store, ast.Del))
+                ):
+                    self.record_binding(direct=direct)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for element in target.elts:
+                    self.record_target(element)
+            elif isinstance(target, ast.Starred):
+                self.record_target(target.value)
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            direct = (
+                self.accepting_direct_declaration
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == constant_name
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            )
+            for target in node.targets:
+                self.record_target(target, direct=direct and target is node.targets[0])
+            if direct:
+                self.direct_values.append(node.value.value)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        def visit_Delete(self, node: ast.Delete) -> None:
+            for target in node.targets:
+                self.record_target(target)
+            self.generic_visit(node)
+
+        def visit_For(self, node: ast.For) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        visit_AsyncFor = visit_For
+
+        def visit_With(self, node: ast.With) -> None:
+            for item in node.items:
+                if item.optional_vars is not None:
+                    self.record_target(item.optional_vars)
+            self.generic_visit(node)
+
+        visit_AsyncWith = visit_With
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                if (alias.asname or alias.name.split(".", 1)[0]) == constant_name:
+                    self.record_binding()
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for alias in node.names:
+                if alias.name == "*" or (alias.asname or alias.name) == constant_name:
+                    self.record_binding()
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self.record_target(node.target)
+            self.generic_visit(node)
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.name == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def visit_MatchAs(self, node: ast.MatchAs) -> None:
+            if node.name == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def visit_MatchStar(self, node: ast.MatchStar) -> None:
+            if node.name == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+            if node.rest == constant_name:
+                self.record_binding()
+            self.generic_visit(node)
+
+        def record_definition_name(self, name: str) -> None:
+            if name == constant_name:
+                self.record_binding()
+
+        def class_body_declares_global(self, statements: list[ast.stmt]) -> bool:
+            class GlobalFinder(ast.NodeVisitor):
+                def __init__(self) -> None:
+                    self.found = False
+
+                def visit_Global(self, node: ast.Global) -> None:
+                    if constant_name in node.names:
+                        self.found = True
+
+                def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                    pass
+
+                visit_AsyncFunctionDef = visit_FunctionDef
+
+                def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                    pass
+
+                def visit_Lambda(self, node: ast.Lambda) -> None:
+                    pass
+
+            finder = GlobalFinder()
+            for statement in statements:
+                finder.visit(statement)
+            return finder.found
+
+        def visit_function_expressions(
+            self, node: ast.FunctionDef | ast.AsyncFunctionDef
+        ) -> None:
+            self.record_definition_name(node.name)
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            arguments = node.args
+            for default in (*arguments.defaults, *arguments.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+            for argument in (
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            ):
+                if argument.annotation is not None:
+                    self.visit(argument.annotation)
+            for argument in (arguments.vararg, arguments.kwarg):
+                if argument is not None and argument.annotation is not None:
+                    self.visit(argument.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
+            for type_parameter in getattr(node, "type_params", ()):
+                self.visit(type_parameter)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.visit_function_expressions(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self.visit_function_expressions(node)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self.record_definition_name(node.name)
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for base in node.bases:
+                self.visit(base)
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+            for type_parameter in getattr(node, "type_params", ()):
+                self.visit(type_parameter)
+            previous_recording = self.recording_module_bindings
+            previous_accepting = self.accepting_direct_declaration
+            self.recording_module_bindings = self.class_body_declares_global(node.body)
+            self.accepting_direct_declaration = False
+            try:
+                for statement in node.body:
+                    self.visit(statement)
+            finally:
+                self.recording_module_bindings = previous_recording
+                self.accepting_direct_declaration = previous_accepting
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+
+    visitor = BindingVisitor()
+    visitor.visit(tree)
+    if not visitor.bindings:
+        return f"{inspected_path}: {constant_name} declaration is missing"
+    if len(visitor.bindings) != 1:
+        return f"{inspected_path}: {constant_name} declaration is duplicate/competing"
+    if not visitor.bindings[0]:
+        return f"{inspected_path}: {constant_name} declaration is non-direct/nonliteral"
+
+    actual_value = visitor.direct_values[0]
+    if actual_value != expected_value:
+        return (
+            f"{inspected_path}: {constant_name} declaration has wrong value "
+            f"{actual_value!r}; expected {expected_value!r}"
+        )
+    return None
+
+
+def validate_retired_maintainer_source_paths(errors: list[str]) -> None:
+    active_inventories = (
+        MAINTAINER_SOURCE_REQUIRED,
+        EVALUATOR_CONTEXT_FREE_DOCS,
+    )
+    active_paths = set().union(*map(set, active_inventories))
+    reactivated_paths = RETIRED_MAINTAINER_SOURCE_PATHS.intersection(active_paths)
+    for relative in sorted(reactivated_paths):
+        fail(
+            errors,
+            "retired maintainer-source path reintroduced into active inventory: "
+            f"{relative}",
+        )
 
 
 def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
@@ -613,15 +968,23 @@ def check_source_package(
     distribution_layout: bool = False,
 ) -> list[str]:
     errors: list[str] = []
+    validate_retired_maintainer_source_paths(errors)
     if sys.version_info < (3, 10):
         return ["package validation requires Python 3.10+"]
     if not root.is_dir():
         return [f"package root is not a directory: {root}"]
 
     actual = {path.relative_to(root).as_posix() for path in iter_files(root)}
-    required = DISTRIBUTABLE_REQUIRED
+    layouts = load_layout_manifest(root, errors)
+    required: set[str] = set()
+    if layouts is not None:
+        mapping_key = "destination" if distribution_layout else "source"
+        required.update(
+            mapping[mapping_key]
+            for mapping in layouts["full-plugin"]["required_mappings"]
+        )
     if not distribution_layout:
-        required = required | MAINTAINER_SOURCE_REQUIRED
+        required.update(MAINTAINER_SOURCE_REQUIRED)
     for rel in sorted(required - actual):
         fail(errors, f"missing required file: {rel}")
 
@@ -780,6 +1143,15 @@ def check_source_package(
             if marker not in text:
                 fail(errors, f"canonical skill controlled workflow marker missing: {marker}")
 
+    workflow = root / "skills/material-code-review/references/workflow.md"
+    if workflow.is_file():
+        workflow_error = validate_workflow_discovery_order(
+            workflow.read_bytes(),
+            workflow.relative_to(root).as_posix(),
+        )
+        if workflow_error is not None:
+            fail(errors, workflow_error)
+
     for path in sorted((root / "skills/material-code-review/schemas").glob("*.json")):
         data = load_json(path, errors)
         if isinstance(data, dict):
@@ -808,17 +1180,27 @@ def check_source_package(
 
     controller = root / "skills/material-code-review/scripts/reviewctl.py"
     if controller.is_file():
-        text = controller.read_text(encoding="utf-8")
-        if f'TOOL_VERSION = "{VERSION}"' not in text:
-            fail(errors, "controller version does not match package version")
+        declaration_error = validate_static_version_declaration(
+            controller.read_bytes(),
+            "TOOL_VERSION",
+            VERSION,
+            controller.relative_to(root).as_posix(),
+        )
+        if declaration_error is not None:
+            fail(errors, declaration_error)
         if os.name != "nt" and not (controller.stat().st_mode & stat.S_IXUSR):
             fail(errors, "reviewctl.py is not executable")
 
     packager = root / "scripts/package_plugin.py"
     if packager.is_file():
-        text = packager.read_text(encoding="utf-8")
-        if f'VERSION = "{VERSION}"' not in text:
-            fail(errors, "archive builder version does not match package version")
+        declaration_error = validate_static_version_declaration(
+            packager.read_bytes(),
+            "VERSION",
+            VERSION,
+            packager.relative_to(root).as_posix(),
+        )
+        if declaration_error is not None:
+            fail(errors, declaration_error)
 
     readme = root / "README.md"
     if readme.is_file():
@@ -837,30 +1219,45 @@ def check_source_package(
     return errors
 
 
-def check_zip(path: Path, *, standalone: bool) -> list[str]:
+def check_zip(
+    path: Path,
+    *,
+    standalone: bool,
+    manifest_root: Path,
+) -> list[str]:
     errors: list[str] = []
     if not path.is_file():
         return [f"archive not found: {path}"]
+    layouts = load_layout_manifest(manifest_root, errors)
+    layout = None if layouts is None else layouts[
+        "standalone" if standalone else "full-plugin"
+    ]
     try:
         with zipfile.ZipFile(path) as zf:
             raw_names = [name for name in zf.namelist() if not name.endswith("/")]
             archive_entries = []
+            archive_paths_safe = True
             for raw_name in raw_names:
                 canonical_name = PurePosixPath(raw_name.replace("\\", "/")).as_posix()
                 archive_entries.append((raw_name, canonical_name))
                 if raw_name != canonical_name:
+                    archive_paths_safe = False
                     fail(errors, f"{path.name}: noncanonical archive path {raw_name}")
 
             canonical_names = [canonical for _, canonical in archive_entries]
             if len(canonical_names) != len(set(canonical_names)):
+                archive_paths_safe = False
                 fail(errors, f"{path.name}: duplicate archive entries")
             for raw_name, canonical_name in archive_entries:
                 rel = PurePosixPath(canonical_name)
                 if rel.is_absolute() or ".." in rel.parts:
+                    archive_paths_safe = False
                     fail(errors, f"{path.name}: unsafe archive path {raw_name}")
                 if any(part in FORBIDDEN_PARTS for part in rel.parts) or rel.suffix in FORBIDDEN_SUFFIXES:
+                    archive_paths_safe = False
                     fail(errors, f"{path.name}: forbidden archive entry {raw_name}")
                 if is_maintainer_only_archive_entry(canonical_name):
+                    archive_paths_safe = False
                     fail(
                         errors,
                         f"{path.name}: forbidden maintainer-only archive entry {raw_name}",
@@ -871,34 +1268,88 @@ def check_zip(path: Path, *, standalone: bool) -> list[str]:
                 if raw_name == canonical_name
             }
             required = (
-                {
-                    "SKILL.md",
-                    "agents/openai.yaml",
-                    "scripts/reviewctl.py",
-                    "schemas/candidate-set.schema.json",
-                    "schemas/candidate-set-v2.schema.json",
-                    "schemas/coverage-plan.schema.json",
-                    "references/reliability-output-integrity-lens.md",
-                    "references/persisted-config-migration-lens.md",
-                    "tests/test_discovery_contract.py",
-                }
-                if standalone
+                set()
+                if layout is None
                 else {
-                    "SKILL.md",
-                    ".codex-plugin/plugin.json",
-                    ".agents/plugins/marketplace.json",
-                    "skills/material-code-review/SKILL.md",
-                    "skills/material-code-review/agents/openai.yaml",
-                    "scripts/package_plugin.py",
-                    "skills/material-code-review/schemas/candidate-set-v2.schema.json",
-                    "skills/material-code-review/schemas/coverage-plan.schema.json",
-                    "skills/material-code-review/references/reliability-output-integrity-lens.md",
-                    "skills/material-code-review/references/persisted-config-migration-lens.md",
-                    "skills/material-code-review/tests/test_discovery_contract.py",
+                    mapping["destination"]
+                    for mapping in layout["required_mappings"]
                 }
             )
             for rel in sorted(required - names):
                 fail(errors, f"{path.name}: missing archive entry {rel}")
+            archive_manifest_trusted = False
+            if layout is not None and archive_paths_safe:
+                manifest_destination = next(
+                    (
+                        mapping["destination"]
+                        for mapping in layout["required_mappings"]
+                        if mapping["source"] == LAYOUT_MANIFEST_SOURCE.as_posix()
+                    ),
+                    None,
+                )
+                if manifest_destination is not None and manifest_destination in names:
+                    archived_manifest = zf.read(manifest_destination)
+                    try:
+                        json.loads(archived_manifest)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        fail(
+                            errors,
+                            f"{path.name}: archived package layout manifest has invalid JSON",
+                        )
+                    else:
+                        trusted_manifest = (
+                            manifest_root / LAYOUT_MANIFEST_SOURCE
+                        ).read_bytes()
+                        if archived_manifest != trusted_manifest:
+                            fail(
+                                errors,
+                                f"{path.name}: archived package layout manifest differs "
+                                "from trusted source contract",
+                            )
+                        else:
+                            archive_manifest_trusted = True
+            if layout is not None and archive_manifest_trusted:
+                canonical_skill = layout["canonical_skill"]
+                if canonical_skill in names:
+                    try:
+                        archived_skill = zf.read(canonical_skill).decode("utf-8")
+                    except UnicodeDecodeError:
+                        fail(
+                            errors,
+                            f"{path.name}:{canonical_skill}: archived SKILL has invalid UTF-8",
+                        )
+                    else:
+                        skill_parent = PurePosixPath(canonical_skill).parent
+                        references = set(
+                            re.findall(
+                                r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`",
+                                archived_skill,
+                            )
+                        )
+                        for reference in sorted(references):
+                            archive_reference = (
+                                PurePosixPath(reference)
+                                if skill_parent == PurePosixPath(".")
+                                else skill_parent / PurePosixPath(reference)
+                            ).as_posix()
+                            if archive_reference not in names:
+                                fail(
+                                    errors,
+                                    f"{path.name}: archived SKILL references missing entry "
+                                    f"{archive_reference}",
+                                )
+            workflow_entry = (
+                "references/workflow.md"
+                if standalone
+                else "skills/material-code-review/references/workflow.md"
+            )
+            if archive_manifest_trusted and workflow_entry in names:
+                workflow_error = validate_workflow_discovery_order(
+                    zf.read(workflow_entry),
+                    f"{path.name}:{workflow_entry}",
+                )
+                if workflow_error is not None:
+                    fail(errors, workflow_error)
             bad_prefixes = {name.split("/", 1)[0] for name in names if name.startswith("material-code-review-plugin/")}
             if bad_prefixes:
                 fail(errors, f"{path.name}: archive has an unwanted wrapper directory")
@@ -927,14 +1378,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    package_root = Path(args.package_root).resolve()
     errors = check_source_package(
-        Path(args.package_root).resolve(),
+        package_root,
         distribution_layout=args.distribution_layout,
     )
     for raw in args.full_archive:
-        errors.extend(check_zip(Path(raw).resolve(), standalone=False))
+        errors.extend(
+            check_zip(
+                Path(raw).resolve(),
+                standalone=False,
+                manifest_root=package_root,
+            )
+        )
     for raw in args.standalone_archive:
-        errors.extend(check_zip(Path(raw).resolve(), standalone=True))
+        errors.extend(
+            check_zip(
+                Path(raw).resolve(),
+                standalone=True,
+                manifest_root=package_root,
+            )
+        )
     if errors:
         print("[FAIL] material-code-review package validation", file=sys.stderr)
         for error in errors:

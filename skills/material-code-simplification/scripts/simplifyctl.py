@@ -74,7 +74,7 @@ core = _load_core()
 def _require_core_surface() -> None:
     required = {
         "ReviewError",
-        "STATE_SCHEMA",
+        "SIMPLIFICATION_STATE_SCHEMA",
         "SCOPE_SCHEMA",
         "TOOL_VERSION",
         "PHASE_CONTEXT",
@@ -470,7 +470,7 @@ def command_init_codebase(args: argparse.Namespace) -> int:
         }
         core.atomic_write_json(temp_run_dir / "profile.json", profile)
         state = {
-            "schema_version": core.STATE_SCHEMA,
+            "schema_version": core.SIMPLIFICATION_STATE_SCHEMA,
             "tool_version": core.TOOL_VERSION,
             "run_id": run_id,
             "repo_root": str(repo),

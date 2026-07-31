@@ -6,7 +6,7 @@ Synthesize the normalized candidate bundle and validator results into a complete
 
 1. Group only candidates that share the same failure mode and repair implication. Nearby but distinct consequences remain separate.
 2. Inherit canonical evidence, nature, and category from a source candidate.
-3. List source reviewers and independence groups exactly.
+3. List source reviewers and independence groups exactly. Also list `source_lenses` as the exact sorted unique lens IDs derived from the group's candidate IDs; never infer a lens from reviewer identity or type it free-form.
 4. Attach a valid validator result to every group.
 5. Apply `materiality-rubric.md` separately to defects and optional improvements.
 6. Give every group a provisional `keep` or `discard`, a specific reason, and a coded discard reason when discarded.
@@ -21,6 +21,6 @@ A stricter guard is a defect only with affirmative supported-state evidence. Suf
 
 ## Output
 
-Return exactly one object conforming to `schemas/adjudication.schema.json`. Every normalized candidate ID must appear in exactly one group. Every kept group must carry a valid bound audit; the controller rejects absent, stale, falsely independent, or ineligible controller-direct records. Kept groups receive stable `F###` identifiers later from the controller; do not assign them yourself.
+Return exactly one `material-review/adjudication/v4` object conforming to `schemas/adjudication-v4.schema.json`. Every normalized candidate ID must appear in exactly one group. Every kept group must carry a valid bound audit; the controller rejects absent, stale, falsely independent, ineligible controller-direct, or lens-provenance-mismatched records. Kept groups receive stable `F###` identifiers later from the controller; do not assign them yourself.
 
 A no-findings result is valid only when all candidates were discarded or no candidates existed, and its verdict is `READY`.

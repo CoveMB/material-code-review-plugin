@@ -29,13 +29,18 @@ from typing import Any, Iterable, Sequence
 
 
 TOOL_VERSION = "1.3.0"
-STATE_SCHEMA = "material-review/state/v1"
+MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v2"
+SIMPLIFICATION_STATE_SCHEMA = "material-review/state/v1"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 CANDIDATE_SCHEMA_REVIEW = "material-review/candidate-set/v2"
-NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
-ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
-LEDGER_SCHEMA = "material-review/ledger/v3"
+NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v2"
+NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION = "material-review/candidates-normalized/v1"
+ADJUDICATION_SCHEMA_REVIEW = "material-review/adjudication/v4"
+ADJUDICATION_SCHEMA_SIMPLIFICATION = "material-review/adjudication/v3"
+LEDGER_SCHEMA_REVIEW = "material-review/ledger/v4"
+LEDGER_SCHEMA_SIMPLIFICATION = "material-review/ledger/v3"
 FINDINGS_GATE_SCHEMA = "material-review/findings-gate/v1"
 FIX_PLAN_SCHEMA = "material-review/fix-plan/v2"
 PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
@@ -44,6 +49,10 @@ VERIFICATION_SCHEMA = "material-review/verification/v1"
 COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
 WORKFLOW_PROFILE_REVIEW = "material_review"
 SIMPLIFICATION_PROFILE = "material-code-simplification"
+STATE_CONTRACT_MATERIAL_REVIEW = "current_material_review"
+STATE_CONTRACT_SIMPLIFICATION = "current_simplification"
+STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1 = "finalizable_material_review_v1"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW = "legacy_material_review"
 
 RISK_ASSESSMENT_CODES = frozenset({"user_selectable_output_paths", "persisted_config_semantics"})
 CORE_REVIEW_LENSES = frozenset({"correctness", "test_adequacy", "standards_alignment"})
@@ -357,6 +366,37 @@ def normalize_repo_path(raw: str, *, allow_dot: bool = False) -> str:
     return "/".join(parts)
 
 
+def require_canonical_repo_path(raw: Any, context: str) -> str:
+    if not isinstance(raw, str):
+        raise ReviewError(f"{context} must be a string")
+    if "\0" in raw or re.match(r"^[A-Za-z]:", raw):
+        raise ReviewError(
+            f"{context} must be a canonical repository-relative forward-slash Git path: {raw!r}"
+        )
+    try:
+        normalized = normalize_repo_path(raw)
+    except ReviewError as exc:
+        raise ReviewError(
+            f"{context} must be a canonical repository-relative forward-slash Git path: {raw!r}"
+        ) from exc
+    if raw != normalized or raw[:1] == "\ufeff" or raw[-1:] == "\ufeff":
+        raise ReviewError(
+            f"{context} must be a canonical repository-relative forward-slash Git path: {raw!r}"
+        )
+    return raw
+
+
+def require_canonical_repo_path_array(value: Any, context: str) -> list[str]:
+    values = require_array(value, context)
+    result = [
+        require_canonical_repo_path(item, f"{context}[{index}]")
+        for index, item in enumerate(values)
+    ]
+    if len(set(result)) != len(result):
+        raise ReviewError(f"{context} must contain unique values")
+    return result
+
+
 def repo_path(repo: Path, relative: str) -> Path:
     normalized = normalize_repo_path(relative)
     # Canonicalize the repository root before containment checks. On macOS,
@@ -409,11 +449,90 @@ def require_bool(value: Any, context: str) -> bool:
     return value
 
 
+def classify_state_contract(
+    state: dict[str, Any], *, run_dir: Path | None = None
+) -> str:
+    schema_version = state.get("schema_version")
+    profile = state.get("profile")
+    profile_present = "profile" in state
+    coverage_required = state.get("coverage_required")
+    workflow_profile = state.get("workflow_profile")
+
+    if schema_version == MATERIAL_REVIEW_STATE_SCHEMA:
+        if (
+            not profile_present
+            and coverage_required is True
+            and workflow_profile == WORKFLOW_PROFILE_REVIEW
+        ):
+            return STATE_CONTRACT_MATERIAL_REVIEW
+    if (
+        schema_version == SIMPLIFICATION_STATE_SCHEMA
+        and profile == SIMPLIFICATION_PROFILE
+        and "coverage_required" not in state
+        and "workflow_profile" not in state
+    ):
+        return STATE_CONTRACT_SIMPLIFICATION
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA
+        and not profile_present
+        and "coverage_required" not in state
+        and "workflow_profile" not in state
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW
+
+    location = f" in {run_dir}" if run_dir is not None else ""
+    raise ReviewError(f"Unsupported or contradictory state identity{location}")
+
+
 def is_simplification_state(state: dict[str, Any]) -> bool:
-    return state.get("profile") == SIMPLIFICATION_PROFILE
+    return classify_state_contract(state) == STATE_CONTRACT_SIMPLIFICATION
 
 
-LEGACY_ALLOWED_COMMANDS = frozenset({"status", "check-scope", "rollback-finding", "abort-fixes"})
+def expected_normalized_candidates_schema(state: dict[str, Any]) -> str:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return NORMALIZED_CANDIDATES_SCHEMA_REVIEW
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        return NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION
+    raise ReviewError("Run predates required coverage; start a new run.")
+
+
+def expected_adjudication_schema(state: dict[str, Any]) -> str:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return ADJUDICATION_SCHEMA_REVIEW
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        return ADJUDICATION_SCHEMA_SIMPLIFICATION
+    raise ReviewError("Run predates required coverage; start a new run.")
+
+
+def expected_ledger_schema(state: dict[str, Any]) -> str:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return LEDGER_SCHEMA_REVIEW
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        return LEDGER_SCHEMA_SIMPLIFICATION
+    raise ReviewError("Run predates required coverage; start a new run.")
+
+
+LEGACY_OBSERVATION_COMMANDS = frozenset({"status", "check-scope"})
+LEGACY_RESTORATION_COMMANDS = frozenset({"rollback-finding", "abort-fixes"})
+LEGACY_ALLOWED_COMMANDS = LEGACY_OBSERVATION_COMMANDS | LEGACY_RESTORATION_COMMANDS
+FINALIZABLE_MATERIAL_REVIEW_V1_COMMANDS = frozenset(
+    {
+        "refresh-finding-test",
+        "run-global-test",
+        "prepare-verification",
+        "record-verification",
+    }
+)
 
 
 def enforce_command_compatibility(args: argparse.Namespace) -> None:
@@ -422,18 +541,23 @@ def enforce_command_compatibility(args: argparse.Namespace) -> None:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
     state = load_state(run_dir)
-    if is_simplification_state(state):
+    contract = classify_state_contract(state, run_dir=run_dir)
+    if contract in {STATE_CONTRACT_MATERIAL_REVIEW, STATE_CONTRACT_SIMPLIFICATION}:
         return
-    if state.get("coverage_required") is True and state.get("workflow_profile") == WORKFLOW_PROFILE_REVIEW:
+    if (
+        contract == STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1
+        and args.command in LEGACY_ALLOWED_COMMANDS | FINALIZABLE_MATERIAL_REVIEW_V1_COMMANDS
+    ):
         return
     if args.command not in LEGACY_ALLOWED_COMMANDS:
         raise ReviewError("Run predates required coverage; start a new run.")
 
 
 def require_current_material_review_contract(state: dict[str, Any]) -> None:
-    if is_simplification_state(state):
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
         raise ReviewError("Material-review coverage is not used for material simplification")
-    if state.get("coverage_required") is not True or state.get("workflow_profile") != WORKFLOW_PROFILE_REVIEW:
+    if contract != STATE_CONTRACT_MATERIAL_REVIEW:
         raise ReviewError("Run predates required coverage; start a new run.")
 
 
@@ -828,8 +952,7 @@ def state_path(run_dir: Path) -> Path:
 
 def load_state(run_dir: Path) -> dict[str, Any]:
     state = require_object(load_json(state_path(run_dir)), "state")
-    if state.get("schema_version") != STATE_SCHEMA:
-        raise ReviewError(f"Unsupported state schema in {run_dir}")
+    classify_state_contract(state, run_dir=run_dir)
     return state
 
 
@@ -874,6 +997,140 @@ def load_recorded_coverage_plan(run_dir: Path, state: dict[str, Any]) -> dict[st
     return validate_coverage_plan(plan, run_dir=run_dir, state=state)
 
 
+def validate_normalized_candidates_profile(
+    bundle: dict[str, Any], *, state: dict[str, Any]
+) -> None:
+    expected_schema = expected_normalized_candidates_schema(state)
+    schema_version = require_string(
+        bundle.get("schema_version"), "normalized candidates.schema_version"
+    )
+    if schema_version != expected_schema:
+        raise ReviewError(
+            "normalized candidates schema_version does not match the active workflow profile: "
+            f"expected {expected_schema}, got {schema_version}"
+        )
+    if bundle.get("scope_hash") != state.get("scope_hash"):
+        raise ReviewError("Normalized candidates scope_hash does not match the active run")
+
+    reviewer_sets = require_array(
+        bundle.get("reviewer_sets"), "normalized candidates.reviewer_sets"
+    )
+    candidates = require_array(bundle.get("candidates"), "normalized candidates.candidates")
+    material_review = schema_version == NORMALIZED_CANDIDATES_SCHEMA_REVIEW
+
+    if not material_review:
+        if "coverage_plan_hash" in bundle:
+            raise ReviewError(
+                "Simplification normalized candidates must not contain coverage_plan_hash"
+            )
+        for index, raw_reviewer_set in enumerate(reviewer_sets):
+            reviewer_set = require_object(
+                raw_reviewer_set, f"normalized candidates.reviewer_sets[{index}]"
+            )
+            if "lens_id" in reviewer_set:
+                raise ReviewError(
+                    "Simplification normalized reviewer sets must not contain lens_id"
+                )
+        for index, raw_candidate in enumerate(candidates):
+            candidate = require_object(
+                raw_candidate, f"normalized candidates.candidates[{index}]"
+            )
+            if "lens_id" in candidate:
+                raise ReviewError(
+                    "Simplification normalized candidates must not contain lens_id"
+                )
+        return
+
+    coverage_plan_hash = require_sha256(
+        bundle.get("coverage_plan_hash"),
+        "normalized candidates.coverage_plan_hash",
+    )
+    if coverage_plan_hash != state.get("hashes", {}).get("coverage_plan_hash"):
+        raise ReviewError(
+            "Normalized candidates coverage_plan_hash does not match the recorded coverage plan"
+        )
+
+    reviewer_sets_by_lens: dict[str, dict[str, Any]] = {}
+    for index, raw_reviewer_set in enumerate(reviewer_sets):
+        context = f"normalized candidates.reviewer_sets[{index}]"
+        reviewer_set = require_object(raw_reviewer_set, context)
+        lens_id = require_string(reviewer_set.get("lens_id"), f"{context}.lens_id")
+        if re.fullmatch(r"[a-z][a-z0-9_]*", lens_id) is None:
+            raise ReviewError(f"{context}.lens_id has an invalid format")
+        if lens_id in reviewer_sets_by_lens:
+            raise ReviewError(f"Duplicate normalized reviewer-set lens_id: {lens_id}")
+        reviewer_coverage_hash = require_sha256(
+            reviewer_set.get("coverage_plan_hash"), f"{context}.coverage_plan_hash"
+        )
+        if reviewer_coverage_hash != coverage_plan_hash:
+            raise ReviewError(
+                f"{context}.coverage_plan_hash does not match the normalized bundle"
+            )
+        reviewer_sets_by_lens[lens_id] = reviewer_set
+
+    candidate_ids: set[str] = set()
+    for index, raw_candidate in enumerate(candidates):
+        context = f"normalized candidates.candidates[{index}]"
+        candidate = require_object(raw_candidate, context)
+        candidate_id = require_string(candidate.get("candidate_id"), f"{context}.candidate_id")
+        if candidate_id in candidate_ids:
+            raise ReviewError(f"Duplicate normalized candidate_id: {candidate_id}")
+        candidate_ids.add(candidate_id)
+        lens_id = require_string(candidate.get("lens_id"), f"{context}.lens_id")
+        reviewer_set = reviewer_sets_by_lens.get(lens_id)
+        if reviewer_set is None:
+            raise ReviewError(f"{context}.lens_id has no validated reviewer-set source")
+        candidate_identity = (
+            candidate.get("reviewer_id"),
+            candidate.get("independence_group"),
+            candidate.get("review_mode"),
+        )
+        reviewer_set_identity = (
+            reviewer_set.get("reviewer_id"),
+            reviewer_set.get("independence_group"),
+            reviewer_set.get("review_mode"),
+        )
+        if candidate_identity != reviewer_set_identity:
+            raise ReviewError(
+                f"{context} identity does not match its validated lens source"
+            )
+        if "coverage_plan_hash" in candidate:
+            raise ReviewError(
+                f"{context} must not duplicate the bundle coverage_plan_hash"
+            )
+
+
+def load_verified_candidates_bundle(
+    run_dir: Path, state: dict[str, Any]
+) -> dict[str, Any]:
+    bundle = require_object(
+        load_json(run_dir / "candidates.json"), "normalized candidates"
+    )
+    validate_normalized_candidates_profile(bundle, state=state)
+    bundle_hash = verify_embedded_hash(
+        bundle,
+        hash_field="candidate_bundle_hash",
+        context="normalized candidates",
+        unhashed_fields={"generated_at"},
+    )
+    require_state_hash(
+        state, "candidate_bundle_hash", bundle_hash, "normalized candidates"
+    )
+    return bundle
+
+
+def require_compatible_existing_candidate_authority(
+    run_dir: Path, state: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        return load_verified_candidates_bundle(run_dir, state)
+    except ReviewError as exc:
+        raise ReviewError(
+            "Existing normalized candidate authority is incompatible with the active "
+            "workflow profile; start a new run. Cause: " + str(exc)
+        ) from exc
+
+
 def load_verified_findings_gate(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     receipt = require_object(load_json(run_dir / "gates" / "findings.json"), "Gate A receipt")
     receipt_hash = verify_embedded_hash(
@@ -893,6 +1150,51 @@ def load_verified_ledger(
     findings_gate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ledger = require_object(load_json(run_dir / "ledger.json"), "ledger")
+    expected_schema = expected_ledger_schema(state)
+    schema_version = require_string(ledger.get("schema_version"), "ledger.schema_version")
+    if schema_version != expected_schema:
+        raise ReviewError(
+            "ledger schema_version does not match the active workflow profile: "
+            f"expected {expected_schema}, got {schema_version}"
+        )
+    entries = [
+        *require_array(ledger.get("findings"), "ledger.findings"),
+        *require_array(ledger.get("discarded"), "ledger.discarded"),
+    ]
+    if schema_version == LEDGER_SCHEMA_REVIEW:
+        candidates_bundle = load_verified_candidates_bundle(run_dir, state)
+        candidates_by_id = {
+            candidate["candidate_id"]: candidate
+            for candidate in candidates_bundle["candidates"]
+        }
+        for index, raw_entry in enumerate(entries):
+            context = f"ledger provenance entry[{index}]"
+            entry = require_object(raw_entry, context)
+            candidate_ids = require_string_array(
+                entry.get("candidate_ids"), f"{context}.candidate_ids"
+            )
+            unknown = sorted(set(candidate_ids) - set(candidates_by_id))
+            if unknown:
+                raise ReviewError(
+                    f"{context} references unknown candidate IDs: {', '.join(unknown)}"
+                )
+            expected_lenses = sorted(
+                {candidates_by_id[candidate_id]["lens_id"] for candidate_id in candidate_ids}
+            )
+            source_lenses = require_string_array(
+                entry.get("source_lenses"), f"{context}.source_lenses"
+            )
+            if source_lenses != expected_lenses:
+                raise ReviewError(
+                    f"{context}.source_lenses must be the exact sorted candidate-source lenses"
+                )
+    else:
+        for index, raw_entry in enumerate(entries):
+            entry = require_object(raw_entry, f"ledger provenance entry[{index}]")
+            if "source_lenses" in entry:
+                raise ReviewError(
+                    "Simplification ledger/v3 entries must not contain source_lenses"
+                )
     ledger_hash = verify_embedded_hash(
         ledger,
         hash_field="ledger_hash",
@@ -1453,6 +1755,15 @@ def validate_coverage_plan(raw: object, *, run_dir: Path, state: dict[str, Any])
     )
     if plan["schema_version"] != COVERAGE_PLAN_SCHEMA:
         raise ReviewError("coverage plan has an unsupported schema_version")
+    assessments_raw = require_array(plan["risk_assessments"], "coverage plan.risk_assessments")
+    prevalidated_evidence_paths: dict[int, list[str]] = {}
+    for index, raw_assessment in enumerate(assessments_raw):
+        context = f"coverage plan.risk_assessments[{index}]"
+        assessment = require_object(raw_assessment, context)
+        if "evidence_paths" in assessment:
+            prevalidated_evidence_paths[index] = require_canonical_repo_path_array(
+                assessment["evidence_paths"], f"{context}.evidence_paths"
+            )
     scope_hash = require_sha256(plan["scope_hash"], "coverage plan.scope_hash")
     if scope_hash != state.get("scope_hash"):
         raise ReviewError("coverage plan scope hash does not match the active frozen scope")
@@ -1461,7 +1772,6 @@ def validate_coverage_plan(raw: object, *, run_dir: Path, state: dict[str, Any])
 
     scope = load_verified_scope(run_dir, state)
     scope_paths = all_scope_paths(scope["identity"])
-    assessments_raw = require_array(plan["risk_assessments"], "coverage plan.risk_assessments")
     if len(assessments_raw) != len(RISK_ASSESSMENT_CODES):
         raise ReviewError("coverage plan must contain every risk assessment code exactly once")
     assessments: list[dict[str, Any]] = []
@@ -1474,10 +1784,7 @@ def validate_coverage_plan(raw: object, *, run_dir: Path, state: dict[str, Any])
             raise ReviewError(f"{context}.code is unsupported: {code}")
         present = require_bool(assessment["present"], f"{context}.present")
         rationale = require_string(assessment["rationale"], f"{context}.rationale")
-        evidence_paths = [
-            normalize_repo_path(path)
-            for path in require_string_array(assessment["evidence_paths"], f"{context}.evidence_paths")
-        ]
+        evidence_paths = prevalidated_evidence_paths[index]
         if present and not evidence_paths:
             raise ReviewError(f"{context}.evidence_paths must contain at least one path when present is true")
         if not present and evidence_paths:
@@ -1573,6 +1880,34 @@ def validate_candidate_set(
     if material_review:
         expected_top.update({"coverage_plan_hash", "lens_id"})
     require_exact_keys(obj, expected_top, f"candidate set {source_file}")
+    prevalidated_coverage_files: list[str] | None = None
+    prevalidated_finding_paths: dict[int, dict[str, Any]] = {}
+    if material_review:
+        coverage_for_path_preflight = require_object(
+            obj["coverage"], f"{source_file}.coverage"
+        )
+        if "files_reviewed" in coverage_for_path_preflight:
+            prevalidated_coverage_files = require_canonical_repo_path_array(
+                coverage_for_path_preflight["files_reviewed"],
+                f"{source_file}.coverage.files_reviewed",
+            )
+        findings_for_path_preflight = require_array(
+            obj["findings"], f"{source_file}.findings"
+        )
+        for index, raw_finding in enumerate(findings_for_path_preflight):
+            context = f"{source_file}.findings[{index}]"
+            finding = require_object(raw_finding, context)
+            path_fields: dict[str, Any] = {}
+            if "file" in finding:
+                path_fields["file"] = require_canonical_repo_path(
+                    finding["file"], f"{context}.file"
+                )
+            if "related_changed_files" in finding:
+                path_fields["related_changed_files"] = require_canonical_repo_path_array(
+                    finding["related_changed_files"],
+                    f"{context}.related_changed_files",
+                )
+            prevalidated_finding_paths[index] = path_fields
     if obj["scope_hash"] != state["scope_hash"]:
         raise ReviewError(f"{source_file}: scope_hash does not match the active frozen scope")
     coverage_plan_hash: str | None = None
@@ -1592,7 +1927,20 @@ def validate_candidate_set(
 
     coverage = require_object(obj["coverage"], f"{source_file}.coverage")
     require_exact_keys(coverage, {"files_reviewed", "areas", "limitations"}, f"{source_file}.coverage")
-    coverage_files = [normalize_repo_path(item) for item in require_string_array(coverage["files_reviewed"], f"{source_file}.coverage.files_reviewed")]
+    if material_review:
+        assert prevalidated_coverage_files is not None
+        coverage_files = prevalidated_coverage_files
+    else:
+        coverage_files = [
+            normalize_repo_path(item)
+            for item in require_string_array(
+                coverage["files_reviewed"], f"{source_file}.coverage.files_reviewed"
+            )
+        ]
+    if material_review and not coverage_files:
+        raise ReviewError(
+            f"{source_file}.coverage.files_reviewed must name at least one frozen-scope path"
+        )
     coverage_areas = require_string_array(coverage["areas"], f"{source_file}.coverage.areas")
     coverage_limitations = require_string_array(coverage["limitations"], f"{source_file}.coverage.limitations")
 
@@ -1655,7 +2003,10 @@ def validate_candidate_set(
             if confidence == "low" and severity != "blocker":
                 raise ReviewError(f"{context}: low-confidence non-blocker candidates must be suppressed")
 
-            file = normalize_repo_path(require_string(finding["file"], f"{context}.file"))
+            if material_review:
+                file = prevalidated_finding_paths[index]["file"]
+            else:
+                file = normalize_repo_path(require_string(finding["file"], f"{context}.file"))
             line_start = require_int(finding["line_start"], f"{context}.line_start", minimum=1)
             line_end = require_int(finding["line_end"], f"{context}.line_end", minimum=1)
             if line_end < line_start:
@@ -1667,7 +2018,15 @@ def validate_candidate_set(
             scope_relation = require_string(finding["scope_relation"], f"{context}.scope_relation")
             if scope_relation not in SCOPE_RELATIONS:
                 raise ReviewError(f"{context}.scope_relation must be one of {sorted(SCOPE_RELATIONS)}")
-            related = [normalize_repo_path(item) for item in require_string_array(finding["related_changed_files"], f"{context}.related_changed_files")]
+            if material_review:
+                related = prevalidated_finding_paths[index]["related_changed_files"]
+            else:
+                related = [
+                    normalize_repo_path(item)
+                    for item in require_string_array(
+                        finding["related_changed_files"], f"{context}.related_changed_files"
+                    )
+                ]
             direct_dependency = require_bool(finding["direct_dependency"], f"{context}.direct_dependency")
             if scope_relation == "primary" and file not in scope_paths:
                 raise ReviewError(f"{context}: primary file is not part of the frozen changed-file set")
@@ -2063,6 +2422,8 @@ def validate_repair_audit(
 
 def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     obj = require_object(raw, "adjudication")
+    expected_schema = expected_adjudication_schema(state)
+    material_review = expected_schema == ADJUDICATION_SCHEMA_REVIEW
     top_keys = {
         "schema_version",
         "scope_hash",
@@ -2074,8 +2435,11 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "limitations",
     }
     require_exact_keys(obj, top_keys, "adjudication")
-    if obj["schema_version"] != ADJUDICATION_SCHEMA:
-        raise ReviewError("Unsupported adjudication schema_version")
+    if obj["schema_version"] != expected_schema:
+        raise ReviewError(
+            "Adjudication schema_version does not match the active workflow profile: "
+            f"expected {expected_schema}, got {obj['schema_version']}"
+        )
     if obj["scope_hash"] != state["scope_hash"]:
         raise ReviewError("Adjudication scope_hash does not match the run")
     if obj["candidate_bundle_hash"] != candidates_bundle["candidate_bundle_hash"]:
@@ -2113,6 +2477,8 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "repair_direction",
         "repair_audit",
     }
+    if material_review:
+        group_keys.add("source_lenses")
 
     for index, raw_group in enumerate(groups_raw):
         context = f"adjudication.groups[{index}]"
@@ -2172,6 +2538,16 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             raise ReviewError(f"{context}.source_reviewers must exactly match candidate sources")
         if source_independence != expected_groups:
             raise ReviewError(f"{context}.source_independence_groups must exactly match candidate sources")
+        source_lenses: list[str] | None = None
+        if material_review:
+            expected_lenses = sorted({candidate["lens_id"] for candidate in source_candidates})
+            source_lenses = require_string_array(
+                group["source_lenses"], f"{context}.source_lenses"
+            )
+            if source_lenses != expected_lenses:
+                raise ReviewError(
+                    f"{context}.source_lenses must be the exact sorted candidate-source lenses"
+                )
 
         validation = validate_validation_object(group["validation"], f"{context}.validation")
         if validation["mode"] == "independent" and validation["independence_group"] in expected_groups:
@@ -2269,6 +2645,8 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             "repair_direction_hash": canonical_hash(repair_direction) if repair_direction is not None else None,
             "repair_audit": repair_audit,
         }
+        if source_lenses is not None:
+            normalized_group["source_lenses"] = source_lenses
         groups.append(normalized_group)
 
     missing = sorted(set(candidates_by_id) - seen_candidate_ids)
@@ -2292,7 +2670,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             raise ReviewError("High/fix-now findings require SHOULD FIX BEFORE MERGE or NOT READY")
 
     return {
-        "schema_version": ADJUDICATION_SCHEMA,
+        "schema_version": expected_schema,
         "scope_hash": state["scope_hash"],
         "candidate_bundle_hash": candidates_bundle["candidate_bundle_hash"],
         "adjudicator_id": require_string(obj["adjudicator_id"], "adjudication.adjudicator_id"),
@@ -2301,6 +2679,40 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "summary": require_string(obj["summary"], "adjudication.summary"),
         "limitations": require_string_array(obj["limitations"], "adjudication.limitations"),
     }
+
+
+def require_compatible_existing_adjudicated_authority(
+    run_dir: Path,
+    state: dict[str, Any],
+    *,
+    candidates_bundle: dict[str, Any],
+) -> None:
+    try:
+        persisted_adjudication = require_object(
+            load_json(run_dir / "adjudication.normalized.json"),
+            "normalized adjudication",
+        )
+        validation_input = copy.deepcopy(persisted_adjudication)
+        for index, raw_group in enumerate(
+            require_array(validation_input.get("groups"), "normalized adjudication.groups")
+        ):
+            group = require_object(raw_group, f"normalized adjudication.groups[{index}]")
+            group.pop("repair_direction_hash", None)
+        normalized_adjudication = validate_adjudication(
+            validation_input,
+            candidates_bundle=candidates_bundle,
+            state=state,
+        )
+        if persisted_adjudication != normalized_adjudication:
+            raise ReviewError(
+                "Existing normalized adjudication does not match its canonical profile"
+            )
+        load_verified_ledger(run_dir, state)
+    except ReviewError as exc:
+        raise ReviewError(
+            "Existing normalized adjudication or ledger authority is incompatible with "
+            "the active workflow profile; start a new run. Cause: " + str(exc)
+        ) from exc
 
 
 def validate_test_spec(value: Any, context: str, repo: Path) -> dict[str, Any]:
@@ -2606,10 +3018,16 @@ def render_candidates_markdown(bundle: dict[str, Any], rejections: list[dict[str
     if not bundle["candidates"]:
         lines.append("- none")
     for candidate in bundle["candidates"]:
+        lens = (
+            f"lens `{candidate['lens_id']}`, "
+            if "lens_id" in candidate
+            else ""
+        )
         lines.append(
             f"- **{candidate['candidate_id']}** [{candidate['severity']}/{candidate['confidence']}] "
             f"`{candidate['file']}:{candidate['line_start']}` — {candidate['title']} "
-            f"(reviewer `{candidate['reviewer_id']}`, group `{candidate['independence_group']}`)"
+            f"({lens}reviewer `{candidate['reviewer_id']}`, "
+            f"group `{candidate['independence_group']}`)"
         )
     lines.extend(["", "## Rejected reviewer output", ""])
     if not rejections:
@@ -2676,6 +3094,8 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
                 f"- Candidate sources: {', '.join(finding['candidate_ids'])}",
             ]
         )
+        if "source_lenses" in finding:
+            lines.append(f"- Source lenses: {', '.join(finding['source_lenses'])}")
         direction = finding["repair_direction"]
         lines.extend(
             [
@@ -2722,8 +3142,14 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
     if not ledger["discarded"]:
         lines.append("- none")
     for group in ledger["discarded"]:
+        lens_suffix = (
+            f"; lenses {', '.join(group['source_lenses'])}"
+            if "source_lenses" in group
+            else ""
+        )
         lines.append(
-            f"- **{group['group_id']}** ({', '.join(group['candidate_ids'])}) — {group['canonical_title']} "
+            f"- **{group['group_id']}** ({', '.join(group['candidate_ids'])}{lens_suffix}) — "
+            f"{group['canonical_title']} "
             f"-> `{group['discard_reason_code']}`: {group['decision_reason']}"
         )
     if ledger["limitations"]:
@@ -2855,7 +3281,11 @@ def command_init(args: argparse.Namespace) -> int:
         write_source_bundle_files(temp_run_dir, scope, limitations)
         identity = scope["identity"]
         state = {
-            "schema_version": STATE_SCHEMA,
+            "schema_version": (
+                MATERIAL_REVIEW_STATE_SCHEMA
+                if workflow_profile == WORKFLOW_PROFILE_REVIEW
+                else SIMPLIFICATION_STATE_SCHEMA
+            ),
             "tool_version": TOOL_VERSION,
             "run_id": run_id,
             "repo_root": str(repo),
@@ -2975,6 +3405,9 @@ def command_ingest_material_review_candidates(
         validate_candidate_wave_against_coverage(plan, reviewer_sets)
         scope_paths = all_scope_paths(load_verified_scope(run_dir, state)["identity"])
         validate_material_review_coverage_paths(reviewer_sets, scope_paths=scope_paths)
+        for reviewer_set in reviewer_sets:
+            for finding in reviewer_set["findings"]:
+                finding["lens_id"] = reviewer_set["lens_id"]
     except ReviewError as exc:
         if not rejections or rejections[-1].get("reason") != str(exc):
             rejections.append({"reason": str(exc)})
@@ -2988,9 +3421,19 @@ def command_ingest_material_review_candidates(
         atomic_write_json(run_dir / "candidate-ingestion-failure.json", failure)
         raise
 
+    reviewer_sets.sort(
+        key=lambda item: (
+            item["lens_id"],
+            item["reviewer_id"],
+            item["independence_group"],
+            item["review_mode"],
+        )
+    )
     candidates: list[dict[str, Any]] = []
     for reviewer_set in reviewer_sets:
         candidates.extend(reviewer_set.pop("findings"))
+    for candidate in candidates:
+        candidate.pop("source_file", None)
     candidates.sort(
         key=lambda item: (
             item["reviewer_id"],
@@ -2998,13 +3441,14 @@ def command_ingest_material_review_candidates(
             item["local_id"],
             item["file"],
             item["line_start"],
+            item["lens_id"],
         )
     )
     for index, candidate in enumerate(candidates, start=1):
         candidate["candidate_id"] = f"C{index:03d}"
 
     payload = {
-        "schema_version": NORMALIZED_CANDIDATES_SCHEMA,
+        "schema_version": NORMALIZED_CANDIDATES_SCHEMA_REVIEW,
         "scope_hash": state["scope_hash"],
         "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
         "reviewer_sets": reviewer_sets,
@@ -3012,6 +3456,18 @@ def command_ingest_material_review_candidates(
         "rejections": rejections,
     }
     bundle_hash = canonical_hash(payload)
+
+    if state["phase"] == PHASE_CANDIDATES:
+        existing = require_compatible_existing_candidate_authority(run_dir, state)
+        if existing["candidate_bundle_hash"] == bundle_hash:
+            print(f"[OK] Candidate bundle already captured: {bundle_hash}")
+            print("Exact validated retry made no changes")
+            return 0
+        raise ReviewError(
+            "Candidate bundle is already captured and differs from this complete valid "
+            "wave; start a new run"
+        )
+
     payload["candidate_bundle_hash"] = bundle_hash
     payload["generated_at"] = utc_now()
     atomic_write_json(run_dir / "candidates.json", payload)
@@ -3054,6 +3510,9 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
             raise ReviewError("Coverage plan is not recorded")
         return command_ingest_material_review_candidates(args, repo=repo, run_dir=run_dir, state=state)
 
+    if state["phase"] == PHASE_CANDIDATES:
+        require_compatible_existing_candidate_authority(run_dir, state)
+
     reviewer_sets: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     for raw_path in args.input:
@@ -3086,7 +3545,7 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
         candidate["candidate_id"] = f"C{index:03d}"
 
     payload = {
-        "schema_version": NORMALIZED_CANDIDATES_SCHEMA,
+        "schema_version": NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION,
         "scope_hash": state["scope_hash"],
         "reviewer_sets": reviewer_sets,
         "candidates": candidates,
@@ -3127,24 +3586,17 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
     if state["phase"] not in {PHASE_CANDIDATES, PHASE_ADJUDICATED}:
         raise ReviewError(f"Cannot compile ledger in phase {state['phase']}")
     check_scope_fresh(repo, run_dir, state)
-    coverage_plan: dict[str, Any] | None = None
-    if not is_simplification_state(state):
+    material_review = not is_simplification_state(state)
+    if material_review:
         require_current_material_review_contract(state)
-        coverage_plan = load_recorded_coverage_plan(run_dir, state)
-    candidates_bundle = require_object(load_json(run_dir / "candidates.json"), "normalized candidates")
-    candidate_hash = verify_embedded_hash(
-        candidates_bundle,
-        hash_field="candidate_bundle_hash",
-        context="normalized candidates",
-        unhashed_fields={"generated_at"},
-    )
-    require_state_hash(state, "candidate_bundle_hash", candidate_hash, "normalized candidates")
-    if coverage_plan is not None:
-        coverage_plan_hash = require_sha256(
-            candidates_bundle.get("coverage_plan_hash"), "normalized candidates.coverage_plan_hash"
+        load_recorded_coverage_plan(run_dir, state)
+    candidates_bundle = load_verified_candidates_bundle(run_dir, state)
+    if state["phase"] == PHASE_ADJUDICATED:
+        require_compatible_existing_adjudicated_authority(
+            run_dir,
+            state,
+            candidates_bundle=candidates_bundle,
         )
-        if coverage_plan_hash != state["hashes"]["coverage_plan_hash"]:
-            raise ReviewError("Normalized candidates coverage_plan_hash does not match the recorded coverage plan")
     adjudication = validate_adjudication(load_json(Path(args.input).expanduser().resolve()), candidates_bundle=candidates_bundle, state=state)
     candidates_by_id = {item["candidate_id"]: item for item in candidates_bundle["candidates"]}
     kept_groups = [group for group in adjudication["groups"] if group["disposition"] == "keep"]
@@ -3160,41 +3612,42 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
     findings: list[dict[str, Any]] = []
     for index, group in enumerate(kept_groups, start=1):
         representative = representative_candidate(group, candidates_by_id)
-        findings.append(
-            {
-                "finding_id": f"F{index:03d}",
-                "group_id": group["group_id"],
-                "candidate_ids": group["candidate_ids"],
-                "title": group["canonical_title"],
-                "nature": group["nature"],
-                "category": group["category"],
-                "severity": group["severity"],
-                "confidence": group["confidence"],
-                "file": group["file"],
-                "line_start": group["line_start"],
-                "line_end": group["line_end"],
-                "evidence_side": group["evidence_side"],
-                "evidence_quote": group["evidence_quote"],
-                "observable_consequence": representative["observable_consequence"],
-                "trigger_conditions": representative["trigger_conditions"],
-                "repair_direction": group["repair_direction"],
-                "repair_direction_hash": group["repair_direction_hash"],
-                "repair_audit": group["repair_audit"],
-                "estimated_fix_risk": representative["estimated_fix_risk"],
-                "requires_user_decision": bool(group["repair_direction"]["open_user_decisions"]),
-                "assumptions": representative["assumptions"],
-                "source_reviewers": group["source_reviewers"],
-                "source_independence_groups": group["source_independence_groups"],
-                "validation": group["validation"],
-                "materiality": group["materiality"],
-                "decision_reason": group["decision_reason"],
-                "recommended_action": group["recommended_action"],
-                "required_pre_fix_verification": group["required_pre_fix_verification"],
-            }
-        )
+        finding = {
+            "finding_id": f"F{index:03d}",
+            "group_id": group["group_id"],
+            "candidate_ids": group["candidate_ids"],
+            "title": group["canonical_title"],
+            "nature": group["nature"],
+            "category": group["category"],
+            "severity": group["severity"],
+            "confidence": group["confidence"],
+            "file": group["file"],
+            "line_start": group["line_start"],
+            "line_end": group["line_end"],
+            "evidence_side": group["evidence_side"],
+            "evidence_quote": group["evidence_quote"],
+            "observable_consequence": representative["observable_consequence"],
+            "trigger_conditions": representative["trigger_conditions"],
+            "repair_direction": group["repair_direction"],
+            "repair_direction_hash": group["repair_direction_hash"],
+            "repair_audit": group["repair_audit"],
+            "estimated_fix_risk": representative["estimated_fix_risk"],
+            "requires_user_decision": bool(group["repair_direction"]["open_user_decisions"]),
+            "assumptions": representative["assumptions"],
+            "source_reviewers": group["source_reviewers"],
+            "source_independence_groups": group["source_independence_groups"],
+            "validation": group["validation"],
+            "materiality": group["materiality"],
+            "decision_reason": group["decision_reason"],
+            "recommended_action": group["recommended_action"],
+            "required_pre_fix_verification": group["required_pre_fix_verification"],
+        }
+        if material_review:
+            finding["source_lenses"] = group["source_lenses"]
+        findings.append(finding)
     discarded = [group for group in adjudication["groups"] if group["disposition"] == "discard"]
     payload = {
-        "schema_version": LEDGER_SCHEMA,
+        "schema_version": expected_ledger_schema(state),
         "scope_hash": state["scope_hash"],
         "candidate_bundle_hash": candidates_bundle["candidate_bundle_hash"],
         "adjudicator_id": adjudication["adjudicator_id"],
@@ -3239,14 +3692,7 @@ def command_gate_findings(args: argparse.Namespace) -> int:
     if state["phase"] != PHASE_ADJUDICATED:
         raise ReviewError(f"Gate A requires phase {PHASE_ADJUDICATED}; current phase is {state['phase']}")
     check_scope_fresh(repo, run_dir, state)
-    ledger = require_object(load_json(run_dir / "ledger.json"), "ledger")
-    ledger_hash = verify_embedded_hash(
-        ledger,
-        hash_field="ledger_hash",
-        context="ledger",
-        unhashed_fields={"generated_at"},
-    )
-    require_state_hash(state, "ledger_hash", ledger_hash, "ledger")
+    ledger = load_verified_ledger(run_dir, state)
     finding_ids = {item["finding_id"] for item in ledger["findings"]}
     approved = parse_csv_ids(args.approve)
     rejected = parse_csv_ids(args.reject)
@@ -4074,6 +4520,173 @@ def latest_fixed_attempt(state: dict[str, Any], finding_id: str) -> dict[str, An
     raise ReviewError(f"No retained fixed attempt exists for {finding_id}")
 
 
+def finding_test_refresh_runs(
+    state: dict[str, Any], finding_id: str, test_id: str
+) -> list[dict[str, Any]]:
+    refresh_results = state.get("finding_test_refresh_results", {})
+    if not isinstance(refresh_results, dict):
+        raise ReviewError("finding_test_refresh_results must be an object")
+    finding_results = refresh_results.get(finding_id, {})
+    if not isinstance(finding_results, dict):
+        raise ReviewError(
+            f"finding_test_refresh_results.{finding_id} must be an object"
+        )
+    runs = finding_results.get(test_id, [])
+    if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+        raise ReviewError(
+            f"finding_test_refresh_results.{finding_id}.{test_id} must be an array of objects"
+        )
+    return runs
+
+
+def command_refresh_finding_test(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_FIXING or state.get("active_finding") is not None:
+        raise ReviewError(
+            "refresh-finding-test requires FIXING phase with no active finding"
+        )
+    if not all_findings_fixed(state):
+        raise ReviewError(
+            "refresh-finding-test is available only after every approved finding is fixed"
+        )
+    if args.finding not in state["approved_findings"]:
+        raise ReviewError(f"Finding {args.finding} was not approved at Gate A")
+    status = state["finding_status"].get(args.finding)
+    if not status or status.get("status") != "fixed":
+        raise ReviewError(f"Finding {args.finding} is not fixed")
+
+    plan = load_verified_plan(run_dir, state)
+    plan_gate = load_verified_plan_gate(run_dir, state)
+    if not plan_gate["approved"] or plan_gate["plan_hash"] != plan["plan_hash"]:
+        raise ReviewError("Gate B receipt does not authorize the current plan")
+    item = plan_item_by_id(plan, args.finding)
+    test = test_by_id(item["tests"], args.test, args.finding)
+    current, _, outside = overall_repair_boundary(repo, run_dir, state, plan)
+    if outside:
+        raise ReviewError(
+            "Aggregate repair delta contains unapproved paths: "
+            + ", ".join(sorted(outside))
+        )
+
+    fixed_attempt = latest_fixed_attempt(state, args.finding)
+    prior_runs = finding_test_refresh_runs(state, args.finding, args.test)
+    run_number = len(prior_runs) + 1
+    checkpoint_dir = (
+        run_dir
+        / "checkpoints"
+        / "final-finding-tests"
+        / args.finding
+        / args.test
+        / f"run-{run_number}"
+    )
+    aggregate_allowed_paths = {
+        path for plan_item in plan["items"] for path in plan_item["allowed_paths"]
+    }
+    checkpoint = create_checkpoint(repo, checkpoint_dir, aggregate_allowed_paths)
+    result = execute_test_command(
+        repo=repo,
+        run_dir=run_dir,
+        command=test["command"],
+        working_directory=test["working_directory"],
+        timeout_seconds=test["timeout_seconds"],
+        log_relative=(
+            Path("tests")
+            / "final-finding-tests"
+            / args.finding
+            / args.test
+            / f"run-{run_number}.log"
+        ),
+    )
+
+    after_test = workspace_guard(repo)
+    before_test = checkpoint["workspace_guard"]
+    changed_by_test = diff_guard_paths(before_test, after_test)
+    control_mutations: list[str] = []
+    for field, label in (
+        ("head_sha", "HEAD"),
+        ("branch", "branch"),
+        ("staged_patch_sha256", "Git index"),
+    ):
+        if after_test["identity"][field] != before_test["identity"][field]:
+            control_mutations.append(label)
+
+    result["changed_paths_by_test"] = sorted(changed_by_test)
+    result["control_mutations_by_test"] = control_mutations
+    result["restored_after_mutation"] = False
+    if changed_by_test or control_mutations:
+        restore_checkpoint(repo, checkpoint_dir)
+        result["restored_after_mutation"] = True
+
+    final_guard, _, final_outside = overall_repair_boundary(repo, run_dir, state, plan)
+    result["workspace_guard_hash"] = final_guard["guard_hash"]
+    result["allowed_paths_hash"] = path_subset_hash(repo, item["allowed_paths"])
+    result["boundary_violations"] = sorted(final_outside)
+    result["fixed_attempt_hash"] = fixed_attempt["attempt_hash"]
+
+    refresh_results = state.setdefault("finding_test_refresh_results", {})
+    refresh_results.setdefault(args.finding, {}).setdefault(args.test, []).append(result)
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "fixed_finding_test_refreshed",
+            "finding_id": args.finding,
+            "test_id": args.test,
+            "fixed_attempt_hash": fixed_attempt["attempt_hash"],
+            "exit_code": result["exit_code"],
+            "timed_out": result["timed_out"],
+            "changed_paths_by_test": result["changed_paths_by_test"],
+            "control_mutations_by_test": result["control_mutations_by_test"],
+        }
+    )
+    save_state(run_dir, state)
+
+    passed = (
+        result["exit_code"] == 0
+        and not result["timed_out"]
+        and not changed_by_test
+        and not control_mutations
+        and not final_outside
+    )
+    print(f"[{'OK' if passed else 'FAIL'}] Refreshed {args.finding} test {args.test}")
+    print(
+        f"Exit code: {result['exit_code'] if result['exit_code'] is not None else 'timeout'}"
+    )
+    print(f"Log: {run_dir / result['log_path']}")
+    if changed_by_test or control_mutations:
+        details = []
+        if changed_by_test:
+            details.append("paths: " + ", ".join(sorted(changed_by_test)))
+        if control_mutations:
+            details.append("controls: " + ", ".join(control_mutations))
+        raise ReviewError(
+            "Approved test mutated the workspace and was restored ("
+            + "; ".join(details)
+            + ")"
+        )
+    if result["timed_out"] or result["exit_code"] != 0:
+        return 1
+    return 0
+
+
+def latest_finding_test_evidence(
+    state: dict[str, Any],
+    *,
+    finding_id: str,
+    test_id: str,
+    fixed_attempt: dict[str, Any],
+) -> dict[str, Any] | None:
+    refresh_runs = finding_test_refresh_runs(state, finding_id, test_id)
+    if refresh_runs:
+        latest = refresh_runs[-1]
+        if latest.get("fixed_attempt_hash") != fixed_attempt.get("attempt_hash"):
+            return None
+        return latest
+    attempt_runs = fixed_attempt["tests"].get(test_id, [])
+    return attempt_runs[-1] if attempt_runs else None
+
+
 def command_prepare_verification(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -4099,15 +4712,27 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
         for test in item["tests"]:
             if not test["required"]:
                 continue
-            runs = attempt["tests"].get(test["id"], [])
-            if not runs:
+            latest = latest_finding_test_evidence(
+                state,
+                finding_id=item["finding_id"],
+                test_id=test["id"],
+                fixed_attempt=attempt,
+            )
+            if latest is None:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} not run")
                 continue
-            latest = runs[-1]
             if latest["timed_out"] or latest["exit_code"] != 0:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} failed")
             elif latest.get("allowed_paths_hash") != current_subset:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} stale for approved paths")
+            elif latest.get("changed_paths_by_test"):
+                stale_finding_tests.append(f"{item['finding_id']}:{test['id']} mutated workspace")
+            elif latest.get("control_mutations_by_test"):
+                stale_finding_tests.append(
+                    f"{item['finding_id']}:{test['id']} mutated repository controls"
+                )
+            elif latest.get("boundary_violations"):
+                stale_finding_tests.append(f"{item['finding_id']}:{test['id']} boundary violation")
     if stale_finding_tests:
         raise ReviewError(
             "Finding tests are stale or failing at final repair state; reopen/rerun as appropriate: "
@@ -4150,6 +4775,9 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
         "approved_findings": state["approved_findings"],
         "changed_paths": sorted(changed_paths),
         "finding_results": finding_results,
+        "finding_test_refresh_results": state.get(
+            "finding_test_refresh_results", {}
+        ),
         "global_test_results": state["global_test_results"],
         "repair_round": state["repair_round"],
         "prepared_at": utc_now(),
@@ -4709,6 +5337,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_run_options(global_test_parser)
     global_test_parser.add_argument("--test", required=True)
     global_test_parser.set_defaults(func=command_run_global_test)
+
+    refresh_test_parser = subparsers.add_parser(
+        "refresh-finding-test",
+        help="Rerun one Gate-B-approved test for a fixed finding at the final repair state.",
+    )
+    add_common_run_options(refresh_test_parser)
+    refresh_test_parser.add_argument("--finding", required=True)
+    refresh_test_parser.add_argument("--test", required=True)
+    refresh_test_parser.set_defaults(func=command_refresh_finding_test)
 
     prepare_parser = subparsers.add_parser("prepare-verification", help="Create the bounded fix-only verification bundle.")
     add_common_run_options(prepare_parser)

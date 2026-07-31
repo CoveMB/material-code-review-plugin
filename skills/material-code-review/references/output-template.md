@@ -7,13 +7,13 @@ Present this information before asking for any decision:
 ### Frozen scope
 - mode, baseline, comparison, branch/HEAD, changed files, untracked policy, `scope_hash`;
 - intent and confidence;
-- reviewer lenses, validators, actual independence groups, failed/degraded coverage.
+- reviewer lenses, validators, actual independence groups, failed/degraded coverage; show the exact candidate-derived source lenses retained by each adjudicated group.
 
 ### Merge-readiness
 Use exactly one: `READY`, `READY WITH OPTIONAL FOLLOW-UPS`, `SHOULD FIX BEFORE MERGE`, `NOT READY`. Explain the load-bearing reason.
 
 ### Kept findings
-For every `F###`: title; nature/category; severity/finding confidence; exact evidence; consequence and trigger; causality; counterevidence checked; validation result; materiality reason; fix risk; required pre-fix verification; the canonical provisional repair direction and direction hash with its separate status, confidence, constraints, states/exceptions, alternatives, causal test evidence, user decisions, and known limits; and the repair audit's actual mode, auditor, independence group, trigger, rationale, evidence, and counterevidence.
+For every `F###`: title; nature/category; severity/finding confidence; exact evidence; consequence and trigger; causality; counterevidence checked; validation result; materiality reason; source reviewers, source independence groups, and exact source lenses; fix risk; required pre-fix verification; the canonical provisional repair direction and direction hash with its separate status, confidence, constraints, states/exceptions, alternatives, causal test evidence, user decisions, and known limits; and the repair audit's actual mode, auditor, independence group, trigger, rationale, evidence, and counterevidence.
 
 ### Discarded candidates
 List every group with candidate IDs, title, discard code, and concrete reason. Do not hide duplicate, style, speculative, or validator-rejected candidates.
