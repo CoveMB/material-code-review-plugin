@@ -1,0 +1,1667 @@
+{
+  "schema_version": "material-review/obligation-corpus/v1",
+  "cases": [
+    {
+      "case_id": "version-decoy",
+      "risk_code": "verification_mechanism_semantics",
+      "changed_paths": [
+        "scripts/validate_version.py"
+      ],
+      "context_paths": [
+        "scripts/package.py"
+      ],
+      "expected_checks": [
+        "authoritative_parsing",
+        "decoy_duplicate_resistance",
+        "paired_control"
+      ],
+      "expected_defect": "Raw-text version validation accepts comment and docstring decoys or the wrong duplicate assignment.",
+      "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v2",
+        "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Exercise one frozen missed-contract boundary.",
+            "primary_paths": [
+              "scripts/validate_version.py"
+            ],
+            "context_paths": [
+              "scripts/package.py"
+            ],
+            "risk_codes": [
+              "verification_mechanism_semantics"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The changed artifact and frozen owner jointly define this controlled boundary.",
+                "evidence_paths": [
+                  "scripts/validate_version.py"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-verification-mechanism-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "verification_mechanism_semantics",
+            "canonical_owner": "scripts/validate_version.py",
+            "affected_consumers": [
+              "scripts/package.py"
+            ],
+            "evidence_paths": [
+              "scripts/package.py",
+              "scripts/validate_version.py"
+            ],
+            "required_lens": "adversarial_verification",
+            "required_checks": [
+              "authoritative_parsing",
+              "decoy_duplicate_resistance",
+              "paired_control"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-verification-mechanism-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "verification_mechanism_semantics",
+            "lens_id": "adversarial_verification",
+            "reviewer_id": "reviewer-1",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          }
+        ]
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+          "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/validate_version.py"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+          "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/validate_version.py"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+          "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/validate_version.py"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+          "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "assignment_kind": "obligation",
+          "lens_id": "adversarial_verification",
+          "reviewer_id": "reviewer-1",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "authoritative_parsing",
+              "outcome": "finding_emitted",
+              "evidence": [
+                "Observed authoritative_parsing against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "decoy_duplicate_resistance",
+              "outcome": "pass",
+              "evidence": [
+                "Observed decoy_duplicate_resistance against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "paired_control",
+              "outcome": "pass",
+              "evidence": [
+                "Observed paired_control against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "Raw-text version validation accepts comment and docstring decoys or the wrong duplicate assignment.",
+              "nature": "defect",
+              "category": "contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "scripts/validate_version.py",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "scripts/validate_version.py"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "The changed contract can accept an invalid state or omit a required control.",
+              "trigger_conditions": "Exercise the declared negative control against the changed boundary.",
+              "counterevidence_checked": [
+                "The paired positive control follows the same authoritative path."
+              ],
+              "why_not_preference": "The observed acceptance language or required sequence is machine-verifiable.",
+              "proposed_resolution": "Align the authoritative contract and preserve the paired control.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/package.py",
+              "scripts/validate_version.py"
+            ],
+            "areas": [
+              "adversarial_verification"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-verification-mechanism-semantics"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-check",
+          "target_assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "mutation": "omitted_check",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-result",
+          "target_assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "mutation": "blocked_result",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "decoy-bypass",
+          "target_assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
+          "mutation": "semantic_bypass",
+          "expected_error": "requires evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "workflow-missing-scope",
+      "risk_code": "normative_workflow_coherence",
+      "changed_paths": [
+        "references/workflow.md"
+      ],
+      "context_paths": [
+        "SKILL.md"
+      ],
+      "expected_checks": [
+        "normative_sequence",
+        "paired_control",
+        "prerequisite_before_dependent_step"
+      ],
+      "expected_defect": "The canonical workflow omits the required freshness check before coverage recording.",
+      "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v2",
+        "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Exercise one frozen missed-contract boundary.",
+            "primary_paths": [
+              "references/workflow.md"
+            ],
+            "context_paths": [
+              "SKILL.md"
+            ],
+            "risk_codes": [
+              "normative_workflow_coherence"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The changed artifact and frozen owner jointly define this controlled boundary.",
+                "evidence_paths": [
+                  "references/workflow.md"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-normative-workflow-coherence",
+            "unit_id": "unit-001",
+            "risk_code": "normative_workflow_coherence",
+            "canonical_owner": "references/workflow.md",
+            "affected_consumers": [
+              "SKILL.md"
+            ],
+            "evidence_paths": [
+              "SKILL.md",
+              "references/workflow.md"
+            ],
+            "required_lens": "standards_alignment",
+            "required_checks": [
+              "normative_sequence",
+              "paired_control",
+              "prerequisite_before_dependent_step"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-normative-workflow-coherence",
+            "unit_id": "unit-001",
+            "risk_code": "normative_workflow_coherence",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "reviewer-2",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          }
+        ]
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "references/workflow.md"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "references/workflow.md"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "references/workflow.md"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+          "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "assignment_kind": "obligation",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "reviewer-2",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "normative_sequence",
+              "outcome": "finding_emitted",
+              "evidence": [
+                "Observed normative_sequence against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "paired_control",
+              "outcome": "pass",
+              "evidence": [
+                "Observed paired_control against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "prerequisite_before_dependent_step",
+              "outcome": "pass",
+              "evidence": [
+                "Observed prerequisite_before_dependent_step against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "The canonical workflow omits the required freshness check before coverage recording.",
+              "nature": "defect",
+              "category": "contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "references/workflow.md",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "references/workflow.md"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "The changed contract can accept an invalid state or omit a required control.",
+              "trigger_conditions": "Exercise the declared negative control against the changed boundary.",
+              "counterevidence_checked": [
+                "The paired positive control follows the same authoritative path."
+              ],
+              "why_not_preference": "The observed acceptance language or required sequence is machine-verifiable.",
+              "proposed_resolution": "Align the authoritative contract and preserve the paired control.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "SKILL.md",
+              "references/workflow.md"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-normative-workflow-coherence"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-check",
+          "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "mutation": "omitted_check",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-result",
+          "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "mutation": "blocked_result",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "sequence-bypass",
+          "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
+          "mutation": "semantic_bypass",
+          "expected_error": "requires evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "path-schema-runtime-disagreement",
+      "risk_code": "machine_contract_semantics",
+      "changed_paths": [
+        "schemas/path.schema.json"
+      ],
+      "context_paths": [
+        "scripts/runtime_validator.py"
+      ],
+      "expected_checks": [
+        "canonical_git_path_language",
+        "required_value_cardinality",
+        "schema_runtime_parity"
+      ],
+      "expected_defect": "Schema and runtime accept different repository-relative Git path spellings.",
+      "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v2",
+        "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Exercise one frozen missed-contract boundary.",
+            "primary_paths": [
+              "schemas/path.schema.json"
+            ],
+            "context_paths": [
+              "scripts/runtime_validator.py"
+            ],
+            "risk_codes": [
+              "machine_contract_semantics"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The changed artifact and frozen owner jointly define this controlled boundary.",
+                "evidence_paths": [
+                  "schemas/path.schema.json"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-machine-contract-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "machine_contract_semantics",
+            "canonical_owner": "schemas/path.schema.json",
+            "affected_consumers": [
+              "scripts/runtime_validator.py"
+            ],
+            "evidence_paths": [
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
+            ],
+            "required_lens": "api_config_compatibility",
+            "required_checks": [
+              "canonical_git_path_language",
+              "required_value_cardinality",
+              "schema_runtime_parity"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-machine-contract-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "machine_contract_semantics",
+            "lens_id": "api_config_compatibility",
+            "reviewer_id": "reviewer-3",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          }
+        ]
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/path.schema.json"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/path.schema.json"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/path.schema.json"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "assignment_kind": "obligation",
+          "lens_id": "api_config_compatibility",
+          "reviewer_id": "reviewer-3",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "canonical_git_path_language",
+              "outcome": "finding_emitted",
+              "evidence": [
+                "Observed canonical_git_path_language against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "required_value_cardinality",
+              "outcome": "pass",
+              "evidence": [
+                "Observed required_value_cardinality against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "schema_runtime_parity",
+              "outcome": "pass",
+              "evidence": [
+                "Observed schema_runtime_parity against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "Schema and runtime accept different repository-relative Git path spellings.",
+              "nature": "defect",
+              "category": "contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "schemas/path.schema.json",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "schemas/path.schema.json"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "The changed contract can accept an invalid state or omit a required control.",
+              "trigger_conditions": "Exercise the declared negative control against the changed boundary.",
+              "counterevidence_checked": [
+                "The paired positive control follows the same authoritative path."
+              ],
+              "why_not_preference": "The observed acceptance language or required sequence is machine-verifiable.",
+              "proposed_resolution": "Align the authoritative contract and preserve the paired control.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
+            ],
+            "areas": [
+              "api_config_compatibility"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-machine-contract-semantics"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-check",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "omitted_check",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-result",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "blocked_result",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "path-language-bypass",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "semantic_bypass",
+          "expected_error": "requires evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "duplicate-required-risk-code",
+      "risk_code": "machine_contract_semantics",
+      "changed_paths": [
+        "schemas/coverage.json"
+      ],
+      "context_paths": [
+        "scripts/coverage.py"
+      ],
+      "expected_checks": [
+        "canonical_git_path_language",
+        "required_value_cardinality",
+        "schema_runtime_parity"
+      ],
+      "expected_defect": "Required risk roles may be duplicated while another required role is absent.",
+      "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v2",
+        "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Exercise one frozen missed-contract boundary.",
+            "primary_paths": [
+              "schemas/coverage.json"
+            ],
+            "context_paths": [
+              "scripts/coverage.py"
+            ],
+            "risk_codes": [
+              "machine_contract_semantics"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The changed artifact and frozen owner jointly define this controlled boundary.",
+                "evidence_paths": [
+                  "schemas/coverage.json"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-machine-contract-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "machine_contract_semantics",
+            "canonical_owner": "schemas/coverage.json",
+            "affected_consumers": [
+              "scripts/coverage.py"
+            ],
+            "evidence_paths": [
+              "schemas/coverage.json",
+              "scripts/coverage.py"
+            ],
+            "required_lens": "api_config_compatibility",
+            "required_checks": [
+              "canonical_git_path_language",
+              "required_value_cardinality",
+              "schema_runtime_parity"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-machine-contract-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "machine_contract_semantics",
+            "lens_id": "api_config_compatibility",
+            "reviewer_id": "reviewer-4",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          }
+        ]
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+          "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/coverage.json"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+          "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/coverage.json"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+          "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/coverage.json"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+          "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "assignment_kind": "obligation",
+          "lens_id": "api_config_compatibility",
+          "reviewer_id": "reviewer-4",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "canonical_git_path_language",
+              "outcome": "finding_emitted",
+              "evidence": [
+                "Observed canonical_git_path_language against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "required_value_cardinality",
+              "outcome": "pass",
+              "evidence": [
+                "Observed required_value_cardinality against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "schema_runtime_parity",
+              "outcome": "pass",
+              "evidence": [
+                "Observed schema_runtime_parity against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "Required risk roles may be duplicated while another required role is absent.",
+              "nature": "defect",
+              "category": "contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "schemas/coverage.json",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "schemas/coverage.json"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "The changed contract can accept an invalid state or omit a required control.",
+              "trigger_conditions": "Exercise the declared negative control against the changed boundary.",
+              "counterevidence_checked": [
+                "The paired positive control follows the same authoritative path."
+              ],
+              "why_not_preference": "The observed acceptance language or required sequence is machine-verifiable.",
+              "proposed_resolution": "Align the authoritative contract and preserve the paired control.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "schemas/coverage.json",
+              "scripts/coverage.py"
+            ],
+            "areas": [
+              "api_config_compatibility"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-machine-contract-semantics"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-check",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "omitted_check",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-result",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "blocked_result",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "cardinality-bypass",
+          "target_assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
+          "mutation": "semantic_bypass",
+          "expected_error": "requires evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "archive-missing-contract",
+      "risk_code": "distribution_contract_integrity",
+      "changed_paths": [
+        "scripts/validate_archive.py"
+      ],
+      "context_paths": [
+        "package-layouts.json"
+      ],
+      "expected_checks": [
+        "manifest_reference_closure",
+        "paired_control",
+        "remove_one_required_entry"
+      ],
+      "expected_defect": "Archive validation succeeds after a required contract file is removed.",
+      "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v2",
+        "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Exercise one frozen missed-contract boundary.",
+            "primary_paths": [
+              "scripts/validate_archive.py"
+            ],
+            "context_paths": [
+              "package-layouts.json"
+            ],
+            "risk_codes": [
+              "distribution_contract_integrity"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The changed artifact and frozen owner jointly define this controlled boundary.",
+                "evidence_paths": [
+                  "scripts/validate_archive.py"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-distribution-contract-integrity",
+            "unit_id": "unit-001",
+            "risk_code": "distribution_contract_integrity",
+            "canonical_owner": "scripts/validate_archive.py",
+            "affected_consumers": [
+              "package-layouts.json"
+            ],
+            "evidence_paths": [
+              "package-layouts.json",
+              "scripts/validate_archive.py"
+            ],
+            "required_lens": "reliability",
+            "required_checks": [
+              "manifest_reference_closure",
+              "paired_control",
+              "remove_one_required_entry"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-distribution-contract-integrity",
+            "unit_id": "unit-001",
+            "risk_code": "distribution_contract_integrity",
+            "lens_id": "reliability",
+            "reviewer_id": "reviewer-5",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          }
+        ]
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/validate_archive.py"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/validate_archive.py"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "scripts/validate_archive.py"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v3",
+          "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "assignment_kind": "obligation",
+          "lens_id": "reliability",
+          "reviewer_id": "reviewer-5",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "manifest_reference_closure",
+              "outcome": "finding_emitted",
+              "evidence": [
+                "Observed manifest_reference_closure against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "paired_control",
+              "outcome": "pass",
+              "evidence": [
+                "Observed paired_control against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "remove_one_required_entry",
+              "outcome": "pass",
+              "evidence": [
+                "Observed remove_one_required_entry against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "Archive validation succeeds after a required contract file is removed.",
+              "nature": "defect",
+              "category": "contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "scripts/validate_archive.py",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "scripts/validate_archive.py"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "The changed contract can accept an invalid state or omit a required control.",
+              "trigger_conditions": "Exercise the declared negative control against the changed boundary.",
+              "counterevidence_checked": [
+                "The paired positive control follows the same authoritative path."
+              ],
+              "why_not_preference": "The observed acceptance language or required sequence is machine-verifiable.",
+              "proposed_resolution": "Align the authoritative contract and preserve the paired control.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "package-layouts.json",
+              "scripts/validate_archive.py"
+            ],
+            "areas": [
+              "reliability"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-distribution-contract-integrity"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-check",
+          "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "mutation": "omitted_check",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-result",
+          "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "mutation": "blocked_result",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "closure-bypass",
+          "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
+          "mutation": "semantic_bypass",
+          "expected_error": "requires evidence"
+        }
+      ]
+    }
+  ],
+  "low_risk_case": {
+    "case_id": "ordinary-low-risk",
+    "changed_paths": [
+      "src/format_name.py"
+    ],
+    "context_paths": [],
+    "valid_plan": {
+      "schema_version": "material-review/coverage-plan/v2",
+      "scope_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+      "workflow_profile": "material_review",
+      "change_units": [
+        {
+          "unit_id": "unit-001",
+          "purpose": "Document an ordinary low-risk local behavior change.",
+          "primary_paths": [
+            "src/format_name.py"
+          ],
+          "context_paths": [],
+          "risk_codes": [],
+          "selected_risk_rationale": [],
+          "rejected_risk_rationale": [
+            {
+              "risk_code": "distribution_contract_integrity",
+              "rationale": "Checked behavior does not alter this controlled boundary."
+            },
+            {
+              "risk_code": "machine_contract_semantics",
+              "rationale": "Checked behavior does not alter this controlled boundary."
+            },
+            {
+              "risk_code": "normative_workflow_coherence",
+              "rationale": "Checked behavior does not alter this controlled boundary."
+            },
+            {
+              "risk_code": "persisted_config_semantics",
+              "rationale": "Checked behavior does not alter this controlled boundary."
+            },
+            {
+              "risk_code": "user_selectable_output_paths",
+              "rationale": "Checked behavior does not alter this controlled boundary."
+            },
+            {
+              "risk_code": "verification_mechanism_semantics",
+              "rationale": "Checked behavior does not alter this controlled boundary."
+            }
+          ]
+        }
+      ],
+      "review_obligations": [],
+      "assignments": [
+        {
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent"
+        },
+        {
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent"
+        },
+        {
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent"
+        }
+      ]
+    }
+  }
+}

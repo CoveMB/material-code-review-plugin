@@ -2,7 +2,7 @@
 
 `material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact scope, records exhaustive review coverage before the candidate wave, independently validates candidates, and produces a complete kept/discarded ledger. Candidate-set/v2 binds each assigned lens and risk path; after the complete wave is validated, material review carries that lens through candidates-normalized/v2, adjudication/v4, and ledger/v4. Each adjudicated group's exact sorted source lenses are derived from its candidate IDs and rendered alongside its existing reviewer and independence provenance. Targeted reliability and persisted-configuration lenses run when the recorded risk assessment requires them. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
+The package freezes the exact scope and bounded source context, partitions every changed path into explicit change units, and records a coverage-plan/v2 before candidate dispatch. Six controlled risk decisions map deterministically to required review obligations. Candidate-set/v3 binds one assignment to one result and requires every declared check outcome before the controller accepts the complete wave. After validation, material review carries assignment provenance through candidates-normalized/v3, adjudication/v4, and ledger/v4. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -20,7 +20,7 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
 
-The artifact version split is deliberate: current material review state/v2 uses candidates-normalized/v2, adjudication/v4, and ledger/v4; explicitly profiled material simplification state/v1 remains on candidates-normalized/v1, adjudication/v3, and ledger/v3 without lens fields. Legacy material-review artifacts are not inferred, backfilled, renumbered, rehashed, or rewritten. Unmarked legacy runs remain observation/restoration-only. A marked run already in final repair may refresh approved fixed-finding tests and complete verification without changing its schema; all other forward progress requires a new run.
+The artifact version split is deliberate: current material review state/v3 uses coverage-plan/v2, candidate-set/v3, candidates-normalized/v3, adjudication/v4, and ledger/v4. Material-review state/v2 and state/v1 are historical bounded contracts; they are not inferred, backfilled, renumbered, rehashed, or rewritten. Unmarked legacy runs remain observation/restoration-only, while a marked run already in final repair may complete only its explicitly bounded compatibility path. Explicitly profiled material simplification state/v1 remains on candidates-normalized/v1, adjudication/v3, and ledger/v3 and never selects obligation semantics.
 
 ## Invocation and activation boundary
 
@@ -69,7 +69,7 @@ The controller uses only the Python standard library.
 Extract the archive first:
 
 ```bash
-unzip material-code-review-plugin-1.3.0.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.4.0.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a local Codex marketplace:
@@ -97,7 +97,7 @@ Use the smaller archive for direct Codex skill installation:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.3.0.zip \
+unzip material-code-review-codex-skill-1.4.0.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -124,11 +124,11 @@ The full plugin already includes material simplification. For a compact direct S
 ```bash
 make package-simplification
 mkdir -p "$HOME/.agents/skills/material-code-simplification"
-unzip material-code-simplification-codex-skill-1.2.0.zip \
+unzip material-code-simplification-codex-skill-1.3.0.zip \
   -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-Its `core/` directory embeds the shared 1.3.0 controller and all core schemas for runtime provenance and layout. New simplification runs remain on state/v1 and candidate-set/v1 semantics with the explicit `material-code-simplification` profile: the material-review v2 state and coverage policy do not apply to simplification. The standalone simplification adapter remains version 1.2.0.
+Its `core/` directory embeds shared controller and obligation helper 1.4.0 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v3, coverage-plan/v2, candidate-set/v3, assignments, check results, and obligations do not apply to simplification.
 
 ## Optional project-scoped Codex reviewers
 
@@ -186,7 +186,7 @@ This keeps source snapshots, evidence, hashes, test logs, checkpoints, and user-
 
 ## State machine
 
-New material-review runs use `material-review/state/v2`. Existing material-review `state/v1` runs are not migrated. Unmarked runs retain only status, scope observation, and checkpointed restoration. Marked runs already in final repair may refresh fixed-finding tests, rerun global tests, prepare verification, and record verification without reopening attempts; every other forward command requires a new run. The shared controller continues to authorize explicitly profiled simplification runs on `state/v1`.
+New material-review runs use `material-review/state/v3`, coverage-plan/v2, candidate-set/v3, and candidates-normalized/v3. Existing material-review state/v2 and state/v1 runs are not migrated. Unmarked runs retain only status, scope observation, and checkpointed restoration. Marked runs already in final repair may follow only their bounded compatibility path without reopening attempts; every other forward command requires a new run. The shared controller continues to authorize explicitly profiled simplification runs on state/v1 without obligations.
 
 ```text
 CONTEXT_FROZEN
@@ -259,17 +259,19 @@ From a fresh Codex task opened at this repository root, invoke the repository-lo
 $material-review-evaluation base:<skill-ref> candidate:<skill-ref>
 ```
 
-Every reviewer and judge dispatch uses a self-contained request with zero inherited task history. Codex uses `fork_turns: "none"`; a host that cannot verify an equivalent zero-history primitive stops with `INSUFFICIENT_EVIDENCE` and no worker or winner.
+That invocation defaults to the frozen Discogs case. Use `$material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<skill-ref>` for the deterministic five-root obligation-coverage confirmation.
+
+Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history. Codex uses `fork_turns: "none"`; a host that cannot verify an equivalent zero-history primitive stops with `INSUFFICIENT_EVIDENCE` and no worker or winner.
 
 Any rejection or deferral in either non-empty variant makes the comparison non-comparable. The evaluator preserves the native hash-bound disposition and lifecycle evidence, produces no comparison plan for that state, and requires `INSUFFICIENT_EVIDENCE` without changing the material-review controller.
 
 Judge responses are accepted only after root-side protocol validation. The first identity leak permits one corrected zero-history replacement; every other invalid first response and every invalid or leaking replacement produces a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment, with raw attempts retained only in private local evidence.
 
-The workflow compares one anonymous reviewer trial per skill version against the frozen Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`. The `custom-playlists` branch name is provenance only; the exact commits remain authoritative.
+The default workflow compares one anonymous primary-reviewer trial per skill version against the frozen Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`. The `custom-playlists` branch name is provenance only; the exact commits remain authoritative. The missed-contracts case reconstructs and verifies a deterministic temporary Git fixture with exactly five contract defects. It adds one case-only zero-history coverage challenger per variant; candidate findings and private expected roots are forbidden from that challenger.
 
 Each reviewer returns its complete finding ledger and native Gate-A result. The initial “approve all retained findings for planning” language is best-effort maintainer intent, not Gate-A approval. Both valid variants pause in one combined Gate-A interaction: Codex requests dispositions for every exact retained ID and explicit acceptance for each empty ledger. An all-approved non-empty variant continues to a controller-validated plan and stops at Gate B; any rejected or deferred ID uses the non-comparable no-plan policy above. Gate B is never approved and no repair runs.
 
-A fresh read-only judge compares anonymous findings, plans, and limitations against the frozen source and returns `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. Invalid or missing required reviewer evidence is recorded without reconstruction and yields `INSUFFICIENT_EVIDENCE`. The private A/B mapping is revealed only after `judgment.md` is written.
+A fresh read-only judge compares anonymous findings, plans, limitations, and any case-only challenge evidence against the frozen source and returns `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. Invalid or missing required reviewer evidence is recorded without reconstruction and yields `INSUFFICIENT_EVIDENCE`. For missed-contracts, a challenger gap, missing private root, lost baseline finding, unsupported high-severity addition, invalid Gate-A evidence, or mutation blocks a successful-strengthening claim. One comparison and at most one evidence-backed repair confirmation are permitted; there is no resampling. The private A/B mapping is revealed only after `judgment.md` is written.
 
 This is trusted-local, directional evidence. It uses logical separation rather than Docker, has no CI/CD integration, automatic retry, automatic resume, or publication path, and makes no statistical claim. The explicit workflow invokes the selected materialized skill; it does not prove implicit skill selection.
 
@@ -280,12 +282,12 @@ Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may co
 Packaging produces:
 
 ```text
-material-code-review-plugin-1.3.0.zip
-material-code-review-plugin-1.3.0.zip.sha256
-material-code-review-codex-skill-1.3.0.zip
-material-code-review-codex-skill-1.3.0.zip.sha256
-material-code-simplification-codex-skill-1.2.0.zip
-material-code-simplification-codex-skill-1.2.0.zip.sha256
+material-code-review-plugin-1.4.0.zip
+material-code-review-plugin-1.4.0.zip.sha256
+material-code-review-codex-skill-1.4.0.zip
+material-code-review-codex-skill-1.4.0.zip.sha256
+material-code-simplification-codex-skill-1.3.0.zip
+material-code-simplification-codex-skill-1.3.0.zip.sha256
 ```
 
 The full ZIP is the recommended dual-host distribution. The material-review and independently versioned material-simplification ZIPs are compact Agent Skills/Codex imports.

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+from datetime import datetime
+import hashlib
 import json
 import os
 import re
@@ -20,7 +22,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -36,12 +38,18 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 CONTROLLED_WORKFLOW_MARKERS = (
-    "risk_assessments",
+    "material-review/state/v3",
+    "material-review/coverage-plan/v2",
+    "material-review/candidate-set/v3",
+    "material-review/candidates-normalized/v3",
+    "change_units",
+    "review_obligations",
+    "assignment_id",
+    "check_results",
     "record-coverage",
-    "material-review/candidate-set/v2",
     "user_selectable_output_paths",
     "persisted_config_semantics",
-    "Missing required review coverage",
+    "Missing required assignment coverage",
     "CONSEQUENCE_UNSUPPORTED",
     "plausibly blocker/high",
 )
@@ -53,15 +61,43 @@ MAINTAINER_SOURCE_REQUIRED = {
     "EVALUATION.md",
     "evaluations/material-code-review/README.md",
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
     "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/challenger.md",
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/coverage-plan.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/package-layouts.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/coverage-plan.json",
 }
 EVALUATOR_ASSET_ALLOWLIST = (
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
     "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/challenger.md",
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/coverage-plan.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/package-layouts.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/coverage-plan.json",
 )
 EVALUATOR_ROOT_ANCHOR = (
     "Locate the repository root and confirm the invocation is running in a source checkout"
@@ -82,7 +118,7 @@ EVALUATOR_CONTEXT_FREE_PROMPT_MARKER = (
     "The root dispatcher must provide zero inherited task history."
 )
 EVALUATOR_PREDISPATCH_REATTESTATION = (
-    "Immediately before each reviewer or judge dispatch, recapture the active material-review "
+    "Immediately before each reviewer, challenger, or judge dispatch, recapture the active material-review "
     "repository's `HEAD` and porcelain status and require an exact match to the initial clean "
     "attestation."
 )
@@ -94,7 +130,7 @@ EVALUATOR_PROMPT_ROOT_DISPATCH_AUTHORITY = (
 )
 EVALUATOR_PRIVATE_RECEIPT_REQUIREMENT = "Do not proceed if the dispatch receipt"
 EVALUATOR_CONTEXT_FREE_DOC_MARKER = (
-    "Every reviewer and judge dispatch uses a self-contained request with zero inherited task history."
+    "Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history."
 )
 EVALUATOR_CONTEXT_FREE_DOCS = (
     "README.md",
@@ -150,6 +186,31 @@ EVALUATOR_JUDGE_DOC_MARKER = (
     "Judge responses are accepted only after root-side protocol validation."
 )
 
+MISSED_CONTRACT_BASE_FILES = frozenset(
+    {
+        "AGENTS.md",
+        "scripts/validate_package.py",
+        "skills/demo/scripts/validate_package.py",
+        "skills/demo/references/workflow.md",
+        "skills/demo/schemas/candidate-set.json",
+        "skills/demo/schemas/coverage-plan.json",
+        "skills/demo/package-layouts.json",
+    }
+)
+MISSED_CONTRACT_REVIEW_FILES = MISSED_CONTRACT_BASE_FILES - {
+    "AGENTS.md",
+    "skills/demo/package-layouts.json",
+}
+MISSED_CONTRACT_ROOT_IDS = frozenset(
+    {
+        "version-decoy",
+        "workflow-missing-scope",
+        "path-language",
+        "risk-cardinality",
+        "archive-closure",
+    }
+)
+
 FORBIDDEN_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
 LAYOUT_EXCLUDED_PARTS = FORBIDDEN_PARTS | {".hypothesis", ".tox", ".nox", "dist"}
@@ -169,10 +230,11 @@ WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
 WORKFLOW_BLOCK_END = "\n```"
 WORKFLOW_DISCOVERY_MARKERS = (
     "init",
-    "context record (manual; see references/context-checklist.md)",
+    "context record and change-unit inventory (manual; see references/context-checklist.md)",
     'python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .',
     "record-coverage",
-    "dispatch assigned lenses",
+    "dispatch assignments",
+    "ingest one complete assignment-matched wave",
 )
 
 
@@ -642,6 +704,173 @@ def validate_openai_activation_metadata(text: str, errors: list[str]) -> None:
         fail(errors, "openai.yaml short_description does not match the Git-change activation contract")
 
 
+def git_object_hash(kind: str, payload: bytes) -> str:
+    header = f"{kind} {len(payload)}\0".encode("ascii")
+    return hashlib.sha1(header + payload).hexdigest()
+
+
+def git_tree_hash(files: dict[str, tuple[bytes, int]]) -> str:
+    root: dict[str, object] = {}
+    for relative, value in files.items():
+        node = root
+        parts = PurePosixPath(relative).parts
+        for part in parts[:-1]:
+            child = node.setdefault(part, {})
+            if not isinstance(child, dict):
+                raise ValueError(f"fixture path collision at {relative}")
+            node = child
+        if parts[-1] in node:
+            raise ValueError(f"duplicate fixture path {relative}")
+        node[parts[-1]] = value
+
+    def hash_node(node: dict[str, object]) -> str:
+        entries: list[tuple[bytes, bytes]] = []
+        for name, child in node.items():
+            if isinstance(child, dict):
+                mode = b"40000"
+                object_hash = hash_node(child)
+                sort_name = f"{name}/".encode("utf-8")
+            else:
+                contents, file_mode = child
+                mode = b"100755" if file_mode & stat.S_IXUSR else b"100644"
+                object_hash = git_object_hash("blob", contents)
+                sort_name = name.encode("utf-8")
+            entry = mode + b" " + name.encode("utf-8") + b"\0" + bytes.fromhex(object_hash)
+            entries.append((sort_name, entry))
+        payload = b"".join(entry for _sort_name, entry in sorted(entries))
+        return git_object_hash("tree", payload)
+
+    return hash_node(root)
+
+
+def git_commit_hash(
+    *,
+    tree_hash: str,
+    parent_hash: str | None,
+    author_name: str,
+    author_email: str,
+    timestamp: str,
+    message: str,
+) -> str:
+    moment = datetime.fromisoformat(timestamp)
+    if moment.tzinfo is None:
+        raise ValueError("fixture timestamp lacks timezone")
+    identity = (
+        f"{author_name} <{author_email}> {int(moment.timestamp())} "
+        f"{moment.strftime('%z')}"
+    )
+    lines = [f"tree {tree_hash}"]
+    if parent_hash is not None:
+        lines.append(f"parent {parent_hash}")
+    lines.extend((f"author {identity}", f"committer {identity}", "", message))
+    return git_object_hash("commit", ("\n".join(lines) + "\n").encode("utf-8"))
+
+
+def fixture_files(
+    root: Path,
+    expected: frozenset[str],
+    errors: list[str],
+    label: str,
+) -> dict[str, tuple[bytes, int]] | None:
+    if not root.is_dir():
+        fail(errors, f"missed-contracts {label} fixture root is missing")
+        return None
+    actual_paths = {
+        path.relative_to(root).as_posix(): path
+        for path in root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if set(actual_paths) != expected:
+        fail(errors, f"missed-contracts {label} fixture file set has drifted")
+        return None
+    result: dict[str, tuple[bytes, int]] = {}
+    for relative, path in actual_paths.items():
+        if path.is_symlink() or not path.is_file():
+            fail(errors, f"missed-contracts {label} fixture contains a non-regular file")
+            return None
+        result[relative] = (path.read_bytes(), path.stat().st_mode)
+    return result
+
+
+def validate_maintainer_evaluator_cases(root: Path, errors: list[str]) -> None:
+    discogs_path = root / "evaluations/material-code-review/cases/discogs-custom-playlists.json"
+    missed_path = root / "evaluations/material-code-review/cases/missed-contracts.json"
+    discogs = load_json(discogs_path, errors) if discogs_path.is_file() else None
+    missed = load_json(missed_path, errors) if missed_path.is_file() else None
+    if isinstance(discogs, dict) and discogs.get("target_type") != "git_repository":
+        fail(errors, "Discogs evaluator case must select target_type git_repository")
+    if not isinstance(missed, dict):
+        return
+    if missed.get("target_type") != "git_fixture":
+        fail(errors, "missed-contracts evaluator case must select target_type git_fixture")
+        return
+    if set(missed.get("required_root_ids", ())) != MISSED_CONTRACT_ROOT_IDS:
+        fail(errors, "missed-contracts required root IDs have drifted")
+    fixture = missed.get("fixture")
+    if not isinstance(fixture, dict):
+        fail(errors, "missed-contracts fixture contract is missing")
+        return
+    base_relative = fixture.get("base_root")
+    review_relative = fixture.get("review_root")
+    if not isinstance(base_relative, str) or not isinstance(review_relative, str):
+        fail(errors, "missed-contracts fixture roots are invalid")
+        return
+    if base_relative != "evaluations/material-code-review/fixtures/missed-contracts/base" or review_relative != "evaluations/material-code-review/fixtures/missed-contracts/review":
+        fail(errors, "missed-contracts fixture roots are outside the fixed allowlist")
+        return
+    base_files = fixture_files(root / base_relative, MISSED_CONTRACT_BASE_FILES, errors, "base")
+    overlay_files = fixture_files(
+        root / review_relative,
+        MISSED_CONTRACT_REVIEW_FILES,
+        errors,
+        "review",
+    )
+    if base_files is None or overlay_files is None:
+        return
+    review_files = {**base_files, **overlay_files}
+    try:
+        base_tree = git_tree_hash(base_files)
+        review_tree = git_tree_hash(review_files)
+        identity_keys = (
+            "author_name",
+            "author_email",
+            "base_timestamp",
+            "review_timestamp",
+            "base_message",
+            "review_message",
+        )
+        if any(not isinstance(fixture.get(key), str) for key in identity_keys):
+            raise ValueError("fixture identity is incomplete")
+        base_commit = git_commit_hash(
+            tree_hash=base_tree,
+            parent_hash=None,
+            author_name=fixture["author_name"],
+            author_email=fixture["author_email"],
+            timestamp=fixture["base_timestamp"],
+            message=fixture["base_message"],
+        )
+        review_commit = git_commit_hash(
+            tree_hash=review_tree,
+            parent_hash=base_commit,
+            author_name=fixture["author_name"],
+            author_email=fixture["author_email"],
+            timestamp=fixture["review_timestamp"],
+            message=fixture["review_message"],
+        )
+    except (TypeError, ValueError) as exc:
+        fail(errors, f"missed-contracts fixture identity is invalid: {exc}")
+        return
+    expected_hashes = {
+        "base_tree": base_tree,
+        "review_tree": review_tree,
+        "base_commit": base_commit,
+        "review_commit": review_commit,
+    }
+    for key, expected in expected_hashes.items():
+        if fixture.get(key) != expected:
+            fail(errors, f"missed-contracts fixture {key} has drifted")
+
+
 def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
     skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
     if not skill_path.is_file():
@@ -743,6 +972,7 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
 
     required_values = (
         ("reviewer_history", "none", "maintainer evaluator dispatch contract must require empty history for reviewers"),
+        ("challenger_history", "none", "maintainer evaluator dispatch contract must require empty history for challengers"),
         ("initial_judge_history", "none", "maintainer evaluator dispatch contract must require empty history for the initial judge"),
         ("replacement_judge_history", "none", "maintainer evaluator dispatch contract must require empty history for the replacement judge"),
         ("isolation_unavailable_dispatch", "false", "maintainer evaluator isolation failure must not dispatch a worker"),
@@ -759,6 +989,7 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
 
     fixed_values = {
         "reviewers": "2",
+        "challengers": "case:missed-contracts-only",
         "codex_fork_turns": "none",
         "worker_message": "self-contained-allowlist",
         "private_dispatch_receipt": "true",
@@ -779,6 +1010,7 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
 
     for relative, label in (
         ("evaluations/material-code-review/prompts/reviewer.md", "reviewer"),
+        ("evaluations/material-code-review/prompts/challenger.md", "challenger"),
         ("evaluations/material-code-review/prompts/judge.md", "judge"),
     ):
         prompt_path = root / relative
@@ -1082,9 +1314,10 @@ def check_source_package(
             fail(errors, "maintainer evaluator skill description must start with 'Use when '")
         if (
             frontmatter.get("argument-hint")
-            != "base:<skill-ref> candidate:<skill-ref>"
+            != "[case:<case-id>] base:<skill-ref> candidate:<skill-ref>"
         ):
             fail(errors, "maintainer evaluator skill has wrong argument hint")
+        validate_maintainer_evaluator_cases(root, errors)
         validate_maintainer_evaluator_assets(root, errors)
         validate_maintainer_evaluator_dispatch(root, errors)
         validate_maintainer_evaluator_dispositions(root, errors)
@@ -1179,7 +1412,12 @@ def check_source_package(
             fail(errors, f"{relative_wrapper} is not executable")
 
     controller = root / "skills/material-code-review/scripts/reviewctl.py"
+    obligation_contract = root / "skills/material-code-review/scripts/obligation_contract.py"
+    if not obligation_contract.is_file():
+        fail(errors, "missing shared obligation contract")
     if controller.is_file():
+        if "from obligation_contract import" not in controller.read_text(encoding="utf-8"):
+            fail(errors, "reviewctl.py does not import obligation_contract")
         declaration_error = validate_static_version_declaration(
             controller.read_bytes(),
             "TOOL_VERSION",

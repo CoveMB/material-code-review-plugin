@@ -17,8 +17,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.2.0"
-CORE_VERSION = "1.3.0"
+VERSION = "1.3.0"
+CORE_VERSION = "1.4.0"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -43,10 +43,13 @@ BASE_REQUIRED = {
 ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "LICENSE",
     "SECURITY.md",
+    "core/obligation_contract.py",
     "core/reviewctl.py",
     "core/schemas/candidate-set.schema.json",
     "core/schemas/candidate-set-v2.schema.json",
+    "core/schemas/candidate-set-v3.schema.json",
     "core/schemas/coverage-plan.schema.json",
+    "core/schemas/coverage-plan-v2.schema.json",
     "core/schemas/adjudication.schema.json",
     "core/schemas/adjudication-v4.schema.json",
     "core/schemas/fix-plan.schema.json",
@@ -462,13 +465,25 @@ def validate_archive(archive_path: Path) -> list[str]:
     return errors
 
 
-def resolve_core() -> tuple[str, Path, Path, Path] | None:
+def resolve_core() -> tuple[str, Path, Path, Path, Path] | None:
     full = ROOT.parent / "material-code-review"
     standalone = ROOT / "core"
     if (standalone / "reviewctl.py").is_file():
-        return "standalone", standalone / "reviewctl.py", standalone / "schemas", standalone / "references"
+        return (
+            "standalone",
+            standalone / "reviewctl.py",
+            standalone / "obligation_contract.py",
+            standalone / "schemas",
+            standalone / "references",
+        )
     if (full / "scripts" / "reviewctl.py").is_file():
-        return "full-plugin", full / "scripts" / "reviewctl.py", full / "schemas", full / "references"
+        return (
+            "full-plugin",
+            full / "scripts" / "reviewctl.py",
+            full / "scripts" / "obligation_contract.py",
+            full / "schemas",
+            full / "references",
+        )
     return None
 
 
@@ -504,18 +519,23 @@ def main(argv: list[str] | None = None) -> int:
     core_layout = resolve_core()
     if core_layout is None:
         errors.append("missing shared controller: expected sibling material-code-review or standalone core/")
-        layout, controller, schema_dir, core_reference_dir = (
+        layout, controller, obligation_contract, schema_dir, core_reference_dir = (
             "missing",
+            ROOT / "missing",
             ROOT / "missing",
             ROOT / "missing",
             ROOT / "missing",
         )
     else:
-        layout, controller, schema_dir, core_reference_dir = core_layout
+        layout, controller, obligation_contract, schema_dir, core_reference_dir = core_layout
+        if not obligation_contract.is_file():
+            errors.append(f"missing shared obligation contract: {obligation_contract}")
         for name in (
             "candidate-set.schema.json",
             "candidate-set-v2.schema.json",
+            "candidate-set-v3.schema.json",
             "coverage-plan.schema.json",
+            "coverage-plan-v2.schema.json",
             "adjudication.schema.json",
             "adjudication-v4.schema.json",
             "fix-plan.schema.json",
@@ -531,6 +551,10 @@ def main(argv: list[str] | None = None) -> int:
             if not (core_reference_dir / name).is_file():
                 errors.append(f"missing shared repair-direction reference: {core_reference_dir / name}")
         if controller.is_file():
+            if "from obligation_contract import" not in controller.read_text(
+                encoding="utf-8"
+            ):
+                errors.append("shared controller does not import obligation_contract")
             declaration_error = validate_static_version_declaration(
                 controller.read_bytes(),
                 "TOOL_VERSION",

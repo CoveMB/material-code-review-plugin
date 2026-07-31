@@ -28,9 +28,23 @@ PROMPT_DRIVEN_EVALUATOR_PATHS = (
     ".agents/skills/material-review-evaluation/SKILL.md",
     "evaluations/material-code-review/README.md",
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
     "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/challenger.md",
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/coverage-plan.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/package-layouts.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/coverage-plan.json",
 )
 MAINTAINER_EVALUATOR_PATHS = PROMPT_DRIVEN_EVALUATOR_PATHS + (
     "EVALUATION.md",
@@ -59,11 +73,11 @@ WORKFLOW_SCOPE_CHECK = (
 VALID_WORKFLOW_DISCOVERY_BLOCK = "\n".join(
     (
         "init",
-        "context record (manual; see references/context-checklist.md)",
+        "context record and change-unit inventory (manual; see references/context-checklist.md)",
         WORKFLOW_SCOPE_CHECK,
         "record-coverage",
-        "dispatch assigned lenses",
-        "ingest complete candidate wave",
+        "dispatch assignments",
+        "ingest one complete assignment-matched wave",
         "validate",
         "repair-direction audit",
         "compile-ledger",
@@ -589,10 +603,15 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
 
-    def test_shipped_reviewer_prompts_bind_v2_assignments_in_source_and_archive(self) -> None:
+    def test_shipped_reviewer_prompts_bind_v3_assignments_in_source_and_archive(self) -> None:
         required_tokens = (
-            "candidate-set-v2.schema.json",
+            "candidate-set-v3.schema.json",
             "coverage_plan_hash",
+            "coverage_context_hash",
+            "assignment_id",
+            "assignment_kind",
+            "obligation_id",
+            "check_results",
             "lens_id",
             "reviewer_id",
             "independence_group",
@@ -866,6 +885,7 @@ class StandalonePackagingTests(unittest.TestCase):
         expected = {
             "schema_version": "material-review-evaluation/case/v1",
             "case_id": "discogs-custom-playlists",
+            "target_type": "git_repository",
             "repository": "https://github.com/CoveMB/discogs-collection.git",
             "branch_label": "custom-playlists",
             "base_commit": "361e1740fa164fafc590e7dc8903a87b069592cb",
@@ -875,6 +895,239 @@ class StandalonePackagingTests(unittest.TestCase):
             "posture": "immutable",
         }
         self.assertEqual(case, expected)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_missed_contracts_case_is_frozen_and_complete(self) -> None:
+        evaluation_root = REPOSITORY_ROOT / "evaluations/material-code-review"
+        case_path = evaluation_root / "cases/missed-contracts.json"
+        self.assertTrue(case_path.is_file(), f"missing frozen case: {case_path}")
+        case = json.loads(case_path.read_text(encoding="utf-8"))
+        self.assertEqual(case["target_type"], "git_fixture")
+        self.assertEqual(
+            set(case["required_root_ids"]),
+            {
+                "version-decoy",
+                "workflow-missing-scope",
+                "path-language",
+                "risk-cardinality",
+                "archive-closure",
+            },
+        )
+
+        fixture = case["fixture"]
+        base_root = REPOSITORY_ROOT / fixture["base_root"]
+        review_root = REPOSITORY_ROOT / fixture["review_root"]
+        expected_base_files = {
+            "AGENTS.md",
+            "scripts/validate_package.py",
+            "skills/demo/scripts/validate_package.py",
+            "skills/demo/references/workflow.md",
+            "skills/demo/schemas/candidate-set.json",
+            "skills/demo/schemas/coverage-plan.json",
+            "skills/demo/package-layouts.json",
+        }
+        expected_review_files = expected_base_files - {
+            "AGENTS.md",
+            "skills/demo/package-layouts.json",
+        }
+        self.assertEqual(
+            {
+                path.relative_to(base_root).as_posix()
+                for path in base_root.rglob("*")
+                if path.is_file()
+            },
+            expected_base_files,
+        )
+        self.assertEqual(
+            {
+                path.relative_to(review_root).as_posix()
+                for path in review_root.rglob("*")
+                if path.is_file()
+            },
+            expected_review_files,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            repository = Path(temp_directory) / "fixture-repository"
+            shutil.copytree(base_root, repository)
+            subprocess.run(
+                ["git", "init", "-q"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            environment = dict(os.environ)
+            environment.update(
+                {
+                    "GIT_AUTHOR_NAME": fixture["author_name"],
+                    "GIT_AUTHOR_EMAIL": fixture["author_email"],
+                    "GIT_COMMITTER_NAME": fixture["author_name"],
+                    "GIT_COMMITTER_EMAIL": fixture["author_email"],
+                    "GIT_AUTHOR_DATE": fixture["base_timestamp"],
+                    "GIT_COMMITTER_DATE": fixture["base_timestamp"],
+                }
+            )
+            subprocess.run(
+                ["git", "add", "--all"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-q",
+                    "-m",
+                    fixture["base_message"],
+                ],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            base_tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            shutil.copytree(review_root, repository, dirs_exist_ok=True)
+            environment["GIT_AUTHOR_DATE"] = fixture["review_timestamp"]
+            environment["GIT_COMMITTER_DATE"] = fixture["review_timestamp"]
+            subprocess.run(
+                ["git", "add", "--all"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-q",
+                    "-m",
+                    fixture["review_message"],
+                ],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            review_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            review_tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            changed_paths = set(
+                subprocess.run(
+                    [
+                        "git",
+                        "diff-tree",
+                        "--no-commit-id",
+                        "--name-only",
+                        "-r",
+                        review_commit,
+                    ],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.splitlines()
+            )
+
+        self.assertEqual(base_tree, fixture["base_tree"])
+        self.assertEqual(review_tree, fixture["review_tree"])
+        self.assertEqual(base_commit, fixture["base_commit"])
+        self.assertEqual(review_commit, fixture["review_commit"])
+        self.assertEqual(changed_paths, expected_review_files)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_challenger_is_case_only_and_blinded(self) -> None:
+        skill = (
+            REPOSITORY_ROOT / ".agents/skills/material-review-evaluation/SKILL.md"
+        ).read_text(encoding="utf-8")
+        challenger_path = (
+            REPOSITORY_ROOT
+            / "evaluations/material-code-review/prompts/challenger.md"
+        )
+        self.assertTrue(challenger_path.is_file(), challenger_path)
+        challenger = challenger_path.read_text(encoding="utf-8")
+        for controlled_term in (
+            "case:missed-contracts",
+            "candidate findings are forbidden",
+            "fork_turns=none",
+            "NO_COVERAGE_GAP",
+        ):
+            self.assertIn(controlled_term, skill)
+        for controlled_term in (
+            "The root dispatcher must provide zero inherited task history.",
+            "Candidate findings are forbidden",
+            "expected roots",
+            "variant identities",
+            "NO_COVERAGE_GAP",
+        ):
+            self.assertIn(controlled_term, challenger)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_source_validator_rejects_missed_contract_fixture_hash_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            workflow = (
+                fixture_root
+                / "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/references/workflow.md"
+            )
+            workflow.write_text(
+                workflow.read_text(encoding="utf-8") + "\nDrifted fixture content.\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_package_validator(
+                fixture_root,
+                distribution_layout=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missed-contracts fixture base_tree has drifted", result.stderr)
+            self.assertIn("missed-contracts fixture base_commit has drifted", result.stderr)
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
@@ -983,7 +1236,7 @@ class StandalonePackagingTests(unittest.TestCase):
         self.assertTrue(frontmatter["description"].startswith("Use when "))
         self.assertEqual(
             frontmatter["argument-hint"],
-            "base:<skill-ref> candidate:<skill-ref>",
+            "[case:<case-id>] base:<skill-ref> candidate:<skill-ref>",
         )
 
         for controlled_term in (
@@ -1126,6 +1379,12 @@ class StandalonePackagingTests(unittest.TestCase):
             ),
             (
                 ".agents/skills/material-review-evaluation/SKILL.md",
+                "challenger_history=none",
+                "challenger_history=bounded",
+                "maintainer evaluator dispatch contract must require empty history for challengers",
+            ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
                 "initial_judge_history=none",
                 "initial_judge_history=bounded",
                 "maintainer evaluator dispatch contract must require empty history for the initial judge",
@@ -1143,6 +1402,12 @@ class StandalonePackagingTests(unittest.TestCase):
                 "reviewer prompt must require zero inherited task history",
             ),
             (
+                "evaluations/material-code-review/prompts/challenger.md",
+                "The root dispatcher must provide zero inherited task history.",
+                "",
+                "challenger prompt must require zero inherited task history",
+            ),
+            (
                 "evaluations/material-code-review/prompts/judge.md",
                 "The root dispatcher must provide zero inherited task history.",
                 "",
@@ -1150,7 +1415,7 @@ class StandalonePackagingTests(unittest.TestCase):
             ),
             (
                 ".agents/skills/material-review-evaluation/SKILL.md",
-                "Immediately before each reviewer or judge dispatch, recapture the active "
+                "Immediately before each reviewer, challenger, or judge dispatch, recapture the active "
                 "material-review repository's `HEAD` and porcelain status and require an exact "
                 "match to the initial clean attestation.",
                 "",
@@ -1672,7 +1937,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 "maintainer evaluator skill description must start with 'Use when '",
             ),
             (
-                'argument-hint: "base:<skill-ref> candidate:<skill-ref>"',
+                'argument-hint: "[case:<case-id>] base:<skill-ref> candidate:<skill-ref>"',
                 'argument-hint: "left:<skill-ref> right:<skill-ref>"',
                 "maintainer evaluator skill has wrong argument hint",
             ),
@@ -1833,6 +2098,40 @@ class StandalonePackagingTests(unittest.TestCase):
                     ),
                     relative,
                 )
+
+    def test_every_archive_excludes_maintainer_only_plans_and_evaluations(
+        self,
+    ) -> None:
+        forbidden_prefixes = (
+            "docs/superpowers/",
+            ".agents/skills/material-review-evaluation/",
+            "evaluations/",
+        )
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            _, full_archive, review_archive = self.build_review_archives(
+                temp_root,
+                fixture_root,
+            )
+            simplification_archive = temp_root / "simplification.zip"
+            result = self.run_packager(fixture_root, simplification_archive)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            for archive_path in (
+                full_archive,
+                review_archive,
+                simplification_archive,
+            ):
+                with self.subTest(archive=archive_path.name), zipfile.ZipFile(
+                    archive_path
+                ) as archive:
+                    names = archive.namelist()
+                    for prefix in forbidden_prefixes:
+                        self.assertFalse(
+                            any(name.startswith(prefix) for name in names),
+                            f"{archive_path.name} contains {prefix}",
+                        )
 
     def test_review_layout_manifest_matches_packager(self) -> None:
         self.assertTrue(
@@ -2350,63 +2649,102 @@ class StandalonePackagingTests(unittest.TestCase):
                         )
                         self.assertIn(manifest_entry, first_archive.namelist())
 
-    def test_review_archives_ship_targeted_coverage_contract(self) -> None:
-        source_schema_root = REPOSITORY_ROOT / "skills" / "material-code-review" / "schemas"
-        source_candidate_bytes = (source_schema_root / "candidate-set-v2.schema.json").read_bytes()
-        source_coverage_bytes = (source_schema_root / "coverage-plan.schema.json").read_bytes()
-        source_candidate_schema = json.loads(source_candidate_bytes)
-        source_coverage_schema = json.loads(source_coverage_bytes)
-        definition_name = "canonical_repository_relative_git_path"
-        self.assertIn("$defs", source_candidate_schema)
-        self.assertIn("$defs", source_coverage_schema)
+    def test_review_archives_ship_obligation_coverage_contract(self) -> None:
+        source_root = REPOSITORY_ROOT / "skills" / "material-code-review"
+        source_candidate = (source_root / "schemas/candidate-set-v3.schema.json").read_bytes()
+        source_coverage = (source_root / "schemas/coverage-plan-v2.schema.json").read_bytes()
+        source_helper = (source_root / "scripts/obligation_contract.py").read_bytes()
+        candidate_schema = json.loads(source_candidate)
+        coverage_schema = json.loads(source_coverage)
         self.assertEqual(
-            source_candidate_schema["$defs"][definition_name],
-            source_coverage_schema["$defs"][definition_name],
+            candidate_schema["$defs"]["repositoryRelativeGitPath"],
+            coverage_schema["$defs"]["repositoryRelativeGitPath"],
         )
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
             fixture_root = self.create_full_plugin_fixture(temp_root)
-            full_output = temp_root / "full-plugin.zip"
-            standalone_output = temp_root / "material-review.zip"
-            result = self.run_full_packager(
-                fixture_root,
-                full_output,
-                standalone_output=standalone_output,
+            _, full_output, standalone_output = self.build_review_archives(
+                temp_root, fixture_root
             )
+            expected_suffixes = {
+                "references/review-obligations.md",
+                "schemas/coverage-plan-v2.schema.json",
+                "schemas/candidate-set-v3.schema.json",
+                "scripts/obligation_contract.py",
+                "tests/fixtures/obligation-corpus.json",
+                "tests/fixtures/reviewctl_1_3_compat.py",
+                "tests/test_obligation_contract.py",
+                "tests/test_obligation_corpus.py",
+            }
+            for archive_path, prefix in (
+                (full_output, "skills/material-code-review/"),
+                (standalone_output, ""),
+            ):
+                with self.subTest(archive=archive_path.name), zipfile.ZipFile(
+                    archive_path
+                ) as archive:
+                    names = set(archive.namelist())
+                    self.assertTrue(
+                        {f"{prefix}{suffix}" for suffix in expected_suffixes}.issubset(names)
+                    )
+                    self.assertEqual(
+                        archive.read(f"{prefix}schemas/candidate-set-v3.schema.json"),
+                        source_candidate,
+                    )
+                    self.assertEqual(
+                        archive.read(f"{prefix}schemas/coverage-plan-v2.schema.json"),
+                        source_coverage,
+                    )
+                    self.assertEqual(
+                        archive.read(f"{prefix}scripts/obligation_contract.py"),
+                        source_helper,
+                    )
+    def test_shared_controller_dependency_ships_in_every_runtime_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            _, full_archive, review_archive = self.build_review_archives(
+                temp_root,
+                fixture_root,
+            )
+            simplification_archive = temp_root / "simplification.zip"
+            result = self.run_packager(fixture_root, simplification_archive)
             self.assertEqual(result.returncode, 0, result.stderr)
-            full_required = {
-                "skills/material-code-review/schemas/coverage-plan.schema.json",
-                "skills/material-code-review/schemas/candidate-set-v2.schema.json",
-                "skills/material-code-review/references/reliability-output-integrity-lens.md",
-                "skills/material-code-review/references/persisted-config-migration-lens.md",
-                "skills/material-code-review/tests/test_discovery_contract.py",
+
+            expected = {
+                full_archive: "skills/material-code-review/scripts/obligation_contract.py",
+                review_archive: "scripts/obligation_contract.py",
+                simplification_archive: "core/obligation_contract.py",
             }
-            with zipfile.ZipFile(full_output) as archive:
-                self.assertTrue(full_required.issubset(set(archive.namelist())))
-                self.assertEqual(
-                    archive.read("skills/material-code-review/schemas/candidate-set-v2.schema.json"),
-                    source_candidate_bytes,
-                )
-                self.assertEqual(
-                    archive.read("skills/material-code-review/schemas/coverage-plan.schema.json"),
-                    source_coverage_bytes,
-                )
-            standalone_required = {
-                "schemas/coverage-plan.schema.json",
-                "schemas/candidate-set-v2.schema.json",
-                "references/reliability-output-integrity-lens.md",
-                "references/persisted-config-migration-lens.md",
-                "tests/test_discovery_contract.py",
+            for archive_path, member in expected.items():
+                with self.subTest(archive=archive_path.name), zipfile.ZipFile(
+                    archive_path
+                ) as archive:
+                    self.assertIn(member, archive.namelist())
+
+    def test_new_contract_files_are_required_not_incidental(self) -> None:
+        manifest = json.loads(REVIEW_LAYOUT_MANIFEST.read_text(encoding="utf-8"))
+        suffixes = {
+            "references/review-obligations.md",
+            "schemas/coverage-plan-v2.schema.json",
+            "schemas/candidate-set-v3.schema.json",
+            "scripts/obligation_contract.py",
+            "tests/fixtures/obligation-corpus.json",
+            "tests/fixtures/reviewctl_1_3_compat.py",
+            "tests/test_obligation_contract.py",
+            "tests/test_obligation_corpus.py",
+        }
+        for layout_name, prefix in (
+            ("full-plugin", "skills/material-code-review/"),
+            ("standalone", ""),
+        ):
+            destinations = {
+                item["destination"]
+                for item in manifest["layouts"][layout_name]["required_mappings"]
             }
-            with zipfile.ZipFile(standalone_output) as archive:
-                self.assertTrue(standalone_required.issubset(set(archive.namelist())))
-                self.assertEqual(
-                    archive.read("schemas/candidate-set-v2.schema.json"),
-                    source_candidate_bytes,
-                )
-                self.assertEqual(
-                    archive.read("schemas/coverage-plan.schema.json"),
-                    source_coverage_bytes,
+            with self.subTest(layout=layout_name):
+                self.assertTrue(
+                    {f"{prefix}{suffix}" for suffix in suffixes}.issubset(destinations)
                 )
 
     def test_extracted_full_archive_runs_retained_validation_surface(self) -> None:
@@ -2466,7 +2804,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertIn(
-                "material-code-review package 1.3.0 is structurally valid",
+                "material-code-review package 1.4.0 is structurally valid",
                 validation_result.stdout,
             )
             targeted_test_result = subprocess.run(
@@ -2697,7 +3035,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertTrue(
-                (distribution_directory / "material-code-review-plugin-1.3.0.zip").is_file()
+                (distribution_directory / "material-code-review-plugin-1.4.0.zip").is_file()
             )
 
     @unittest.skipIf(
@@ -3051,12 +3389,15 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertEqual(validation_result.returncode, 0, validation_result.stderr)
             self.assertIn("standalone archive is safe", validation_result.stdout)
 
-    def test_simplification_archive_ships_repair_direction_references(self) -> None:
+    def test_simplification_archive_ships_shared_controller_closure(self) -> None:
         source_review_root = REPOSITORY_ROOT / "skills" / "material-code-review"
         source_candidate_v1_bytes = (source_review_root / "schemas" / "candidate-set.schema.json").read_bytes()
         source_candidate_v2_bytes = (source_review_root / "schemas" / "candidate-set-v2.schema.json").read_bytes()
+        source_candidate_v3_bytes = (source_review_root / "schemas" / "candidate-set-v3.schema.json").read_bytes()
         source_coverage_bytes = (source_review_root / "schemas" / "coverage-plan.schema.json").read_bytes()
+        source_coverage_v2_bytes = (source_review_root / "schemas" / "coverage-plan-v2.schema.json").read_bytes()
         source_controller_bytes = (source_review_root / "scripts" / "reviewctl.py").read_bytes()
+        source_obligation_contract_bytes = (source_review_root / "scripts" / "obligation_contract.py").read_bytes()
         definition_name = "canonical_repository_relative_git_path"
         self.assertIn("$defs", json.loads(source_candidate_v2_bytes))
         self.assertIn("$defs", json.loads(source_coverage_bytes))
@@ -3086,10 +3427,22 @@ class StandalonePackagingTests(unittest.TestCase):
                     source_candidate_v2_bytes,
                 )
                 self.assertEqual(
+                    archive.read("core/schemas/candidate-set-v3.schema.json"),
+                    source_candidate_v3_bytes,
+                )
+                self.assertEqual(
                     archive.read("core/schemas/coverage-plan.schema.json"),
                     source_coverage_bytes,
                 )
+                self.assertEqual(
+                    archive.read("core/schemas/coverage-plan-v2.schema.json"),
+                    source_coverage_v2_bytes,
+                )
                 self.assertEqual(controller_bytes, source_controller_bytes)
+                self.assertEqual(
+                    archive.read("core/obligation_contract.py"),
+                    source_obligation_contract_bytes,
+                )
             self.assertTrue(
                 {
                     "core/references/remediation-auditor-template.md",
@@ -3101,21 +3454,53 @@ class StandalonePackagingTests(unittest.TestCase):
                 {
                     "core/schemas/candidate-set.schema.json",
                     "core/schemas/candidate-set-v2.schema.json",
+                    "core/schemas/candidate-set-v3.schema.json",
                     "core/schemas/coverage-plan.schema.json",
+                    "core/schemas/coverage-plan-v2.schema.json",
+                    "core/obligation_contract.py",
                 }.issubset(names)
             )
             self.assertIn(
-                'TOOL_VERSION = "1.3.0"',
+                'TOOL_VERSION = "1.4.0"',
                 controller,
             )
             self.assertIn(
-                'ADAPTER_VERSION = "1.2.0"',
+                'ADAPTER_VERSION = "1.3.0"',
                 adapter,
             )
 
-    def test_release_versions_are_aligned_and_independent(self) -> None:
-        full_version = "1.3.0"
-        simplification_version = "1.2.0"
+    def test_simplification_archive_rejects_each_new_shared_contract_omission(
+        self,
+    ) -> None:
+        required_members = (
+            "core/obligation_contract.py",
+            "core/schemas/candidate-set-v3.schema.json",
+            "core/schemas/coverage-plan-v2.schema.json",
+        )
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_repository_fixture(temp_root)
+            source_archive = temp_root / "simplification.zip"
+            package_result = self.run_packager(fixture_root, source_archive)
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+
+            for index, member in enumerate(required_members):
+                with self.subTest(member=member):
+                    incomplete_archive = temp_root / f"missing-shared-{index}.zip"
+                    self.remove_archive_entry(
+                        source_archive,
+                        incomplete_archive,
+                        member,
+                    )
+                    result = self.run_simplification_archive_validator(
+                        incomplete_archive
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"missing archive entry: {member}", result.stderr)
+
+    def test_release_1_4_0_and_simplification_1_3_0_are_aligned(self) -> None:
+        full_version = "1.4.0"
+        simplification_version = "1.3.0"
 
         for relative in (
             ".codex-plugin/plugin.json",
@@ -3160,6 +3545,17 @@ class StandalonePackagingTests(unittest.TestCase):
                 )
 
         self.assertNotEqual(full_version, simplification_version)
+
+        for relative in (
+            "scripts/package_plugin.py",
+            "scripts/package_simplification_skill.py",
+        ):
+            with self.subTest(timestamp_owner=relative):
+                source = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn(
+                    "FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)",
+                    source,
+                )
 
     def test_static_version_assignment_contracts_are_aligned(self) -> None:
         helpers = tuple(
@@ -3241,8 +3637,8 @@ class StandalonePackagingTests(unittest.TestCase):
             controller = fixture_root / "skills/material-code-review/scripts/reviewctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.3.0"',
-                '# TOOL_VERSION = "1.3.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.4.0"',
+                '# TOOL_VERSION = "1.4.0"\nTOOL_VERSION = "0.0.0"',
             )
             root_result = self.run_package_validator(fixture_root)
             review_result = self.run_review_validator(fixture_root)
@@ -3258,8 +3654,8 @@ class StandalonePackagingTests(unittest.TestCase):
             packager = fixture_root / "scripts/package_plugin.py"
             self.replace_once(
                 packager,
-                'VERSION = "1.3.0"',
-                'VERSION = "1.3.0"\nif True:\n    VERSION = "1.3.0"',
+                'VERSION = "1.4.0"',
+                'VERSION = "1.4.0"\nif True:\n    VERSION = "1.4.0"',
             )
             result = self.run_package_validator(fixture_root)
             self.assertNotEqual(result.returncode, 0)
@@ -3274,13 +3670,13 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.3.0"',
-                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.3.0"',
+                'TOOL_VERSION = "1.4.0"',
+                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.4.0"',
             )
             self.replace_once(
                 adapter,
-                'ADAPTER_VERSION = "1.2.0"',
-                'ADAPTER_VERSION = "1.2.0"\nADAPTER_VERSION = "1.2.0"',
+                'ADAPTER_VERSION = "1.3.0"',
+                'ADAPTER_VERSION = "1.3.0"\nADAPTER_VERSION = "1.3.0"',
             )
             result = self.run_simplification_validator(fixture_root)
             self.assertNotEqual(result.returncode, 0)
@@ -3299,13 +3695,13 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.3.0"',
-                '# TOOL_VERSION = "1.3.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.4.0"',
+                '# TOOL_VERSION = "1.4.0"\nTOOL_VERSION = "0.0.0"',
             )
             self.replace_once(
                 adapter,
-                'ADAPTER_VERSION = "1.2.0"',
-                'ADAPTER_VERSION = "1.2.0"\nif True:\n    ADAPTER_VERSION = "1.2.0"',
+                'ADAPTER_VERSION = "1.3.0"',
+                'ADAPTER_VERSION = "1.3.0"\nif True:\n    ADAPTER_VERSION = "1.3.0"',
             )
             archive = temp_root / "standalone.zip"
             package_result = self.run_packager(fixture_root, archive)
@@ -3321,7 +3717,7 @@ class StandalonePackagingTests(unittest.TestCase):
 
             unsafe_archive = temp_root / "unsafe-before-version-parse.zip"
             with zipfile.ZipFile(unsafe_archive, "w") as unsafe_zip:
-                unsafe_zip.comment = b"material-code-simplification standalone Agent Skill 1.2.0"
+                unsafe_zip.comment = b"material-code-simplification standalone Agent Skill 1.3.0"
                 unsafe_zip.writestr("../unsafe.txt", "unsafe")
                 unsafe_zip.writestr("core/reviewctl.py", b'\xff')
             unsafe_result = self.run_simplification_archive_validator(unsafe_archive)

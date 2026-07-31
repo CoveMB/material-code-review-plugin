@@ -1,116 +1,483 @@
 {
-  "schema_version": 1,
   "layouts": {
     "full-plugin": {
       "canonical_skill": "skills/material-code-review/SKILL.md",
       "required_mappings": [
-        {"source": ".agents/plugins/marketplace.json", "destination": ".agents/plugins/marketplace.json"},
-        {"source": ".claude-plugin/marketplace.json", "destination": ".claude-plugin/marketplace.json"},
-        {"source": ".claude-plugin/plugin.json", "destination": ".claude-plugin/plugin.json"},
-        {"source": ".codex-plugin/plugin.json", "destination": ".codex-plugin/plugin.json"},
-        {"source": "AGENTS.md", "destination": "AGENTS.md"},
-        {"source": "CHANGELOG.md", "destination": "CHANGELOG.md"},
-        {"source": "CODEX.md", "destination": "CODEX.md"},
-        {"source": "LICENSE", "destination": "LICENSE"},
-        {"source": "Makefile", "destination": "Makefile"},
-        {"source": "README.md", "destination": "README.md"},
-        {"source": "SECURITY.md", "destination": "SECURITY.md"},
-        {"source": "SKILL.md", "destination": "SKILL.md"},
-        {"source": "THIRD_PARTY.md", "destination": "THIRD_PARTY.md"},
-        {"source": "agents/correctness-reviewer.md", "destination": "agents/correctness-reviewer.md"},
-        {"source": "agents/finding-adjudicator.md", "destination": "agents/finding-adjudicator.md"},
-        {"source": "agents/finding-validator.md", "destination": "agents/finding-validator.md"},
-        {"source": "agents/postfix-verifier.md", "destination": "agents/postfix-verifier.md"},
-        {"source": "agents/repair-planner.md", "destination": "agents/repair-planner.md"},
-        {"source": "agents/risk-reviewer.md", "destination": "agents/risk-reviewer.md"},
-        {"source": "agents/standards-reviewer.md", "destination": "agents/standards-reviewer.md"},
-        {"source": "agents/test-reviewer.md", "destination": "agents/test-reviewer.md"},
-        {"source": "bin/material-reviewctl", "destination": "bin/material-reviewctl"},
-        {"source": "bin/material-reviewctl.cmd", "destination": "bin/material-reviewctl.cmd"},
-        {"source": "bin/material-reviewctl.ps1", "destination": "bin/material-reviewctl.ps1"},
-        {"source": "commands/material-review.md", "destination": "commands/material-review.md"},
-        {"source": "commands/material-simplify.md", "destination": "commands/material-simplify.md"},
-        {"source": "examples/codex-project-config/.codex/agents/material_adjudicator.toml", "destination": "examples/codex-project-config/.codex/agents/material_adjudicator.toml"},
-        {"source": "examples/codex-project-config/.codex/agents/material_candidate.toml", "destination": "examples/codex-project-config/.codex/agents/material_candidate.toml"},
-        {"source": "examples/codex-project-config/.codex/agents/material_postfix.toml", "destination": "examples/codex-project-config/.codex/agents/material_postfix.toml"},
-        {"source": "examples/codex-project-config/.codex/agents/material_validator.toml", "destination": "examples/codex-project-config/.codex/agents/material_validator.toml"},
-        {"source": "examples/codex-project-config/.codex/config.toml", "destination": "examples/codex-project-config/.codex/config.toml"},
-        {"source": "scripts/package_plugin.py", "destination": "scripts/package_plugin.py"},
-        {"source": "scripts/tests/test_packaging.py", "destination": "scripts/tests/test_packaging.py"},
-        {"source": "scripts/validate_package.py", "destination": "scripts/validate_package.py"},
-        {"source": "skills/material-code-review/SKILL.md", "destination": "skills/material-code-review/SKILL.md"},
-        {"source": "skills/material-code-review/agents/openai.yaml", "destination": "skills/material-code-review/agents/openai.yaml"},
-        {"source": "skills/material-code-review/package-layouts.json", "destination": "skills/material-code-review/package-layouts.json"},
-        {"source": "skills/material-code-review/references/adjudicator-template.md", "destination": "skills/material-code-review/references/adjudicator-template.md"},
-        {"source": "skills/material-code-review/references/context-checklist.md", "destination": "skills/material-code-review/references/context-checklist.md"},
-        {"source": "skills/material-code-review/references/failure-model.md", "destination": "skills/material-code-review/references/failure-model.md"},
-        {"source": "skills/material-code-review/references/fixer-template.md", "destination": "skills/material-code-review/references/fixer-template.md"},
-        {"source": "skills/material-code-review/references/materiality-rubric.md", "destination": "skills/material-code-review/references/materiality-rubric.md"},
-        {"source": "skills/material-code-review/references/output-template.md", "destination": "skills/material-code-review/references/output-template.md"},
-        {"source": "skills/material-code-review/references/persisted-config-migration-lens.md", "destination": "skills/material-code-review/references/persisted-config-migration-lens.md"},
-        {"source": "skills/material-code-review/references/planner-template.md", "destination": "skills/material-code-review/references/planner-template.md"},
-        {"source": "skills/material-code-review/references/postfix-verifier-template.md", "destination": "skills/material-code-review/references/postfix-verifier-template.md"},
-        {"source": "skills/material-code-review/references/reliability-output-integrity-lens.md", "destination": "skills/material-code-review/references/reliability-output-integrity-lens.md"},
-        {"source": "skills/material-code-review/references/remediation-auditor-template.md", "destination": "skills/material-code-review/references/remediation-auditor-template.md"},
-        {"source": "skills/material-code-review/references/remediation-rubric.md", "destination": "skills/material-code-review/references/remediation-rubric.md"},
-        {"source": "skills/material-code-review/references/reviewer-template.md", "destination": "skills/material-code-review/references/reviewer-template.md"},
-        {"source": "skills/material-code-review/references/test-evidence-rubric.md", "destination": "skills/material-code-review/references/test-evidence-rubric.md"},
-        {"source": "skills/material-code-review/references/validator-template.md", "destination": "skills/material-code-review/references/validator-template.md"},
-        {"source": "skills/material-code-review/references/workflow.md", "destination": "skills/material-code-review/references/workflow.md"},
-        {"source": "skills/material-code-review/schemas/adjudication-v4.schema.json", "destination": "skills/material-code-review/schemas/adjudication-v4.schema.json"},
-        {"source": "skills/material-code-review/schemas/adjudication.schema.json", "destination": "skills/material-code-review/schemas/adjudication.schema.json"},
-        {"source": "skills/material-code-review/schemas/candidate-set-v2.schema.json", "destination": "skills/material-code-review/schemas/candidate-set-v2.schema.json"},
-        {"source": "skills/material-code-review/schemas/candidate-set.schema.json", "destination": "skills/material-code-review/schemas/candidate-set.schema.json"},
-        {"source": "skills/material-code-review/schemas/coverage-plan.schema.json", "destination": "skills/material-code-review/schemas/coverage-plan.schema.json"},
-        {"source": "skills/material-code-review/schemas/fix-plan.schema.json", "destination": "skills/material-code-review/schemas/fix-plan.schema.json"},
-        {"source": "skills/material-code-review/schemas/verification.schema.json", "destination": "skills/material-code-review/schemas/verification.schema.json"},
-        {"source": "skills/material-code-review/scripts/reviewctl.py", "destination": "skills/material-code-review/scripts/reviewctl.py"},
-        {"source": "skills/material-code-review/scripts/validate_package.py", "destination": "skills/material-code-review/scripts/validate_package.py"},
-        {"source": "skills/material-code-review/tests/fixtures/reviewctl_1_2_compat.py", "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_2_compat.py"},
-        {"source": "skills/material-code-review/tests/test_discovery_contract.py", "destination": "skills/material-code-review/tests/test_discovery_contract.py"},
-        {"source": "skills/material-code-review/tests/test_repair_direction_contract.py", "destination": "skills/material-code-review/tests/test_repair_direction_contract.py"},
-        {"source": "skills/material-code-review/tests/test_reviewctl.py", "destination": "skills/material-code-review/tests/test_reviewctl.py"}
+        {
+          "destination": ".agents/plugins/marketplace.json",
+          "source": ".agents/plugins/marketplace.json"
+        },
+        {
+          "destination": ".claude-plugin/marketplace.json",
+          "source": ".claude-plugin/marketplace.json"
+        },
+        {
+          "destination": ".claude-plugin/plugin.json",
+          "source": ".claude-plugin/plugin.json"
+        },
+        {
+          "destination": ".codex-plugin/plugin.json",
+          "source": ".codex-plugin/plugin.json"
+        },
+        {
+          "destination": "AGENTS.md",
+          "source": "AGENTS.md"
+        },
+        {
+          "destination": "CHANGELOG.md",
+          "source": "CHANGELOG.md"
+        },
+        {
+          "destination": "CODEX.md",
+          "source": "CODEX.md"
+        },
+        {
+          "destination": "LICENSE",
+          "source": "LICENSE"
+        },
+        {
+          "destination": "Makefile",
+          "source": "Makefile"
+        },
+        {
+          "destination": "README.md",
+          "source": "README.md"
+        },
+        {
+          "destination": "SECURITY.md",
+          "source": "SECURITY.md"
+        },
+        {
+          "destination": "SKILL.md",
+          "source": "SKILL.md"
+        },
+        {
+          "destination": "THIRD_PARTY.md",
+          "source": "THIRD_PARTY.md"
+        },
+        {
+          "destination": "agents/correctness-reviewer.md",
+          "source": "agents/correctness-reviewer.md"
+        },
+        {
+          "destination": "agents/finding-adjudicator.md",
+          "source": "agents/finding-adjudicator.md"
+        },
+        {
+          "destination": "agents/finding-validator.md",
+          "source": "agents/finding-validator.md"
+        },
+        {
+          "destination": "agents/postfix-verifier.md",
+          "source": "agents/postfix-verifier.md"
+        },
+        {
+          "destination": "agents/repair-planner.md",
+          "source": "agents/repair-planner.md"
+        },
+        {
+          "destination": "agents/risk-reviewer.md",
+          "source": "agents/risk-reviewer.md"
+        },
+        {
+          "destination": "agents/standards-reviewer.md",
+          "source": "agents/standards-reviewer.md"
+        },
+        {
+          "destination": "agents/test-reviewer.md",
+          "source": "agents/test-reviewer.md"
+        },
+        {
+          "destination": "bin/material-reviewctl",
+          "source": "bin/material-reviewctl"
+        },
+        {
+          "destination": "bin/material-reviewctl.cmd",
+          "source": "bin/material-reviewctl.cmd"
+        },
+        {
+          "destination": "bin/material-reviewctl.ps1",
+          "source": "bin/material-reviewctl.ps1"
+        },
+        {
+          "destination": "commands/material-review.md",
+          "source": "commands/material-review.md"
+        },
+        {
+          "destination": "commands/material-simplify.md",
+          "source": "commands/material-simplify.md"
+        },
+        {
+          "destination": "examples/codex-project-config/.codex/agents/material_adjudicator.toml",
+          "source": "examples/codex-project-config/.codex/agents/material_adjudicator.toml"
+        },
+        {
+          "destination": "examples/codex-project-config/.codex/agents/material_candidate.toml",
+          "source": "examples/codex-project-config/.codex/agents/material_candidate.toml"
+        },
+        {
+          "destination": "examples/codex-project-config/.codex/agents/material_postfix.toml",
+          "source": "examples/codex-project-config/.codex/agents/material_postfix.toml"
+        },
+        {
+          "destination": "examples/codex-project-config/.codex/agents/material_validator.toml",
+          "source": "examples/codex-project-config/.codex/agents/material_validator.toml"
+        },
+        {
+          "destination": "examples/codex-project-config/.codex/config.toml",
+          "source": "examples/codex-project-config/.codex/config.toml"
+        },
+        {
+          "destination": "scripts/package_plugin.py",
+          "source": "scripts/package_plugin.py"
+        },
+        {
+          "destination": "scripts/tests/test_packaging.py",
+          "source": "scripts/tests/test_packaging.py"
+        },
+        {
+          "destination": "scripts/validate_package.py",
+          "source": "scripts/validate_package.py"
+        },
+        {
+          "destination": "skills/material-code-review/SKILL.md",
+          "source": "skills/material-code-review/SKILL.md"
+        },
+        {
+          "destination": "skills/material-code-review/agents/openai.yaml",
+          "source": "skills/material-code-review/agents/openai.yaml"
+        },
+        {
+          "destination": "skills/material-code-review/package-layouts.json",
+          "source": "skills/material-code-review/package-layouts.json"
+        },
+        {
+          "destination": "skills/material-code-review/references/adjudicator-template.md",
+          "source": "skills/material-code-review/references/adjudicator-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/context-checklist.md",
+          "source": "skills/material-code-review/references/context-checklist.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/failure-model.md",
+          "source": "skills/material-code-review/references/failure-model.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/fixer-template.md",
+          "source": "skills/material-code-review/references/fixer-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/materiality-rubric.md",
+          "source": "skills/material-code-review/references/materiality-rubric.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/output-template.md",
+          "source": "skills/material-code-review/references/output-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/persisted-config-migration-lens.md",
+          "source": "skills/material-code-review/references/persisted-config-migration-lens.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/planner-template.md",
+          "source": "skills/material-code-review/references/planner-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/postfix-verifier-template.md",
+          "source": "skills/material-code-review/references/postfix-verifier-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/reliability-output-integrity-lens.md",
+          "source": "skills/material-code-review/references/reliability-output-integrity-lens.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/remediation-auditor-template.md",
+          "source": "skills/material-code-review/references/remediation-auditor-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/remediation-rubric.md",
+          "source": "skills/material-code-review/references/remediation-rubric.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/review-obligations.md",
+          "source": "skills/material-code-review/references/review-obligations.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/reviewer-template.md",
+          "source": "skills/material-code-review/references/reviewer-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/test-evidence-rubric.md",
+          "source": "skills/material-code-review/references/test-evidence-rubric.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/validator-template.md",
+          "source": "skills/material-code-review/references/validator-template.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/workflow.md",
+          "source": "skills/material-code-review/references/workflow.md"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/adjudication-v4.schema.json",
+          "source": "skills/material-code-review/schemas/adjudication-v4.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/adjudication.schema.json",
+          "source": "skills/material-code-review/schemas/adjudication.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/candidate-set-v2.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v2.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/candidate-set-v3.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v3.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/candidate-set.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/coverage-plan-v2.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan-v2.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/coverage-plan.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/fix-plan.schema.json",
+          "source": "skills/material-code-review/schemas/fix-plan.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/verification.schema.json",
+          "source": "skills/material-code-review/schemas/verification.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/scripts/obligation_contract.py",
+          "source": "skills/material-code-review/scripts/obligation_contract.py"
+        },
+        {
+          "destination": "skills/material-code-review/scripts/reviewctl.py",
+          "source": "skills/material-code-review/scripts/reviewctl.py"
+        },
+        {
+          "destination": "skills/material-code-review/scripts/validate_package.py",
+          "source": "skills/material-code-review/scripts/validate_package.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/fixtures/obligation-corpus.json",
+          "source": "skills/material-code-review/tests/fixtures/obligation-corpus.json"
+        },
+        {
+          "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_2_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_2_compat.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_3_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_3_compat.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/test_discovery_contract.py",
+          "source": "skills/material-code-review/tests/test_discovery_contract.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/test_obligation_contract.py",
+          "source": "skills/material-code-review/tests/test_obligation_contract.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/test_obligation_corpus.py",
+          "source": "skills/material-code-review/tests/test_obligation_corpus.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/test_repair_direction_contract.py",
+          "source": "skills/material-code-review/tests/test_repair_direction_contract.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/test_reviewctl.py",
+          "source": "skills/material-code-review/tests/test_reviewctl.py"
+        }
       ]
     },
     "standalone": {
       "canonical_skill": "SKILL.md",
       "required_mappings": [
-        {"source": "CODEX.md", "destination": "CODEX.md"},
-        {"source": "LICENSE", "destination": "LICENSE"},
-        {"source": "SECURITY.md", "destination": "SECURITY.md"},
-        {"source": "skills/material-code-review/SKILL.md", "destination": "SKILL.md"},
-        {"source": "skills/material-code-review/agents/openai.yaml", "destination": "agents/openai.yaml"},
-        {"source": "skills/material-code-review/package-layouts.json", "destination": "package-layouts.json"},
-        {"source": "skills/material-code-review/references/adjudicator-template.md", "destination": "references/adjudicator-template.md"},
-        {"source": "skills/material-code-review/references/context-checklist.md", "destination": "references/context-checklist.md"},
-        {"source": "skills/material-code-review/references/failure-model.md", "destination": "references/failure-model.md"},
-        {"source": "skills/material-code-review/references/fixer-template.md", "destination": "references/fixer-template.md"},
-        {"source": "skills/material-code-review/references/materiality-rubric.md", "destination": "references/materiality-rubric.md"},
-        {"source": "skills/material-code-review/references/output-template.md", "destination": "references/output-template.md"},
-        {"source": "skills/material-code-review/references/persisted-config-migration-lens.md", "destination": "references/persisted-config-migration-lens.md"},
-        {"source": "skills/material-code-review/references/planner-template.md", "destination": "references/planner-template.md"},
-        {"source": "skills/material-code-review/references/postfix-verifier-template.md", "destination": "references/postfix-verifier-template.md"},
-        {"source": "skills/material-code-review/references/reliability-output-integrity-lens.md", "destination": "references/reliability-output-integrity-lens.md"},
-        {"source": "skills/material-code-review/references/remediation-auditor-template.md", "destination": "references/remediation-auditor-template.md"},
-        {"source": "skills/material-code-review/references/remediation-rubric.md", "destination": "references/remediation-rubric.md"},
-        {"source": "skills/material-code-review/references/reviewer-template.md", "destination": "references/reviewer-template.md"},
-        {"source": "skills/material-code-review/references/test-evidence-rubric.md", "destination": "references/test-evidence-rubric.md"},
-        {"source": "skills/material-code-review/references/validator-template.md", "destination": "references/validator-template.md"},
-        {"source": "skills/material-code-review/references/workflow.md", "destination": "references/workflow.md"},
-        {"source": "skills/material-code-review/schemas/adjudication-v4.schema.json", "destination": "schemas/adjudication-v4.schema.json"},
-        {"source": "skills/material-code-review/schemas/adjudication.schema.json", "destination": "schemas/adjudication.schema.json"},
-        {"source": "skills/material-code-review/schemas/candidate-set-v2.schema.json", "destination": "schemas/candidate-set-v2.schema.json"},
-        {"source": "skills/material-code-review/schemas/candidate-set.schema.json", "destination": "schemas/candidate-set.schema.json"},
-        {"source": "skills/material-code-review/schemas/coverage-plan.schema.json", "destination": "schemas/coverage-plan.schema.json"},
-        {"source": "skills/material-code-review/schemas/fix-plan.schema.json", "destination": "schemas/fix-plan.schema.json"},
-        {"source": "skills/material-code-review/schemas/verification.schema.json", "destination": "schemas/verification.schema.json"},
-        {"source": "skills/material-code-review/scripts/reviewctl.py", "destination": "scripts/reviewctl.py"},
-        {"source": "skills/material-code-review/scripts/validate_package.py", "destination": "scripts/validate_package.py"},
-        {"source": "skills/material-code-review/tests/fixtures/reviewctl_1_2_compat.py", "destination": "tests/fixtures/reviewctl_1_2_compat.py"},
-        {"source": "skills/material-code-review/tests/test_discovery_contract.py", "destination": "tests/test_discovery_contract.py"},
-        {"source": "skills/material-code-review/tests/test_repair_direction_contract.py", "destination": "tests/test_repair_direction_contract.py"},
-        {"source": "skills/material-code-review/tests/test_reviewctl.py", "destination": "tests/test_reviewctl.py"}
+        {
+          "destination": "CODEX.md",
+          "source": "CODEX.md"
+        },
+        {
+          "destination": "LICENSE",
+          "source": "LICENSE"
+        },
+        {
+          "destination": "SECURITY.md",
+          "source": "SECURITY.md"
+        },
+        {
+          "destination": "SKILL.md",
+          "source": "skills/material-code-review/SKILL.md"
+        },
+        {
+          "destination": "agents/openai.yaml",
+          "source": "skills/material-code-review/agents/openai.yaml"
+        },
+        {
+          "destination": "package-layouts.json",
+          "source": "skills/material-code-review/package-layouts.json"
+        },
+        {
+          "destination": "references/adjudicator-template.md",
+          "source": "skills/material-code-review/references/adjudicator-template.md"
+        },
+        {
+          "destination": "references/context-checklist.md",
+          "source": "skills/material-code-review/references/context-checklist.md"
+        },
+        {
+          "destination": "references/failure-model.md",
+          "source": "skills/material-code-review/references/failure-model.md"
+        },
+        {
+          "destination": "references/fixer-template.md",
+          "source": "skills/material-code-review/references/fixer-template.md"
+        },
+        {
+          "destination": "references/materiality-rubric.md",
+          "source": "skills/material-code-review/references/materiality-rubric.md"
+        },
+        {
+          "destination": "references/output-template.md",
+          "source": "skills/material-code-review/references/output-template.md"
+        },
+        {
+          "destination": "references/persisted-config-migration-lens.md",
+          "source": "skills/material-code-review/references/persisted-config-migration-lens.md"
+        },
+        {
+          "destination": "references/planner-template.md",
+          "source": "skills/material-code-review/references/planner-template.md"
+        },
+        {
+          "destination": "references/postfix-verifier-template.md",
+          "source": "skills/material-code-review/references/postfix-verifier-template.md"
+        },
+        {
+          "destination": "references/reliability-output-integrity-lens.md",
+          "source": "skills/material-code-review/references/reliability-output-integrity-lens.md"
+        },
+        {
+          "destination": "references/remediation-auditor-template.md",
+          "source": "skills/material-code-review/references/remediation-auditor-template.md"
+        },
+        {
+          "destination": "references/remediation-rubric.md",
+          "source": "skills/material-code-review/references/remediation-rubric.md"
+        },
+        {
+          "destination": "references/review-obligations.md",
+          "source": "skills/material-code-review/references/review-obligations.md"
+        },
+        {
+          "destination": "references/reviewer-template.md",
+          "source": "skills/material-code-review/references/reviewer-template.md"
+        },
+        {
+          "destination": "references/test-evidence-rubric.md",
+          "source": "skills/material-code-review/references/test-evidence-rubric.md"
+        },
+        {
+          "destination": "references/validator-template.md",
+          "source": "skills/material-code-review/references/validator-template.md"
+        },
+        {
+          "destination": "references/workflow.md",
+          "source": "skills/material-code-review/references/workflow.md"
+        },
+        {
+          "destination": "schemas/adjudication-v4.schema.json",
+          "source": "skills/material-code-review/schemas/adjudication-v4.schema.json"
+        },
+        {
+          "destination": "schemas/adjudication.schema.json",
+          "source": "skills/material-code-review/schemas/adjudication.schema.json"
+        },
+        {
+          "destination": "schemas/candidate-set-v2.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v2.schema.json"
+        },
+        {
+          "destination": "schemas/candidate-set-v3.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v3.schema.json"
+        },
+        {
+          "destination": "schemas/candidate-set.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set.schema.json"
+        },
+        {
+          "destination": "schemas/coverage-plan-v2.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan-v2.schema.json"
+        },
+        {
+          "destination": "schemas/coverage-plan.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan.schema.json"
+        },
+        {
+          "destination": "schemas/fix-plan.schema.json",
+          "source": "skills/material-code-review/schemas/fix-plan.schema.json"
+        },
+        {
+          "destination": "schemas/verification.schema.json",
+          "source": "skills/material-code-review/schemas/verification.schema.json"
+        },
+        {
+          "destination": "scripts/obligation_contract.py",
+          "source": "skills/material-code-review/scripts/obligation_contract.py"
+        },
+        {
+          "destination": "scripts/reviewctl.py",
+          "source": "skills/material-code-review/scripts/reviewctl.py"
+        },
+        {
+          "destination": "scripts/validate_package.py",
+          "source": "skills/material-code-review/scripts/validate_package.py"
+        },
+        {
+          "destination": "tests/fixtures/obligation-corpus.json",
+          "source": "skills/material-code-review/tests/fixtures/obligation-corpus.json"
+        },
+        {
+          "destination": "tests/fixtures/reviewctl_1_2_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_2_compat.py"
+        },
+        {
+          "destination": "tests/fixtures/reviewctl_1_3_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_3_compat.py"
+        },
+        {
+          "destination": "tests/test_discovery_contract.py",
+          "source": "skills/material-code-review/tests/test_discovery_contract.py"
+        },
+        {
+          "destination": "tests/test_obligation_contract.py",
+          "source": "skills/material-code-review/tests/test_obligation_contract.py"
+        },
+        {
+          "destination": "tests/test_obligation_corpus.py",
+          "source": "skills/material-code-review/tests/test_obligation_corpus.py"
+        },
+        {
+          "destination": "tests/test_repair_direction_contract.py",
+          "source": "skills/material-code-review/tests/test_repair_direction_contract.py"
+        },
+        {
+          "destination": "tests/test_reviewctl.py",
+          "source": "skills/material-code-review/tests/test_reviewctl.py"
+        }
       ]
     }
-  }
+  },
+  "schema_version": 1
 }

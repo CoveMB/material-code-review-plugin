@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 — 2026-07-30
+
+- Added fail-closed change-unit partitioning and bounded frozen source-context hashes before coverage recording.
+- Added coverage-plan/v2 with deterministic mappings from six controlled risk decisions to required review obligations, lenses, and checks.
+- Added candidate-set/v3 assignment authority, complete check-result accounting, stale-context rejection, and candidates-normalized/v3 provenance.
+- Added a deterministic five-case missed-contract corpus with paired controls and negative mutations covering wrong lenses, omitted checks, compound assignments, blocked results, and stale context.
+- Kept material-review state/v2 and state/v1 bounded and non-migrating, and kept simplification isolated on its exact state/v1 profile without obligations.
+- Closed every distributable dependency over the obligation helper, schemas, references, tests, and fixtures; standalone simplification 1.3.0 embeds shared controller/helper 1.4.0 for provenance only.
+- Added a maintainer-only, blinded missed-contract comparison with one baseline run, at most one evidence-backed repair confirmation, and fail-closed acceptance conditions. No live superiority claim is made by this release note.
+- Preserved Gate A, Gate B, no mutation before Gate B, exact-path repair boundaries, restoration, finite attempts, publication controls, and source-egress authorization.
+
 ## 1.3.0 — 2026-07-29
 
 - Added immutable exhaustive coverage plans and candidate-set/v2 bindings, including targeted reliability and persisted-configuration/migration lenses.

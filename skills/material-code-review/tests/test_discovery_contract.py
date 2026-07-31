@@ -8,10 +8,11 @@ WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
 WORKFLOW_BLOCK_END = "\n```"
 WORKFLOW_DISCOVERY_MARKERS = (
     "init",
-    "context record (manual; see references/context-checklist.md)",
+    "context record and change-unit inventory (manual; see references/context-checklist.md)",
     'python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .',
     "record-coverage",
-    "dispatch assigned lenses",
+    "dispatch assignments",
+    "ingest one complete assignment-matched wave",
 )
 
 
@@ -88,14 +89,88 @@ class DiscoveryContractTests(unittest.TestCase):
             "workflow discovery order markers must be in canonical order",
         )
 
-    def test_skill_requires_exhaustive_coverage_before_dispatch(self) -> None:
+    def test_discovery_contract_requires_change_units_and_obligations(self) -> None:
         text = self.read("SKILL.md")
         for marker in (
-            "risk_assessments", "user_selectable_output_paths", "persisted_config_semantics",
-            "record-coverage", "material-review/candidate-set/v2", "Missing required review coverage",
+            "material-review/state/v3",
+            "material-review/coverage-plan/v2",
+            "material-review/candidate-set/v3",
+            "material-review/candidates-normalized/v3",
+            "change_units",
+            "review_obligations",
+            "assignment_id",
+            "check_results",
+            "record-coverage",
+            "Missing required assignment coverage",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
+
+    def test_obligation_guidance_covers_every_controlled_risk(self) -> None:
+        guidance = self.read("references/review-obligations.md")
+        expectations = {
+            "verification_mechanism_semantics": (
+                "adversarial_verification",
+                "authoritative_parsing",
+                "decoy_duplicate_resistance",
+                "paired_control",
+            ),
+            "machine_contract_semantics": (
+                "api_config_compatibility",
+                "schema_runtime_parity",
+                "canonical_git_path_language",
+                "required_value_cardinality",
+            ),
+            "distribution_contract_integrity": (
+                "reliability",
+                "manifest_reference_closure",
+                "remove_one_required_entry",
+                "paired_control",
+            ),
+            "normative_workflow_coherence": (
+                "standards_alignment",
+                "normative_sequence",
+                "prerequisite_before_dependent_step",
+                "paired_control",
+            ),
+            "user_selectable_output_paths": (
+                "reliability",
+                "destination_collision",
+                "writer_cleanup_order",
+            ),
+            "persisted_config_semantics": (
+                "migration_data_safety",
+                "accepted_shape_and_default",
+                "migration_and_identity",
+                "api_config_compatibility",
+            ),
+        }
+        for risk_code, markers in expectations.items():
+            with self.subTest(risk_code=risk_code):
+                section = guidance.split(f"## `{risk_code}`", 1)[1].split("\n## `", 1)[0]
+                for marker in markers:
+                    self.assertIn(marker, section)
+                self.assertIn("Positive trigger", section)
+                self.assertIn("Non-trigger evidence", section)
+
+        self.assertIn("Filenames are discovery hints only", guidance)
+        self.assertIn("does not prove reviewer cognition", guidance)
+
+    def test_reviewer_template_requires_assignment_matched_v3_output(self) -> None:
+        reviewer = self.read("references/reviewer-template.md")
+        for marker in (
+            "candidate-set-v3.schema.json",
+            "coverage_context_hash",
+            "assignment_id",
+            "assignment_kind",
+            "obligation_id",
+            "check_results",
+            "pass",
+            "finding_emitted",
+            "blocked",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, reviewer)
 
     def test_workflow_discovery_order_requires_scope_check(self) -> None:
         workflow = self.read("references/workflow.md")

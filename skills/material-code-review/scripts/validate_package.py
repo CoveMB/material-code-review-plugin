@@ -10,7 +10,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -26,12 +26,18 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 CONTROLLED_WORKFLOW_MARKERS = (
-    "risk_assessments",
+    "material-review/state/v3",
+    "material-review/coverage-plan/v2",
+    "material-review/candidate-set/v3",
+    "material-review/candidates-normalized/v3",
+    "change_units",
+    "review_obligations",
+    "assignment_id",
+    "check_results",
     "record-coverage",
-    "material-review/candidate-set/v2",
     "user_selectable_output_paths",
     "persisted_config_semantics",
-    "Missing required review coverage",
+    "Missing required assignment coverage",
     "CONSEQUENCE_UNSUPPORTED",
     "plausibly blocker/high",
 )
@@ -39,10 +45,11 @@ WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
 WORKFLOW_BLOCK_END = "\n```"
 WORKFLOW_DISCOVERY_MARKERS = (
     "init",
-    "context record (manual; see references/context-checklist.md)",
+    "context record and change-unit inventory (manual; see references/context-checklist.md)",
     'python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .',
     "record-coverage",
-    "dispatch assigned lenses",
+    "dispatch assignments",
+    "ingest one complete assignment-matched wave",
 )
 LAYOUT_NAMES = ("full-plugin", "standalone")
 LAYOUT_MANIFEST_NAME = "package-layouts.json"
@@ -517,7 +524,14 @@ def main() -> int:
         if workflow_error is not None:
             errors.append(workflow_error)
     controller = ROOT / "scripts/reviewctl.py"
+    obligation_contract = ROOT / "scripts/obligation_contract.py"
+    if not obligation_contract.is_file():
+        errors.append("missing shared obligation contract")
     if controller.is_file():
+        if "from obligation_contract import" not in controller.read_text(
+            encoding="utf-8"
+        ):
+            errors.append("reviewctl.py does not import obligation_contract")
         declaration_error = validate_static_version_declaration(
             controller.read_bytes(),
             "TOOL_VERSION",

@@ -13,8 +13,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
-VERSION = "1.3.0"
-FIXED_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
+VERSION = "1.4.0"
+FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)
 EXCLUDED_PARTS = {
     ".git",
     "__pycache__",

@@ -73,7 +73,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" --help
 
 The control tool requires Python 3.10 or newer and uses only the standard library. It writes runs below `git rev-parse --git-path material-code-review` unless `--artifact-root` is explicitly supplied. A custom artifact root must be outside the worktree or inside the active Git directory.
 
-New material-review runs use `material-review/state/v2` with `coverage_required=true` and `workflow_profile=material_review`. A material-review `state/v1` run is never migrated. An unmarked run may use only `status`, `check-scope`, active `rollback-finding`, and `abort-fixes` under their existing controls. A marked run already in the final repair state may also refresh fixed-finding tests, rerun global tests, prepare verification, and record verification. All other forward progress requires a new run. Unsupported or contradictory state/profile combinations fail before command dispatch.
+New material-review runs use `material-review/state/v3` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v2`, `material-review/candidate-set/v3`, and `material-review/candidates-normalized/v3` during discovery. Material-review `state/v1` and `state/v2` runs are never migrated into this lifecycle. They retain only their established inspection, restoration, and marker-bound final-repair completion commands; all other forward progress requires a new run. Unsupported or contradictory state/profile combinations fail before command dispatch.
 
 After `init`, preserve the printed run ID in working memory and in `MATERIAL_REVIEW_RUN_ID` when the shell permits:
 
@@ -147,7 +147,7 @@ Write a controller context note under the run directory or another local tempora
 
 - intent and its source/confidence;
 - relevant repository rules;
-- changed-file groups and risk signals;
+- `change_units`, their coherent purposes, and risk signals;
 - tests and build commands already available;
 - known unknowns;
 - excluded paths or incomplete source access;
@@ -163,47 +163,44 @@ A mismatch means prior reviewer output is stale. Do not “adjust mentally”; r
 
 #### 0.4 Record exhaustive targeted coverage
 
-Before reviewer dispatch, make exactly one positive or negative `risk_assessments` entry for each controlled code: `user_selectable_output_paths` and `persisted_config_semantics`. Each entry has explicit boolean `present`, a non-empty rationale, and `evidence_paths`: a positive entry names at least one unique normalized frozen-scope path, while a negative entry has no paths and records the checked non-trigger evidence. Filenames alone do not establish a trigger.
+Build a `material-review/coverage-plan/v2` using `references/context-checklist.md` and `references/review-obligations.md`.
 
-`user_selectable_output_paths` is present when changed behavior writes multiple authoritative or auxiliary artifacts and at least one destination is user-selectable, including when the selectable path predates the diff but a new artifact, writer, cleanup target, or write order creates a new collision opportunity. `persisted_config_semantics` is present when changed behavior alters the accepted shape, serialization, default, missing-key fallback, interpretation, migration, durable output, or downstream local/remote identity of an optional persisted field. Use `references/context-checklist.md` for positive and negative evidence.
+Every changed comparison path must occur exactly once in one `change_units[*].primary_paths` list. Group paths by coherent behavior or contract ownership, not directory or reviewer persona. A unit may name bounded unchanged `context_paths` only when they are necessary contract owners or consumers. The controller freezes those tracked regular comparison-tree files and binds them through `coverage_context_hash`.
 
-Build and record one scope-hash-bound `material-review/coverage-plan/v1` before dispatch. It must assign `correctness`, `test_adequacy`, and `standards_alignment` as required lenses; a present `user_selectable_output_paths` additionally requires `reliability`; and a present `persisted_config_semantics` additionally requires `migration_data_safety` and `api_config_compatibility`. An optional lens cannot replace a required assignment. The plan records the actual `reviewer_id`, `independence_group`, and `review_mode` for each unique `lens_id`; repeated reviewer identities are allowed, but persona labels are not evidence of independent corroboration.
+For every unit, make exactly one positive or negative decision for all six controlled risks:
+
+- `verification_mechanism_semantics`;
+- `machine_contract_semantics`;
+- `distribution_contract_integrity`;
+- `normative_workflow_coherence`;
+- `user_selectable_output_paths`;
+- `persisted_config_semantics`.
+
+Positive decisions appear in `risk_codes` and `selected_risk_rationale` with concrete evidence paths. Negative decisions appear in `rejected_risk_rationale` with checked non-trigger evidence. Filenames are hints only. Every positive `(unit_id, risk_code)` pair creates exactly one item in `review_obligations` and exactly one obligation assignment with the controlled required lens and `required_checks`.
+
+Every plan contains the three core assignments: `core-correctness`, `core-standards`, and `core-tests`. Add only the obligation and controlled supporting assignments required by positive risks. A low-risk plan has those three core assignments and no obligations. A reviewer process may handle multiple assignments sequentially, but each output remains isolated by exact `assignment_id`.
+
+Run the freshness check after constructing the inventory and before recording it:
 
 ```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .
 python3 "$SKILL_DIR/scripts/reviewctl.py" record-coverage \
   --repo-root . \
   --input /tmp/coverage-plan.json
 ```
 
-The controller writes the immutable plan and verified plan hash. Re-recording an identical plan is idempotent; any different, orphaned, missing-bound, or failed-hash plan requires a new run. Recording does not grant repair authority or advance past `CONTEXT_FROZEN`.
-
+The controller validates the exact primary partition, exhaustive risk decisions, obligation and assignment mappings, context safety, and bounded context size. It writes immutable `coverage-plan.json` and `coverage-context.json` authority. An exact plan/context retry is idempotent; any changed, orphaned, missing-bound, stale, or failed-hash authority requires a new run. Recording grants no repair authority and remains in `CONTEXT_FROZEN`.
 ### Phase 1 — Generate candidates
 
-#### 1.1 Reviewer selection
+#### 1.1 Assignment selection
 
-Candidate generation is one bounded read-only wave. In Codex, use a bounded read-only `explorer` subagent or an installed project-scoped custom reviewer, seeded with `references/reviewer-template.md` and exactly one assigned lens. On another host, use the closest read-only subagent primitive. When subagents are unavailable, run the same assigned lenses sequentially. In every host, provide the frozen scope hash, verified coverage-plan hash, exact assigned lens ID, assigned `reviewer_id`, `independence_group`, and `review_mode`, frozen source bundle, assigned risk evidence paths, repository constraints, and exact material-review/candidate-set/v2 schema. Reviewers must echo those assigned values unchanged.
+Candidate generation is one bounded read-only assignment-matched wave. In Codex, use a bounded read-only `explorer` subagent or installed project-scoped reviewer when permitted. On another host, use the closest read-only primitive. When subagents are unavailable, run the same assignments sequentially.
 
-Always cover:
+Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, required paths, repository constraints, and `schemas/candidate-set-v3.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and exact `required_checks`. Reviewers must echo those assigned values unchanged.
 
-- correctness and edge cases;
-- test adequacy for fragile changed behavior;
-- repository standards and explicit requirement/plan alignment.
+The three core assignments always cover correctness and edge cases, test adequacy for fragile changed behavior, and repository standards plus explicit requirement alignment. Every positive controlled risk adds its obligation assignment. Add supplemental assignments only when the plan's controlled mapping requires them.
 
-The recorded coverage plan selects the required targeted lenses. Add other conditional lenses only when the diff contains a real concern:
-
-- security/privacy/authorization/input trust;
-- reliability/retries/timeouts/error handling/background work;
-- API, schema, serialization, event, or exported-type contracts;
-- data migration/backfill/deployment safety;
-- performance/resource use;
-- concurrency/ordering/async UI;
-- documentation mismatch;
-- simplification/DRY/architecture.
-
-Do not spawn a specialist from a filename alone. Conversely, verification mechanisms that can silently pass while the product is broken warrant an adversarial lens even when the diff is small.
-
-For a trivial, low-risk, code-only diff, the plan still requires its core assignments. Any unknown scope signal, configuration/schema/CI change, security-sensitive behavior, public contract, concurrency, migration, or uncounted file type fails closed to the fuller roster.
-
+Do not create an obligation from a filename alone. Conversely, do not omit one when behavior-based evidence meets a controlled positive trigger. A reviewer may run several assignments sequentially, but one broad result cannot satisfy multiple assignment IDs or obligations.
 #### 1.2 Independence and scheduling
 
 Assign each reviewer an `independence_group` that describes the actual process/model family. Two personas running in the same process/model are distinct lenses, not independent corroboration.
@@ -220,35 +217,32 @@ External model/CLI review is optional. Before egress, state:
 
 Obtain explicit user permission for that egress. A failed or unverifiable external route does not count as independent corroboration.
 
-#### 1.3 Candidate contract
+#### 1.3 Candidate and check-result contract
 
-Each reviewer returns JSON conforming to `schemas/candidate-set-v2.schema.json`, including the verified coverage-plan hash, exact assigned lens ID, and the assigned `reviewer_id`, `independence_group`, and `review_mode`; reviewers must echo those assigned values unchanged. Every result must name at least one normalized frozen-scope path in `coverage.files_reviewed`, even when `findings` is empty. Partial coverage may remain explicit in `coverage.limitations`, and assigned risk evidence paths are additional requirements. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`. A reviewer may not substitute, mention, or return an unassigned lens.
+Each assignment returns one object conforming exactly to `schemas/candidate-set-v3.schema.json`. It includes the exact scope, coverage-plan, and coverage-context hashes plus the assigned identity. Obligation assignments echo one `obligation_id` and return every required `check_results` entry exactly once:
 
-A reviewer must actively check for:
+- `pass` requires concrete evidence and no finding IDs;
+- `finding_emitted` requires concrete evidence and one or more local IDs present in the same result;
+- `blocked` identifies missing evidence and leaves the obligation incomplete.
 
-- existing guards, callers, middleware, framework behavior, and type constraints;
-- whether the cited behavior is actually introduced/exposed by the diff;
-- explicit lint suppressions or project decisions;
-- tests that already cover the claimed gap;
-- intentional tradeoffs documented in the task or repository.
+Core and supplemental assignments return an empty `check_results` array. Every result names at least one required path in `coverage.files_reviewed`, even when `findings` is empty. A reviewer may not combine assignments, substitute a lens, or report another assignment's obligation.
 
-Do not seed reviewers with one another's candidates. That manufactures agreement.
+Reviewers still actively check existing guards, callers, middleware, types, framework behavior, diff causality, explicit project decisions, existing tests, and counterevidence. Use exact source evidence and `references/materiality-rubric.md`. Do not seed reviewers with one another's candidates.
 
-Save each return to a temporary JSON file, then ingest all returns together:
+Save each return separately and ingest the complete wave together:
 
 ```bash
 python3 "$SKILL_DIR/scripts/reviewctl.py" ingest-candidates \
   --repo-root . \
-  --input /tmp/reviewer-correctness.json \
-  --input /tmp/reviewer-testing.json
+  --input /tmp/assignment-core-correctness.json \
+  --input /tmp/assignment-obligation-unit-001.json
 ```
 
-The tool validates the complete candidate wave in memory: each required assignment has exactly one identity-matched v2 result, every result names at least one normalized frozen-scope path, every declared coverage path is frozen-scope-bound, and each targeted lens covers its assigned risk evidence paths. It rejects missing, duplicate, stale, wrong-lens, unassigned, zero-file, or risk-path-incomplete results without replacing authoritative candidates; missing assignments report `Missing required review coverage`, and an ingestion-failure diagnostic is non-authoritative. Until the complete valid wave exists, do not synthesize, ingest a candidate bundle, validate, or issue any verdict; only non-authoritative failure diagnostics may be recorded. Malformed findings are rejected visibly; do not repair their substance during adjudication by guessing.
+The controller validates all results in memory. It rejects missing or duplicate assignment IDs, stale hashes, wrong identities or obligations, absent or duplicated checks, unsupported outcomes, `pass` without evidence, unresolved `finding_emitted` IDs, `blocked` checks, and incomplete required paths. Missing assignments report `Missing required assignment coverage`. Until the complete valid wave exists, no authoritative candidate bundle, adjudication, verdict, or Gate A artifact may exist.
 
-The first complete valid normalized wave is the run's write-once candidate authority. A later complete wave is normalized in full, including validated lens provenance, before comparison. An exact canonical retry succeeds without rewriting candidate artifacts, state, hashes, timestamps, events, or IDs; temporary input filenames and command-line input order are not authority. A different complete wave cannot replace or renumber the first bundle and requires a new run. An incomplete, invalid, or unavailable-input retry may update only `candidate-ingestion-failure.json`; a missing, tampered, or state-mismatched existing authority fails closed and is never backfilled from retry input.
+The first accepted wave is write-once authority. An exact canonical retry is no-write. A different complete wave requires a new run. Invalid or unavailable retry input may update only `candidate-ingestion-failure.json`; it cannot replace accepted candidates or state.
 
-After the complete wave passes those checks, the controller stamps each finding with its validated set-level `lens_id`, then flattens it into `material-review/candidates-normalized/v2`. The lens is the final candidate-ID sort tie-breaker after the established reviewer, independence-group, local-ID, file, and starting-line dimensions. Reviewer sets are ordered by their validated assignment identity, and temporary source filenames are omitted from normalized candidates, so equivalent waves have one canonical authority identity. Empty reviewer sets retain their lens-bound coverage record without creating a synthetic candidate. `coverage_plan_hash` remains at the reviewer-set and bundle levels and is never duplicated per candidate.
-
+After deterministic candidate IDs are assigned, the controller resolves each obligation check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v3`. Reviewer sets retain assignment identity, obligation identity when applicable, lens, check results, and coverage. Temporary input filenames and order are excluded from authority. Controller acceptance proves structural completion, not that a reviewer performed the semantic work well.
 ### Phase 2 — Validate and adjudicate
 
 #### 2.1 Independent per-finding validation
@@ -590,7 +584,7 @@ When the ledger contained material findings but the user rejected or deferred al
 Read `references/failure-model.md`. In summary:
 
 - unknown or stale scope -> stop and refreeze;
-- malformed reviewer output -> reject that output, do not guess;
+- incomplete units, unsafe context, missing or duplicate obligations, wrong lenses/checks, stale hashes, blocked checks, or unresolved local IDs -> reject coverage or the entire candidate wave, do not guess;
 - unavailable subagents -> same checklist, sequential/degraded self-audit;
 - validator infrastructure failure -> preserve high-impact uncertainty visibly;
 - user gate absent -> stop;
@@ -605,7 +599,8 @@ Read `references/failure-model.md`. In summary:
 
 Load references only at the stage that needs them:
 
-- `references/context-checklist.md` — Phase 0
+- `references/context-checklist.md` — Phase 0 change-unit construction and exhaustive classification
+- `references/review-obligations.md` — controlled risks, required lenses/checks, and check-result evidence
 - `references/reliability-output-integrity-lens.md` — assigned `reliability` lens for present `user_selectable_output_paths`
 - `references/persisted-config-migration-lens.md` — assigned `migration_data_safety` or `api_config_compatibility` lens for present `persisted_config_semantics`
 - `references/materiality-rubric.md` — Phases 1–2

@@ -1,0 +1,10 @@
+{
+  "schema_version": "demo/package-layout/v1",
+  "required_entries": [
+    "package-layouts.json",
+    "references/workflow.md",
+    "schemas/candidate-set.json",
+    "schemas/coverage-plan.json",
+    "scripts/validate_package.py"
+  ]
+}

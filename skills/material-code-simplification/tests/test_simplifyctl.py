@@ -281,15 +281,35 @@ class SimplifyCtlTest(unittest.TestCase):
         simplification_validator.ROOT = skill
         try:
             self.assertEqual(simplifyctl._load_core().MARKER, "bundled")
-            layout, controller, _schemas, _references = simplification_validator.resolve_core()
+            (
+                layout,
+                controller,
+                obligation_contract,
+                _schemas,
+                _references,
+            ) = simplification_validator.resolve_core()
             self.assertEqual(layout, "standalone")
             self.assertEqual(controller, bundled_controller)
+            self.assertEqual(
+                obligation_contract,
+                skill / "core" / "obligation_contract.py",
+            )
 
             bundled_controller.unlink()
             self.assertEqual(simplifyctl._load_core().MARKER, "sibling")
-            layout, controller, _schemas, _references = simplification_validator.resolve_core()
+            (
+                layout,
+                controller,
+                obligation_contract,
+                _schemas,
+                _references,
+            ) = simplification_validator.resolve_core()
             self.assertEqual(layout, "full-plugin")
             self.assertEqual(controller, sibling_controller)
+            self.assertEqual(
+                obligation_contract,
+                sibling_controller.parent / "obligation_contract.py",
+            )
         finally:
             simplifyctl._skill_dir = original_skill_dir
             simplification_validator.ROOT = original_validator_root

@@ -27,15 +27,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
-TOOL_VERSION = "1.3.0"
-MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v2"
+from obligation_contract import (  # noqa: E402
+    CANDIDATE_SET_SCHEMA as OBLIGATION_CANDIDATE_SET_SCHEMA,
+    COVERAGE_PLAN_SCHEMA as OBLIGATION_COVERAGE_PLAN_SCHEMA,
+    ObligationContractError,
+    canonical_git_path,
+    required_assignment_ids,
+    validate_assignment_result,
+    validate_coverage_contract,
+)
+
+
+TOOL_VERSION = "1.4.0"
+MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v3"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1 = "material-review/state/v1"
 SIMPLIFICATION_STATE_SCHEMA = "material-review/state/v1"
-LEGACY_MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
-CANDIDATE_SCHEMA_REVIEW = "material-review/candidate-set/v2"
-NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v2"
+CANDIDATE_SCHEMA_REVIEW = OBLIGATION_CANDIDATE_SET_SCHEMA
+NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v3"
 NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA_REVIEW = "material-review/adjudication/v4"
 ADJUDICATION_SCHEMA_SIMPLIFICATION = "material-review/adjudication/v3"
@@ -46,12 +61,14 @@ FIX_PLAN_SCHEMA = "material-review/fix-plan/v2"
 PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
 FIX_SUMMARY_SCHEMA = "material-review/fix-summary/v1"
 VERIFICATION_SCHEMA = "material-review/verification/v1"
-COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v1"
+COVERAGE_PLAN_SCHEMA = OBLIGATION_COVERAGE_PLAN_SCHEMA
+COVERAGE_CONTEXT_SCHEMA = "material-review/coverage-context/v1"
 WORKFLOW_PROFILE_REVIEW = "material_review"
 SIMPLIFICATION_PROFILE = "material-code-simplification"
 STATE_CONTRACT_MATERIAL_REVIEW = "current_material_review"
 STATE_CONTRACT_SIMPLIFICATION = "current_simplification"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1 = "finalizable_material_review_v1"
+STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2 = "finalizable_material_review_v2"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW = "legacy_material_review"
 
 RISK_ASSESSMENT_CODES = frozenset({"user_selectable_output_paths", "persisted_config_semantics"})
@@ -449,6 +466,15 @@ def require_bool(value: Any, context: str) -> bool:
     return value
 
 
+def is_current_material_review_state(state: dict[str, Any]) -> bool:
+    return (
+        state.get("schema_version") == MATERIAL_REVIEW_STATE_SCHEMA
+        and state.get("workflow_profile") == WORKFLOW_PROFILE_REVIEW
+        and state.get("coverage_required") is True
+        and "profile" not in state
+    )
+
+
 def classify_state_contract(
     state: dict[str, Any], *, run_dir: Path | None = None
 ) -> str:
@@ -458,13 +484,8 @@ def classify_state_contract(
     coverage_required = state.get("coverage_required")
     workflow_profile = state.get("workflow_profile")
 
-    if schema_version == MATERIAL_REVIEW_STATE_SCHEMA:
-        if (
-            not profile_present
-            and coverage_required is True
-            and workflow_profile == WORKFLOW_PROFILE_REVIEW
-        ):
-            return STATE_CONTRACT_MATERIAL_REVIEW
+    if is_current_material_review_state(state):
+        return STATE_CONTRACT_MATERIAL_REVIEW
     if (
         schema_version == SIMPLIFICATION_STATE_SCHEMA
         and profile == SIMPLIFICATION_PROFILE
@@ -473,14 +494,21 @@ def classify_state_contract(
     ):
         return STATE_CONTRACT_SIMPLIFICATION
     if (
-        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1
         and not profile_present
         and coverage_required is True
         and workflow_profile == WORKFLOW_PROFILE_REVIEW
     ):
         return STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1
     if (
-        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1
         and not profile_present
         and "coverage_required" not in state
         and "workflow_profile" not in state
@@ -545,7 +573,11 @@ def enforce_command_compatibility(args: argparse.Namespace) -> None:
     if contract in {STATE_CONTRACT_MATERIAL_REVIEW, STATE_CONTRACT_SIMPLIFICATION}:
         return
     if (
-        contract == STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1
+        contract
+        in {
+            STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1,
+            STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2,
+        }
         and args.command in LEGACY_ALLOWED_COMMANDS | FINALIZABLE_MATERIAL_REVIEW_V1_COMMANDS
     ):
         return
@@ -896,6 +928,185 @@ def all_scope_paths(scope_identity: dict[str, Any]) -> set[str]:
     return result
 
 
+def collect_coverage_context_paths(plan: dict[str, Any]) -> set[str]:
+    paths: set[str] = set()
+    for raw_unit in plan.get("change_units", []):
+        if not isinstance(raw_unit, dict):
+            continue
+        for raw_path in raw_unit.get("context_paths", []):
+            if isinstance(raw_path, str):
+                paths.add(raw_path)
+    return paths
+
+
+def _git_tree_regular_paths(repo: Path, commit: str) -> set[str]:
+    paths: set[str] = set()
+    for record in git_bytes(repo, "ls-tree", "-r", "-z", "--full-tree", commit).split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, object_type, _ = metadata.split(b" ", 2)
+            path = os.fsdecode(raw_path)
+            if object_type != b"blob" or mode not in {b"100644", b"100755"}:
+                continue
+            paths.add(canonical_git_path(path, "comparison-tree path"))
+        except (ValueError, ObligationContractError):
+            continue
+    return paths
+
+
+def discover_comparison_context_paths(
+    repo: Path, scope_identity: dict[str, Any]
+) -> set[str]:
+    if scope_identity["comparison_kind"] == "commit":
+        return _git_tree_regular_paths(repo, scope_identity["comparison_sha"])
+
+    paths: set[str] = set()
+    for raw_path in git_bytes(repo, "ls-files", "-z").split(b"\0"):
+        if not raw_path:
+            continue
+        try:
+            path = canonical_git_path(os.fsdecode(raw_path), "tracked context path")
+            target = repo_path(repo, path)
+            info = target.lstat()
+        except (FileNotFoundError, OSError, ObligationContractError, ReviewError):
+            continue
+        if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+            paths.add(path)
+    return paths
+
+
+def _read_comparison_context_source(
+    repo: Path, scope_identity: dict[str, Any], path: str
+) -> bytes:
+    if scope_identity["comparison_kind"] == "commit":
+        commit = scope_identity["comparison_sha"]
+        tree = git_bytes(repo, "ls-tree", "-z", commit, "--", path)
+        records = [record for record in tree.split(b"\0") if record]
+        if len(records) != 1:
+            raise ReviewError(f"Context path is missing from the comparison tree: {path}")
+        try:
+            metadata, raw_tree_path = records[0].split(b"\t", 1)
+            mode, object_type, _ = metadata.split(b" ", 2)
+        except ValueError as exc:
+            raise ReviewError(f"Malformed Git tree entry for context path: {path}") from exc
+        if os.fsdecode(raw_tree_path) != path or object_type != b"blob" or mode not in {b"100644", b"100755"}:
+            raise ReviewError(f"Context path is not a tracked regular file in the comparison tree: {path}")
+        data = git_object_bytes(repo, commit, path)
+        if data is None:
+            raise ReviewError(f"Could not freeze comparison-tree context path: {path}")
+        return data
+
+    tracked = run_process(
+        ["git", "ls-files", "--error-unmatch", "--", path],
+        cwd=repo,
+        check=False,
+    )
+    if tracked.returncode != 0:
+        raise ReviewError(f"Context path is not tracked in the comparison worktree: {path}")
+    target = repo_path(repo, path)
+    try:
+        info = target.lstat()
+    except OSError as exc:
+        raise ReviewError(f"Could not inspect context path {path}: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise ReviewError(f"Context path is not a regular non-symlink file: {path}")
+    try:
+        return target.read_bytes()
+    except OSError as exc:
+        raise ReviewError(f"Could not freeze context path {path}: {exc}") from exc
+
+
+def _build_coverage_context(
+    repo: Path,
+    run_dir: Path,
+    scope_identity: dict[str, Any],
+    context_paths: set[str],
+    *,
+    max_files: int,
+    max_file_bytes: int,
+    max_total_bytes: int,
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    canonical_paths = sorted(
+        canonical_git_path(path, "coverage context path") for path in context_paths
+    )
+    if len(canonical_paths) > max_files:
+        raise ReviewError(f"Coverage context may contain at most {max_files} files")
+    if scope_identity["comparison_kind"] == "working-tree":
+        check_scope_fresh(repo, run_dir, load_state(run_dir))
+
+    sources: list[dict[str, Any]] = []
+    source_bytes: dict[str, bytes] = {}
+    total_bytes = 0
+    for path in canonical_paths:
+        data = _read_comparison_context_source(repo, scope_identity, path)
+        if len(data) > max_file_bytes:
+            raise ReviewError(
+                f"Coverage context file {path} exceeds the 2 MiB per-file limit"
+            )
+        total_bytes += len(data)
+        if total_bytes > max_total_bytes:
+            raise ReviewError("Coverage context exceeds the 25 MiB total limit")
+        source_bytes[path] = data
+        sources.append(
+            {
+                "path": path,
+                "sha256": sha256_bytes(data),
+                "size": len(data),
+                "snapshot_path": f"coverage-context/sources/{path}",
+            }
+        )
+
+    if scope_identity["comparison_kind"] == "working-tree":
+        check_scope_fresh(repo, run_dir, load_state(run_dir))
+    context = {
+        "schema_version": COVERAGE_CONTEXT_SCHEMA,
+        "scope_hash": scope_identity_hash(scope_identity),
+        "comparison_kind": scope_identity["comparison_kind"],
+        "comparison_sha": scope_identity["comparison_sha"],
+        "sources": sources,
+    }
+    return context, source_bytes
+
+
+def snapshot_coverage_context(
+    repo: Path,
+    run_dir: Path,
+    scope_identity: dict[str, Any],
+    context_paths: set[str],
+    *,
+    max_files: int = 32,
+    max_file_bytes: int = 2 * 1024 * 1024,
+    max_total_bytes: int = 25 * 1024 * 1024,
+) -> dict[str, Any]:
+    context, source_bytes = _build_coverage_context(
+        repo,
+        run_dir,
+        scope_identity,
+        context_paths,
+        max_files=max_files,
+        max_file_bytes=max_file_bytes,
+        max_total_bytes=max_total_bytes,
+    )
+    destination = run_dir / "coverage-context"
+    if destination.exists():
+        raise ReviewError(
+            "Coverage context artifact exists without a valid state binding; start a new run"
+        )
+    temporary = run_dir / f".coverage-context.initializing-{uuid.uuid4().hex[:8]}"
+    temporary.mkdir(parents=False, exist_ok=False)
+    try:
+        for path, data in source_bytes.items():
+            atomic_write_bytes(temporary / "sources" / path, data)
+        os.replace(temporary, destination)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    context_hash = canonical_hash(context)
+    return {**context, "coverage_context_hash": context_hash}
+
+
 def snapshot_sources(
     repo: Path,
     run_dir: Path,
@@ -984,21 +1195,122 @@ def load_verified_scope(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     return scope
 
 
+def load_verified_coverage_context(
+    run_dir: Path,
+    state: dict[str, Any],
+    *,
+    expected_paths: set[str],
+) -> dict[str, Any]:
+    artifact = require_object(
+        load_json(run_dir / "coverage-context.json"), "coverage context"
+    )
+    context = copy.deepcopy(artifact)
+    embedded_hash = require_sha256(
+        context.pop("coverage_context_hash", None),
+        "coverage context.coverage_context_hash",
+    )
+    recomputed_hash = canonical_hash(context)
+    if recomputed_hash != embedded_hash:
+        raise ReviewError(
+            "Coverage context failed its embedded hash check: "
+            f"expected {embedded_hash}, recomputed {recomputed_hash}"
+        )
+    require_state_hash(state, "coverage_context_hash", embedded_hash, "coverage context")
+    require_exact_keys(
+        context,
+        {"schema_version", "scope_hash", "comparison_kind", "comparison_sha", "sources"},
+        "coverage context",
+    )
+    if context["schema_version"] != COVERAGE_CONTEXT_SCHEMA:
+        raise ReviewError("Coverage context has an unsupported schema_version")
+    if context["scope_hash"] != state.get("scope_hash"):
+        raise ReviewError("Coverage context scope_hash does not match the active run")
+    scope_identity = load_verified_scope(run_dir, state)["identity"]
+    if (
+        context["comparison_kind"] != scope_identity["comparison_kind"]
+        or context["comparison_sha"] != scope_identity["comparison_sha"]
+    ):
+        raise ReviewError("Coverage context comparison identity does not match the frozen scope")
+
+    sources = require_array(context["sources"], "coverage context.sources")
+    seen: set[str] = set()
+    for index, raw_source in enumerate(sources):
+        source_context = f"coverage context.sources[{index}]"
+        source = require_object(raw_source, source_context)
+        require_exact_keys(
+            source,
+            {"path", "sha256", "size", "snapshot_path"},
+            source_context,
+        )
+        try:
+            path = canonical_git_path(source["path"], f"{source_context}.path")
+            snapshot_path = canonical_git_path(
+                source["snapshot_path"], f"{source_context}.snapshot_path"
+            )
+        except ObligationContractError as exc:
+            raise ReviewError(str(exc)) from exc
+        expected_snapshot_path = f"coverage-context/sources/{path}"
+        if snapshot_path != expected_snapshot_path:
+            raise ReviewError(
+                f"{source_context}.snapshot_path must equal {expected_snapshot_path}"
+            )
+        if path in seen:
+            raise ReviewError("Coverage context source paths must be unique")
+        seen.add(path)
+        expected_sha = require_sha256(source["sha256"], f"{source_context}.sha256")
+        expected_size = require_int(source["size"], f"{source_context}.size", minimum=0)
+        snapshot = run_dir / snapshot_path
+        try:
+            data = snapshot.read_bytes()
+        except OSError as exc:
+            raise ReviewError(f"Could not read frozen coverage context {snapshot}: {exc}") from exc
+        if len(data) != expected_size or sha256_bytes(data) != expected_sha:
+            raise ReviewError(f"Frozen coverage context failed integrity validation: {path}")
+    if seen != expected_paths:
+        raise ReviewError(
+            "Coverage context sources do not equal the coverage plan context paths"
+        )
+    return artifact
+
+
 def load_recorded_coverage_plan(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     artifact = require_object(load_json(run_dir / "coverage-plan.json"), "coverage plan")
     plan = copy.deepcopy(artifact)
-    embedded_hash = require_sha256(plan.pop("coverage_plan_hash", None), "coverage plan.coverage_plan_hash")
-    recomputed_hash = canonical_hash(plan)
+    embedded_hash = require_sha256(
+        plan.pop("coverage_plan_hash", None), "coverage plan.coverage_plan_hash"
+    )
+    context_hash = require_sha256(
+        plan.pop("coverage_context_hash", None), "coverage plan.coverage_context_hash"
+    )
+    context_paths = collect_coverage_context_paths(plan)
+    context = load_verified_coverage_context(
+        run_dir,
+        state,
+        expected_paths=context_paths,
+    )
+    if context["coverage_context_hash"] != context_hash:
+        raise ReviewError("Coverage plan context hash does not match coverage-context.json")
+    recomputed_hash = canonical_hash(
+        {"plan": plan, "coverage_context_hash": context_hash}
+    )
     if recomputed_hash != embedded_hash:
         raise ReviewError(
             f"Coverage plan failed its embedded hash check: expected {embedded_hash}, recomputed {recomputed_hash}"
         )
     require_state_hash(state, "coverage_plan_hash", embedded_hash, "coverage plan")
-    return validate_coverage_plan(plan, run_dir=run_dir, state=state)
+    validated = validate_coverage_plan(
+        plan,
+        run_dir=run_dir,
+        state=state,
+        allowed_context_paths=context_paths,
+    )
+    if validated != plan:
+        raise ReviewError("Coverage plan is not stored in canonical normalized form")
+    return validated
 
 
 def validate_normalized_candidates_profile(
-    bundle: dict[str, Any], *, state: dict[str, Any]
+    bundle: dict[str, Any], *, state: dict[str, Any], plan: dict[str, Any] | None = None
 ) -> None:
     expected_schema = expected_normalized_candidates_schema(state)
     schema_version = require_string(
@@ -1019,27 +1331,39 @@ def validate_normalized_candidates_profile(
     material_review = schema_version == NORMALIZED_CANDIDATES_SCHEMA_REVIEW
 
     if not material_review:
-        if "coverage_plan_hash" in bundle:
-            raise ReviewError(
-                "Simplification normalized candidates must not contain coverage_plan_hash"
-            )
+        for field in ("coverage_plan_hash", "coverage_context_hash"):
+            if field in bundle:
+                raise ReviewError(
+                    f"Simplification normalized candidates must not contain {field}"
+                )
         for index, raw_reviewer_set in enumerate(reviewer_sets):
             reviewer_set = require_object(
                 raw_reviewer_set, f"normalized candidates.reviewer_sets[{index}]"
             )
-            if "lens_id" in reviewer_set:
-                raise ReviewError(
-                    "Simplification normalized reviewer sets must not contain lens_id"
-                )
+            for field in (
+                "lens_id",
+                "assignment_id",
+                "assignment_kind",
+                "obligation_id",
+                "check_results",
+            ):
+                if field in reviewer_set:
+                    raise ReviewError(
+                        f"Simplification normalized reviewer sets must not contain {field}"
+                    )
         for index, raw_candidate in enumerate(candidates):
             candidate = require_object(
                 raw_candidate, f"normalized candidates.candidates[{index}]"
             )
-            if "lens_id" in candidate:
-                raise ReviewError(
-                    "Simplification normalized candidates must not contain lens_id"
-                )
+            for field in ("lens_id", "assignment_id"):
+                if field in candidate:
+                    raise ReviewError(
+                        f"Simplification normalized candidates must not contain {field}"
+                    )
         return
+
+    if plan is None:
+        raise ReviewError("Normalized material-review candidates require a coverage plan")
 
     coverage_plan_hash = require_sha256(
         bundle.get("coverage_plan_hash"),
@@ -1049,16 +1373,45 @@ def validate_normalized_candidates_profile(
         raise ReviewError(
             "Normalized candidates coverage_plan_hash does not match the recorded coverage plan"
         )
+    coverage_context_hash = require_sha256(
+        bundle.get("coverage_context_hash"),
+        "normalized candidates.coverage_context_hash",
+    )
+    if coverage_context_hash != state.get("hashes", {}).get("coverage_context_hash"):
+        raise ReviewError(
+            "Normalized candidates coverage_context_hash does not match the recorded coverage context"
+        )
 
-    reviewer_sets_by_lens: dict[str, dict[str, Any]] = {}
+    assignments = {item["assignment_id"]: item for item in plan["assignments"]}
+    reviewer_sets_by_assignment: dict[str, dict[str, Any]] = {}
     for index, raw_reviewer_set in enumerate(reviewer_sets):
         context = f"normalized candidates.reviewer_sets[{index}]"
         reviewer_set = require_object(raw_reviewer_set, context)
-        lens_id = require_string(reviewer_set.get("lens_id"), f"{context}.lens_id")
-        if re.fullmatch(r"[a-z][a-z0-9_]*", lens_id) is None:
-            raise ReviewError(f"{context}.lens_id has an invalid format")
-        if lens_id in reviewer_sets_by_lens:
-            raise ReviewError(f"Duplicate normalized reviewer-set lens_id: {lens_id}")
+        assignment_id = require_string(
+            reviewer_set.get("assignment_id"), f"{context}.assignment_id"
+        )
+        if assignment_id in reviewer_sets_by_assignment:
+            raise ReviewError(
+                f"Duplicate normalized reviewer-set assignment_id: {assignment_id}"
+            )
+        assignment = assignments.get(assignment_id)
+        if assignment is None:
+            raise ReviewError(f"{context}.assignment_id is absent from the coverage plan")
+        for field in (
+            "assignment_kind",
+            "lens_id",
+            "reviewer_id",
+            "independence_group",
+            "review_mode",
+        ):
+            if reviewer_set.get(field) != assignment.get(field):
+                raise ReviewError(f"{context}.{field} does not match the coverage assignment")
+        expected_obligation_id = assignment.get("obligation_id")
+        if reviewer_set.get("obligation_id") != expected_obligation_id:
+            if expected_obligation_id is not None or "obligation_id" in reviewer_set:
+                raise ReviewError(
+                    f"{context}.obligation_id does not match the coverage assignment"
+                )
         reviewer_coverage_hash = require_sha256(
             reviewer_set.get("coverage_plan_hash"), f"{context}.coverage_plan_hash"
         )
@@ -1066,7 +1419,24 @@ def validate_normalized_candidates_profile(
             raise ReviewError(
                 f"{context}.coverage_plan_hash does not match the normalized bundle"
             )
-        reviewer_sets_by_lens[lens_id] = reviewer_set
+        reviewer_context_hash = require_sha256(
+            reviewer_set.get("coverage_context_hash"),
+            f"{context}.coverage_context_hash",
+        )
+        if reviewer_context_hash != coverage_context_hash:
+            raise ReviewError(
+                f"{context}.coverage_context_hash does not match the normalized bundle"
+            )
+        reviewer_sets_by_assignment[assignment_id] = reviewer_set
+
+    missing_assignments = sorted(
+        required_assignment_ids(plan) - set(reviewer_sets_by_assignment)
+    )
+    if missing_assignments:
+        raise ReviewError(
+            "Normalized candidates are missing assignments: "
+            + ", ".join(missing_assignments)
+        )
 
     candidate_ids: set[str] = set()
     for index, raw_candidate in enumerate(candidates):
@@ -1076,28 +1446,61 @@ def validate_normalized_candidates_profile(
         if candidate_id in candidate_ids:
             raise ReviewError(f"Duplicate normalized candidate_id: {candidate_id}")
         candidate_ids.add(candidate_id)
-        lens_id = require_string(candidate.get("lens_id"), f"{context}.lens_id")
-        reviewer_set = reviewer_sets_by_lens.get(lens_id)
+        assignment_id = require_string(
+            candidate.get("assignment_id"), f"{context}.assignment_id"
+        )
+        reviewer_set = reviewer_sets_by_assignment.get(assignment_id)
         if reviewer_set is None:
-            raise ReviewError(f"{context}.lens_id has no validated reviewer-set source")
+            raise ReviewError(
+                f"{context}.assignment_id has no validated reviewer-set source"
+            )
         candidate_identity = (
+            candidate.get("lens_id"),
             candidate.get("reviewer_id"),
             candidate.get("independence_group"),
             candidate.get("review_mode"),
         )
         reviewer_set_identity = (
+            reviewer_set.get("lens_id"),
             reviewer_set.get("reviewer_id"),
             reviewer_set.get("independence_group"),
             reviewer_set.get("review_mode"),
         )
         if candidate_identity != reviewer_set_identity:
             raise ReviewError(
-                f"{context} identity does not match its validated lens source"
+                f"{context} identity does not match its validated assignment source"
             )
-        if "coverage_plan_hash" in candidate:
+        if "coverage_plan_hash" in candidate or "coverage_context_hash" in candidate:
             raise ReviewError(
-                f"{context} must not duplicate the bundle coverage_plan_hash"
+                f"{context} must not duplicate the bundle coverage hashes"
             )
+
+    for assignment_id, reviewer_set in reviewer_sets_by_assignment.items():
+        check_results = require_array(
+            reviewer_set.get("check_results"),
+            f"normalized reviewer set {assignment_id}.check_results",
+        )
+        for check_index, raw_check in enumerate(check_results):
+            check = require_object(
+                raw_check,
+                f"normalized reviewer set {assignment_id}.check_results[{check_index}]",
+            )
+            if "finding_local_ids" in check:
+                raise ReviewError(
+                    "Normalized obligation checks must resolve finding_local_ids to candidate_ids"
+                )
+            referenced = set(
+                require_string_array(
+                    check.get("candidate_ids"),
+                    f"normalized reviewer set {assignment_id}.check_results[{check_index}].candidate_ids",
+                )
+            )
+            unknown = sorted(referenced - candidate_ids)
+            if unknown:
+                raise ReviewError(
+                    "Normalized obligation check references unknown candidate IDs: "
+                    + ", ".join(unknown)
+                )
 
 
 def load_verified_candidates_bundle(
@@ -1106,7 +1509,10 @@ def load_verified_candidates_bundle(
     bundle = require_object(
         load_json(run_dir / "candidates.json"), "normalized candidates"
     )
-    validate_normalized_candidates_profile(bundle, state=state)
+    plan = None
+    if classify_state_contract(state) == STATE_CONTRACT_MATERIAL_REVIEW:
+        plan = load_recorded_coverage_plan(run_dir, state)
+    validate_normalized_candidates_profile(bundle, state=state, plan=plan)
     bundle_hash = verify_embedded_hash(
         bundle,
         hash_field="candidate_bundle_hash",
@@ -1738,120 +2144,30 @@ def render_checkpoint_diff(checkpoint_dir: Path, repo: Path, changed_paths: Iter
     return "\n".join(chunks)
 
 
-def required_lenses_for_assessments(assessments: list[dict[str, Any]]) -> set[str]:
-    required = set(CORE_REVIEW_LENSES)
-    for assessment in assessments:
-        if assessment["present"]:
-            required.update(REQUIRED_LENSES_BY_RISK[assessment["code"]])
-    return required
-
-
-def validate_coverage_plan(raw: object, *, run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
-    plan = require_object(raw, "coverage plan")
-    require_exact_keys(
-        plan,
-        {"schema_version", "scope_hash", "workflow_profile", "risk_assessments", "lenses"},
-        "coverage plan",
-    )
-    if plan["schema_version"] != COVERAGE_PLAN_SCHEMA:
-        raise ReviewError("coverage plan has an unsupported schema_version")
-    assessments_raw = require_array(plan["risk_assessments"], "coverage plan.risk_assessments")
-    prevalidated_evidence_paths: dict[int, list[str]] = {}
-    for index, raw_assessment in enumerate(assessments_raw):
-        context = f"coverage plan.risk_assessments[{index}]"
-        assessment = require_object(raw_assessment, context)
-        if "evidence_paths" in assessment:
-            prevalidated_evidence_paths[index] = require_canonical_repo_path_array(
-                assessment["evidence_paths"], f"{context}.evidence_paths"
-            )
-    scope_hash = require_sha256(plan["scope_hash"], "coverage plan.scope_hash")
-    if scope_hash != state.get("scope_hash"):
-        raise ReviewError("coverage plan scope hash does not match the active frozen scope")
-    if plan["workflow_profile"] != WORKFLOW_PROFILE_REVIEW:
-        raise ReviewError("coverage plan workflow_profile must be material_review")
-
+def validate_coverage_plan(
+    raw: object,
+    *,
+    run_dir: Path,
+    state: dict[str, Any],
+    allowed_context_paths: set[str] | None = None,
+) -> dict[str, Any]:
     scope = load_verified_scope(run_dir, state)
-    scope_paths = all_scope_paths(scope["identity"])
-    if len(assessments_raw) != len(RISK_ASSESSMENT_CODES):
-        raise ReviewError("coverage plan must contain every risk assessment code exactly once")
-    assessments: list[dict[str, Any]] = []
-    for index, raw_assessment in enumerate(assessments_raw):
-        context = f"coverage plan.risk_assessments[{index}]"
-        assessment = require_object(raw_assessment, context)
-        require_exact_keys(assessment, {"code", "present", "rationale", "evidence_paths"}, context)
-        code = require_string(assessment["code"], f"{context}.code")
-        if code not in RISK_ASSESSMENT_CODES:
-            raise ReviewError(f"{context}.code is unsupported: {code}")
-        present = require_bool(assessment["present"], f"{context}.present")
-        rationale = require_string(assessment["rationale"], f"{context}.rationale")
-        evidence_paths = prevalidated_evidence_paths[index]
-        if present and not evidence_paths:
-            raise ReviewError(f"{context}.evidence_paths must contain at least one path when present is true")
-        if not present and evidence_paths:
-            raise ReviewError(f"{context}.evidence_paths must be empty when present is false")
-        outside_scope = sorted(set(evidence_paths) - scope_paths)
-        if outside_scope:
-            raise ReviewError(f"{context}.evidence_paths contains paths not in the frozen scope: {', '.join(outside_scope)}")
-        assessments.append(
-            {
-                "code": code,
-                "present": present,
-                "rationale": rationale,
-                "evidence_paths": evidence_paths,
-            }
+    changed_paths = {entry["path"] for entry in scope["identity"]["files"]}
+    if allowed_context_paths is None:
+        allowed_context_paths = collect_coverage_context_paths(
+            require_object(raw, "coverage plan")
         )
-    if {assessment["code"] for assessment in assessments} != RISK_ASSESSMENT_CODES:
-        raise ReviewError("coverage plan assessment codes must equal the required exhaustive set")
-
-    lenses_raw = require_array(plan["lenses"], "coverage plan.lenses")
-    if len(lenses_raw) < 3:
-        raise ReviewError("coverage plan.lenses must contain at least three lenses")
-    lenses: list[dict[str, Any]] = []
-    lens_ids: set[str] = set()
-    for index, raw_lens in enumerate(lenses_raw):
-        context = f"coverage plan.lenses[{index}]"
-        lens = require_object(raw_lens, context)
-        require_exact_keys(
-            lens,
-            {"lens_id", "required", "reviewer_id", "independence_group", "review_mode"},
-            context,
+    try:
+        plan = validate_coverage_contract(
+            raw,
+            changed_paths=changed_paths,
+            allowed_context_paths=allowed_context_paths,
         )
-        lens_id = require_string(lens["lens_id"], f"{context}.lens_id")
-        if re.fullmatch(r"[a-z][a-z0-9_]*", lens_id) is None:
-            raise ReviewError(f"{context}.lens_id has an invalid format")
-        if lens_id in lens_ids:
-            raise ReviewError("coverage plan lens IDs must be unique")
-        lens_ids.add(lens_id)
-        reviewer_id = require_string(lens["reviewer_id"], f"{context}.reviewer_id")
-        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", reviewer_id) is None:
-            raise ReviewError(f"{context}.reviewer_id has an invalid format")
-        independence_group = require_string(lens["independence_group"], f"{context}.independence_group")
-        review_mode = require_string(lens["review_mode"], f"{context}.review_mode")
-        if review_mode not in REVIEW_MODES:
-            raise ReviewError(f"{context}.review_mode must be one of {sorted(REVIEW_MODES)}")
-        lenses.append(
-            {
-                "lens_id": lens_id,
-                "required": require_bool(lens["required"], f"{context}.required"),
-                "reviewer_id": reviewer_id,
-                "independence_group": independence_group,
-                "review_mode": review_mode,
-            }
-        )
-    required_lenses = required_lenses_for_assessments(assessments)
-    lenses_by_id = {lens["lens_id"]: lens for lens in lenses}
-    for lens_id in sorted(required_lenses):
-        lens = lenses_by_id.get(lens_id)
-        if lens is None or lens["required"] is not True:
-            raise ReviewError(f"coverage plan requires {lens_id} as a required lens")
-
-    return {
-        "schema_version": COVERAGE_PLAN_SCHEMA,
-        "scope_hash": scope_hash,
-        "workflow_profile": WORKFLOW_PROFILE_REVIEW,
-        "risk_assessments": assessments,
-        "lenses": lenses,
-    }
+    except ObligationContractError as exc:
+        raise ReviewError(str(exc)) from exc
+    if plan["scope_hash"] != state.get("scope_hash"):
+        raise ReviewError("coverage plan scope hash does not match the active frozen scope")
+    return plan
 
 
 def validate_candidate_set(
@@ -1861,6 +2177,7 @@ def validate_candidate_set(
     repo: Path,
     run_dir: Path,
     state: dict[str, Any],
+    plan: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     obj = require_object(raw, f"candidate set {source_file}")
     material_review = not is_simplification_state(state)
@@ -1868,18 +2185,63 @@ def validate_candidate_set(
     schema_version = require_string(obj.get("schema_version"), f"{source_file}.schema_version")
     if schema_version != expected_schema:
         raise ReviewError(f"{source_file}: unsupported schema_version")
-    expected_top = {
-        "schema_version",
-        "scope_hash",
-        "reviewer_id",
-        "independence_group",
-        "review_mode",
-        "findings",
-        "coverage",
-    }
+    assignment: dict[str, Any] | None = None
+    obligation: dict[str, Any] | None = None
+    assignment_id: str | None = None
+    assignment_kind: str | None = None
+    coverage_plan_hash: str | None = None
+    coverage_context_hash: str | None = None
+    lens_id: str | None = None
+    check_results: list[dict[str, Any]] = []
     if material_review:
-        expected_top.update({"coverage_plan_hash", "lens_id"})
-    require_exact_keys(obj, expected_top, f"candidate set {source_file}")
+        if plan is None:
+            raise ReviewError("Material-review candidate validation requires a coverage plan")
+        assignment_id = require_string(
+            obj.get("assignment_id"), f"{source_file}.assignment_id"
+        )
+        assignment = next(
+            (
+                item
+                for item in plan["assignments"]
+                if item["assignment_id"] == assignment_id
+            ),
+            None,
+        )
+        if assignment is None:
+            raise ReviewError(f"{source_file}: assignment_id is absent from the coverage plan")
+        if assignment["assignment_kind"] == "obligation":
+            obligation = next(
+                (
+                    item
+                    for item in plan["review_obligations"]
+                    if item["obligation_id"] == assignment["obligation_id"]
+                ),
+                None,
+            )
+        try:
+            obj = validate_assignment_result(
+                obj,
+                assignment=assignment,
+                obligation=obligation,
+            )
+        except ObligationContractError as exc:
+            raise ReviewError(f"{source_file}: {exc}") from exc
+        assignment_kind = obj["assignment_kind"]
+        coverage_plan_hash = obj["coverage_plan_hash"]
+        coverage_context_hash = obj["coverage_context_hash"]
+        lens_id = obj["lens_id"]
+        check_results = obj["check_results"]
+    else:
+        expected_top = {
+            "schema_version",
+            "scope_hash",
+            "reviewer_id",
+            "independence_group",
+            "review_mode",
+            "findings",
+            "coverage",
+        }
+        require_exact_keys(obj, expected_top, f"candidate set {source_file}")
     prevalidated_coverage_files: list[str] | None = None
     prevalidated_finding_paths: dict[int, dict[str, Any]] = {}
     if material_review:
@@ -1910,15 +2272,13 @@ def validate_candidate_set(
             prevalidated_finding_paths[index] = path_fields
     if obj["scope_hash"] != state["scope_hash"]:
         raise ReviewError(f"{source_file}: scope_hash does not match the active frozen scope")
-    coverage_plan_hash: str | None = None
-    lens_id: str | None = None
     if material_review:
-        coverage_plan_hash = require_sha256(obj["coverage_plan_hash"], f"{source_file}.coverage_plan_hash")
         if coverage_plan_hash != state["hashes"].get("coverage_plan_hash"):
             raise ReviewError(f"{source_file}: coverage_plan_hash does not match the recorded coverage plan")
-        lens_id = require_string(obj["lens_id"], f"{source_file}.lens_id")
-        if re.fullmatch(r"[a-z][a-z0-9_]*", lens_id) is None:
-            raise ReviewError(f"{source_file}.lens_id has an invalid format")
+        if coverage_context_hash != state["hashes"].get("coverage_context_hash"):
+            raise ReviewError(
+                f"{source_file}: coverage_context_hash does not match the recorded coverage context"
+            )
     reviewer_id = require_string(obj["reviewer_id"], f"{source_file}.reviewer_id")
     independence_group = require_string(obj["independence_group"], f"{source_file}.independence_group")
     review_mode = require_string(obj["review_mode"], f"{source_file}.review_mode")
@@ -2110,64 +2470,97 @@ def validate_candidate_set(
         "findings": valid_findings,
     }
     if material_review:
-        normalized_set["coverage_plan_hash"] = coverage_plan_hash
-        normalized_set["lens_id"] = lens_id
+        normalized_set.update(
+            {
+                "coverage_plan_hash": coverage_plan_hash,
+                "coverage_context_hash": coverage_context_hash,
+                "assignment_id": assignment_id,
+                "assignment_kind": assignment_kind,
+                "lens_id": lens_id,
+                "check_results": check_results,
+            }
+        )
+        if obligation is not None:
+            normalized_set["obligation_id"] = obligation["obligation_id"]
     return normalized_set, rejections
 
 
-def required_paths_by_lens(plan: dict[str, Any]) -> dict[str, set[str]]:
-    required: dict[str, set[str]] = {item["lens_id"]: set() for item in plan["lenses"]}
-    for assessment in plan["risk_assessments"]:
-        if not assessment["present"]:
-            continue
-        for lens_id in REQUIRED_LENSES_BY_RISK[assessment["code"]]:
-            required[lens_id].update(assessment["evidence_paths"])
+def required_paths_by_assignment(plan: dict[str, Any]) -> dict[str, set[str]]:
+    all_primary = {
+        path for unit in plan["change_units"] for path in unit["primary_paths"]
+    }
+    units = {unit["unit_id"]: unit for unit in plan["change_units"]}
+    obligations = {
+        obligation["obligation_id"]: obligation
+        for obligation in plan["review_obligations"]
+    }
+    selected_risk_evidence = {
+        (unit["unit_id"], rationale["risk_code"]): set(rationale["evidence_paths"])
+        for unit in plan["change_units"]
+        for rationale in unit["selected_risk_rationale"]
+    }
+    required: dict[str, set[str]] = {}
+    for assignment in plan["assignments"]:
+        if assignment["assignment_kind"] == "core":
+            required[assignment["assignment_id"]] = set(all_primary)
+        elif assignment["assignment_kind"] == "obligation":
+            required[assignment["assignment_id"]] = set(
+                obligations[assignment["obligation_id"]]["evidence_paths"]
+            )
+        else:
+            required[assignment["assignment_id"]] = set(
+                selected_risk_evidence[
+                    (assignment["unit_id"], assignment["risk_code"])
+                ]
+            )
+            required[assignment["assignment_id"]].update(
+                units[assignment["unit_id"]]["context_paths"]
+            )
     return required
 
 
 def validate_candidate_wave_against_coverage(
     plan: dict[str, Any], candidate_sets: list[dict[str, Any]]
 ) -> None:
-    assignments = {item["lens_id"]: item for item in plan["lenses"]}
-    required_paths = required_paths_by_lens(plan)
+    assignments = {item["assignment_id"]: item for item in plan["assignments"]}
+    required_paths = required_paths_by_assignment(plan)
     seen: set[str] = set()
     for candidate_set in candidate_sets:
-        lens_id = candidate_set["lens_id"]
-        if lens_id in seen:
-            raise ReviewError(f"Duplicate candidate lens_id: {lens_id}")
-        seen.add(lens_id)
-        assignment = assignments.get(lens_id)
+        assignment_id = candidate_set["assignment_id"]
+        if assignment_id in seen:
+            raise ReviewError(f"Duplicate candidate assignment_id: {assignment_id}")
+        seen.add(assignment_id)
+        assignment = assignments.get(assignment_id)
         if assignment is None:
-            raise ReviewError(f"Lens is absent from coverage plan: {lens_id}")
-        actual = (
-            candidate_set["reviewer_id"],
-            candidate_set["independence_group"],
-            candidate_set["review_mode"],
+            raise ReviewError(f"Assignment is absent from coverage plan: {assignment_id}")
+        blocked_checks = [
+            item["check_code"]
+            for item in candidate_set["check_results"]
+            if item["outcome"] == "blocked"
+        ]
+        if blocked_checks:
+            raise ReviewError(
+                f"Assignment {assignment_id} has blocked required checks: "
+                + ", ".join(sorted(blocked_checks))
+            )
+        missing_paths = required_paths[assignment_id] - set(
+            candidate_set["coverage"]["files_reviewed"]
         )
-        expected = (
-            assignment["reviewer_id"],
-            assignment["independence_group"],
-            assignment["review_mode"],
-        )
-        if actual != expected:
-            raise ReviewError(f"candidate identity does not match coverage assignment: {lens_id}")
-        missing_paths = required_paths[lens_id] - set(candidate_set["coverage"]["files_reviewed"])
         if missing_paths:
             raise ReviewError(
-                f"{lens_id} did not review required risk paths: " + ", ".join(sorted(missing_paths))
+                f"{assignment_id} did not review required assignment paths: "
+                + ", ".join(sorted(missing_paths))
             )
-    missing = sorted(
-        item["lens_id"] for item in plan["lenses"] if item["required"] and item["lens_id"] not in seen
-    )
+    missing = sorted(required_assignment_ids(plan) - seen)
     if missing:
-        raise ReviewError("Missing required review coverage: " + ", ".join(missing))
+        raise ReviewError("Missing required assignment coverage: " + ", ".join(missing))
 
 
 def validate_material_review_coverage_paths(
-    candidate_sets: list[dict[str, Any]], *, scope_paths: set[str]
+    candidate_sets: list[dict[str, Any]], *, allowed_paths: set[str]
 ) -> None:
     for candidate_set in candidate_sets:
-        out_of_scope = set(candidate_set["coverage"]["files_reviewed"]) - scope_paths
+        out_of_scope = set(candidate_set["coverage"]["files_reviewed"]) - allowed_paths
         if out_of_scope:
             raise ReviewError(
                 "coverage.files_reviewed contains a path outside the frozen scope: "
@@ -3347,24 +3740,72 @@ def command_record_coverage(args: argparse.Namespace) -> int:
         raise ReviewError(f"Cannot record coverage in phase {state['phase']}")
     require_current_material_review_contract(state)
     check_scope_fresh(repo, run_dir, state)
+    scope_identity = load_verified_scope(run_dir, state)["identity"]
+    allowed_context_paths = discover_comparison_context_paths(repo, scope_identity)
     plan = validate_coverage_plan(
-        load_json(Path(args.input).expanduser().resolve()), run_dir=run_dir, state=state
+        load_json(Path(args.input).expanduser().resolve()),
+        run_dir=run_dir,
+        state=state,
+        allowed_context_paths=allowed_context_paths,
     )
-    plan_hash = canonical_hash(plan)
+    context_paths = collect_coverage_context_paths(plan)
     existing_hash = state["hashes"].get("coverage_plan_hash")
     if existing_hash:
         existing = load_recorded_coverage_plan(run_dir, state)
-        if existing_hash == plan_hash and canonical_hash(existing) == plan_hash:
-            print(f"[OK] Coverage plan already recorded: {plan_hash}")
+        live_context, _ = _build_coverage_context(
+            repo,
+            run_dir,
+            scope_identity,
+            context_paths,
+            max_files=32,
+            max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=25 * 1024 * 1024,
+        )
+        live_context_hash = canonical_hash(live_context)
+        plan_hash = canonical_hash(
+            {"plan": plan, "coverage_context_hash": live_context_hash}
+        )
+        if (
+            existing == plan
+            and existing_hash == plan_hash
+            and state["hashes"].get("coverage_context_hash") == live_context_hash
+        ):
+            print(f"[OK] Coverage plan already recorded: {existing_hash}")
             return 0
         raise ReviewError("Coverage plan is already recorded; start a new run to change it")
-    if (run_dir / "coverage-plan.json").exists():
-        raise ReviewError("Coverage plan artifact exists without a valid state binding; start a new run")
-    artifact = {**plan, "coverage_plan_hash": plan_hash}
+    if (
+        "coverage_context_hash" in state["hashes"]
+        or (run_dir / "coverage-plan.json").exists()
+        or (run_dir / "coverage-context.json").exists()
+        or (run_dir / "coverage-context").exists()
+    ):
+        raise ReviewError(
+            "Coverage artifacts exist without valid state bindings; start a new run"
+        )
+    context = snapshot_coverage_context(
+        repo,
+        run_dir,
+        scope_identity,
+        context_paths,
+    )
+    context_hash = context["coverage_context_hash"]
+    plan_hash = canonical_hash({"plan": plan, "coverage_context_hash": context_hash})
+    artifact = {
+        **plan,
+        "coverage_context_hash": context_hash,
+        "coverage_plan_hash": plan_hash,
+    }
+    atomic_write_json(run_dir / "coverage-context.json", context)
     atomic_write_json(run_dir / "coverage-plan.json", artifact)
+    state["hashes"]["coverage_context_hash"] = context_hash
     state["hashes"]["coverage_plan_hash"] = plan_hash
     state["events"].append(
-        {"at": utc_now(), "event": "coverage_plan_recorded", "coverage_plan_hash": plan_hash}
+        {
+            "at": utc_now(),
+            "event": "coverage_plan_recorded",
+            "coverage_plan_hash": plan_hash,
+            "coverage_context_hash": context_hash,
+        }
     )
     save_state(run_dir, state)
     print(f"[OK] Coverage plan recorded: {plan_hash}")
@@ -3394,7 +3835,12 @@ def command_ingest_material_review_candidates(
             try:
                 input_hashes.append(sha256_file(source))
                 normalized_set, finding_rejections = validate_candidate_set(
-                    load_json(source), source_file=source, repo=repo, run_dir=run_dir, state=state
+                    load_json(source),
+                    source_file=source,
+                    repo=repo,
+                    run_dir=run_dir,
+                    state=state,
+                    plan=plan,
                 )
                 reviewer_sets.append(normalized_set)
                 rejections.extend(finding_rejections)
@@ -3403,11 +3849,15 @@ def command_ingest_material_review_candidates(
         if rejections:
             raise ReviewError("Candidate ingestion failed: " + "; ".join(item["reason"] for item in rejections))
         validate_candidate_wave_against_coverage(plan, reviewer_sets)
-        scope_paths = all_scope_paths(load_verified_scope(run_dir, state)["identity"])
-        validate_material_review_coverage_paths(reviewer_sets, scope_paths=scope_paths)
+        allowed_paths = all_scope_paths(load_verified_scope(run_dir, state)["identity"])
+        allowed_paths.update(collect_coverage_context_paths(plan))
+        validate_material_review_coverage_paths(
+            reviewer_sets, allowed_paths=allowed_paths
+        )
         for reviewer_set in reviewer_sets:
             for finding in reviewer_set["findings"]:
                 finding["lens_id"] = reviewer_set["lens_id"]
+                finding["assignment_id"] = reviewer_set["assignment_id"]
     except ReviewError as exc:
         if not rejections or rejections[-1].get("reason") != str(exc):
             rejections.append({"reason": str(exc)})
@@ -3415,6 +3865,7 @@ def command_ingest_material_review_candidates(
             "schema_version": "material-review/candidate-ingestion-failure/v1",
             "scope_hash": state["scope_hash"],
             "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+            "coverage_context_hash": state["hashes"]["coverage_context_hash"],
             "input_hashes": input_hashes,
             "rejections": rejections,
         }
@@ -3423,6 +3874,7 @@ def command_ingest_material_review_candidates(
 
     reviewer_sets.sort(
         key=lambda item: (
+            item["assignment_id"],
             item["lens_id"],
             item["reviewer_id"],
             item["independence_group"],
@@ -3442,15 +3894,31 @@ def command_ingest_material_review_candidates(
             item["file"],
             item["line_start"],
             item["lens_id"],
+            item["assignment_id"],
         )
     )
     for index, candidate in enumerate(candidates, start=1):
         candidate["candidate_id"] = f"C{index:03d}"
 
+    local_to_candidate = {
+        (candidate["assignment_id"], candidate["local_id"]): candidate["candidate_id"]
+        for candidate in candidates
+    }
+    for reviewer_set in reviewer_sets:
+        for check_result in reviewer_set["check_results"]:
+            local_ids = check_result.pop("finding_local_ids")
+            check_result["candidate_ids"] = sorted(
+                {
+                    local_to_candidate[(reviewer_set["assignment_id"], local_id)]
+                    for local_id in local_ids
+                }
+            )
+
     payload = {
         "schema_version": NORMALIZED_CANDIDATES_SCHEMA_REVIEW,
         "scope_hash": state["scope_hash"],
         "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+        "coverage_context_hash": state["hashes"]["coverage_context_hash"],
         "reviewer_sets": reviewer_sets,
         "candidates": candidates,
         "rejections": rejections,

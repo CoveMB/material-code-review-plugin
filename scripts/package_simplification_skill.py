@@ -18,8 +18,8 @@ import zipfile
 from pathlib import Path
 
 SKILL_NAME = "material-code-simplification"
-VERSION = "1.2.0"
-FIXED_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
+VERSION = "1.3.0"
+FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)
 EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
 WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
@@ -102,6 +102,7 @@ def iter_files(root: Path):
         source = root / name
         if source.is_file():
             yield validate_source_file(source, root), name
+    yield validate_source_file(core / "scripts" / "obligation_contract.py", core), "core/obligation_contract.py"
     yield validate_source_file(core / "scripts" / "reviewctl.py", core), "core/reviewctl.py"
     for source in sorted((core / "schemas").glob("*.json")):
         yield validate_source_file(source, core), f"core/schemas/{source.name}"
