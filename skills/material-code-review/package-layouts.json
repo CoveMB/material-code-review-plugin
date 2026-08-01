@@ -132,6 +132,10 @@
           "source": "scripts/package_plugin.py"
         },
         {
+          "destination": "scripts/package_simplification_skill.py",
+          "source": "scripts/package_simplification_skill.py"
+        },
+        {
           "destination": "scripts/tests/test_packaging.py",
           "source": "scripts/tests/test_packaging.py"
         },
@@ -264,6 +268,10 @@
           "source": "skills/material-code-review/scripts/reviewctl.py"
         },
         {
+          "destination": "skills/material-code-review/scripts/static_version_contract.py",
+          "source": "skills/material-code-review/scripts/static_version_contract.py"
+        },
+        {
           "destination": "skills/material-code-review/scripts/validate_package.py",
           "source": "skills/material-code-review/scripts/validate_package.py"
         },
@@ -298,6 +306,82 @@
         {
           "destination": "skills/material-code-review/tests/test_reviewctl.py",
           "source": "skills/material-code-review/tests/test_reviewctl.py"
+        },
+        {
+          "destination": "skills/material-code-simplification/SKILL.md",
+          "source": "skills/material-code-simplification/SKILL.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/agents/openai.yaml",
+          "source": "skills/material-code-simplification/agents/openai.yaml"
+        },
+        {
+          "destination": "skills/material-code-simplification/examples/field-mapping.md",
+          "source": "skills/material-code-simplification/examples/field-mapping.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/adjudicator-template.md",
+          "source": "skills/material-code-simplification/references/adjudicator-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/ai-agent-failure-catalog.md",
+          "source": "skills/material-code-simplification/references/ai-agent-failure-catalog.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/architecture-reviewer-template.md",
+          "source": "skills/material-code-simplification/references/architecture-reviewer-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/code-reviewer-template.md",
+          "source": "skills/material-code-simplification/references/code-reviewer-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/context-checklist.md",
+          "source": "skills/material-code-simplification/references/context-checklist.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/failure-model.md",
+          "source": "skills/material-code-simplification/references/failure-model.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/output-template.md",
+          "source": "skills/material-code-simplification/references/output-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/planner-template.md",
+          "source": "skills/material-code-simplification/references/planner-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/postfix-verifier-template.md",
+          "source": "skills/material-code-simplification/references/postfix-verifier-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/refactorer-template.md",
+          "source": "skills/material-code-simplification/references/refactorer-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/simplification-rubric.md",
+          "source": "skills/material-code-simplification/references/simplification-rubric.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/validator-template.md",
+          "source": "skills/material-code-simplification/references/validator-template.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/workflow.md",
+          "source": "skills/material-code-simplification/references/workflow.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/scripts/simplifyctl.py",
+          "source": "skills/material-code-simplification/scripts/simplifyctl.py"
+        },
+        {
+          "destination": "skills/material-code-simplification/scripts/validate_package.py",
+          "source": "skills/material-code-simplification/scripts/validate_package.py"
+        },
+        {
+          "destination": "skills/material-code-simplification/tests/test_simplifyctl.py",
+          "source": "skills/material-code-simplification/tests/test_simplifyctl.py"
         }
       ]
     },
@@ -439,6 +523,10 @@
         {
           "destination": "scripts/reviewctl.py",
           "source": "skills/material-code-review/scripts/reviewctl.py"
+        },
+        {
+          "destination": "scripts/static_version_contract.py",
+          "source": "skills/material-code-review/scripts/static_version_contract.py"
         },
         {
           "destination": "scripts/validate_package.py",

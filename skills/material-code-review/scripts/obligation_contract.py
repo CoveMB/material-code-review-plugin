@@ -16,6 +16,7 @@ from typing import Any
 COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v2"
 CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v3"
 WORKFLOW_PROFILE = "material_review"
+CANDIDATE_LOCAL_ID_MAX_LENGTH = 128
 
 CONTROLLED_RISK_CODES = frozenset(
     {
@@ -599,6 +600,11 @@ def _finding_local_ids(raw_findings: object) -> tuple[list[dict[str, Any]], set[
     for index, finding_raw in enumerate(_array(raw_findings, "assignment result.findings")):
         finding = copy.deepcopy(_object(finding_raw, f"assignment result.findings[{index}]"))
         local_id = _string(finding.get("local_id"), f"assignment result.findings[{index}].local_id")
+        if len(local_id) > CANDIDATE_LOCAL_ID_MAX_LENGTH:
+            raise ObligationContractError(
+                "assignment result.findings"
+                f"[{index}].local_id must be at most {CANDIDATE_LOCAL_ID_MAX_LENGTH} characters"
+            )
         if local_id in local_ids:
             raise ObligationContractError("assignment result finding local IDs must be unique")
         local_ids.add(local_id)

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import io
 import json
 import importlib.util
 import os
@@ -10,6 +13,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +114,7 @@ FULL_REVIEW_FIXED_CONTRACTS = {
     "examples/codex-project-config/.codex/agents/material_validator.toml",
     "examples/codex-project-config/.codex/config.toml",
     "scripts/package_plugin.py",
+    "scripts/package_simplification_skill.py",
     "scripts/tests/test_packaging.py",
     "scripts/validate_package.py",
 }
@@ -139,6 +144,15 @@ class StandalonePackagingTests(unittest.TestCase):
             )
 
         full_sources = set(FULL_REVIEW_FIXED_CONTRACTS) | skill_sources
+        simplification_root = root / "skills/material-code-simplification"
+        full_sources.update(
+            path.relative_to(root).as_posix()
+            for path in simplification_root.rglob("*")
+            if path.is_file()
+            and not path.is_symlink()
+            and "__pycache__" not in path.parts
+            and path.suffix not in {".pyc", ".pyo"}
+        )
         for subdirectory in ("agents", "commands"):
             full_sources.update(
                 path.relative_to(root).as_posix()
@@ -506,6 +520,171 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(package_result.returncode, 0)
             self.assertIn("duplicate normalized archive entry: examples/field-mapping.md", package_result.stderr)
             self.assertEqual(output.read_bytes(), b"existing archive")
+
+    def test_packager_publication_is_collision_safe_and_recoverable(self) -> None:
+        def load_packager(fixture_root: Path, label: str):
+            path = fixture_root / "scripts/package_plugin.py"
+            spec = importlib.util.spec_from_file_location(
+                f"full_packager_{label}", path
+            )
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        def invoke(module, fixture_root: Path, full_output: Path, standalone_output: Path) -> int:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                return module.main(
+                    [
+                        "--package-root",
+                        str(fixture_root),
+                        "--output",
+                        str(full_output),
+                        "--standalone-output",
+                        str(standalone_output),
+                    ]
+                )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            full_output = temp_root / "full.zip"
+            standalone_output = temp_root / "standalone.zip"
+            result = self.run_full_packager(
+                fixture_root, full_output, standalone_output=standalone_output
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with zipfile.ZipFile(full_output) as archive:
+                self.assertEqual(
+                    archive.comment,
+                    b"material-code-review Codex plugin 1.4.0",
+                )
+            with zipfile.ZipFile(standalone_output) as archive:
+                self.assertEqual(
+                    archive.comment,
+                    b"material-code-review standalone Codex skill 1.4.0",
+                )
+            for output in (full_output, standalone_output):
+                checksum = output.with_suffix(output.suffix + ".sha256")
+                digest, filename = checksum.read_text(encoding="utf-8").split()
+                self.assertEqual(filename, output.name)
+                self.assertEqual(digest, hashlib.sha256(output.read_bytes()).hexdigest())
+
+        collision_cases = (
+            ("same-archive", lambda root: (root / "same.zip", root / "same.zip")),
+            (
+                "archive-sidecar",
+                lambda root: (root / "full.zip", root / "full.zip.sha256"),
+            ),
+        )
+        for label, outputs in collision_cases:
+            with self.subTest(collision=label), tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                full_output, standalone_output = outputs(temp_root)
+                full_output.write_bytes(b"full sentinel")
+                if standalone_output != full_output:
+                    standalone_output.write_bytes(b"standalone sentinel")
+                result = self.run_full_packager(
+                    fixture_root,
+                    full_output,
+                    standalone_output=standalone_output,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("output destinations alias each other", result.stderr)
+                self.assertEqual(full_output.read_bytes(), b"full sentinel")
+                if standalone_output != full_output:
+                    self.assertEqual(
+                        standalone_output.read_bytes(), b"standalone sentinel"
+                    )
+
+        if not sys.platform.startswith("win"):
+            with tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                target = temp_root / "target.zip"
+                target.write_bytes(b"target sentinel")
+                symlink_output = temp_root / "full.zip"
+                symlink_output.symlink_to(target)
+                result = self.run_full_packager(
+                    fixture_root,
+                    symlink_output,
+                    standalone_output=temp_root / "standalone.zip",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must not be a symlink", result.stderr)
+                self.assertEqual(target.read_bytes(), b"target sentinel")
+                self.assertTrue(symlink_output.is_symlink())
+
+        for failure_step in range(1, 9):
+            with self.subTest(publication_failure=failure_step), tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                module = load_packager(fixture_root, f"publish_{failure_step}")
+                full_output = temp_root / "full.zip"
+                standalone_output = temp_root / "standalone.zip"
+                destinations = (
+                    full_output,
+                    full_output.with_suffix(".zip.sha256"),
+                    standalone_output,
+                    standalone_output.with_suffix(".zip.sha256"),
+                )
+                sentinels = {}
+                for index, destination in enumerate(destinations):
+                    data = f"sentinel-{index}".encode("utf-8")
+                    destination.write_bytes(data)
+                    sentinels[destination] = data
+                unrelated_temp = temp_root / ".full.zip.tmp"
+                unrelated_temp.write_bytes(b"unrelated")
+                original_replace = module.os.replace
+                calls = 0
+
+                def fail_once(source, destination):
+                    nonlocal calls
+                    calls += 1
+                    if calls == failure_step:
+                        raise OSError(f"injected publication failure {failure_step}")
+                    return original_replace(source, destination)
+
+                with mock.patch.object(module.os, "replace", side_effect=fail_once):
+                    self.assertEqual(
+                        invoke(module, fixture_root, full_output, standalone_output),
+                        1,
+                    )
+                for destination, data in sentinels.items():
+                    self.assertEqual(destination.read_bytes(), data)
+                self.assertEqual(unrelated_temp.read_bytes(), b"unrelated")
+                self.assertEqual(
+                    list(temp_root.glob(".*.material-review-*-*")), []
+                )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            module = load_packager(fixture_root, "build_failure")
+            full_output = temp_root / "full.zip"
+            standalone_output = temp_root / "standalone.zip"
+            full_output.write_bytes(b"full sentinel")
+            standalone_output.write_bytes(b"standalone sentinel")
+            original_build = module.build_archive
+            builds = 0
+
+            def fail_second_build(*arguments, **keywords):
+                nonlocal builds
+                builds += 1
+                if builds == 2:
+                    raise OSError("injected standalone build failure")
+                return original_build(*arguments, **keywords)
+
+            with mock.patch.object(module, "build_archive", side_effect=fail_second_build):
+                self.assertEqual(
+                    invoke(module, fixture_root, full_output, standalone_output), 1
+                )
+            self.assertEqual(full_output.read_bytes(), b"full sentinel")
+            self.assertEqual(standalone_output.read_bytes(), b"standalone sentinel")
 
     @unittest.skipIf(sys.platform.startswith("win"), "fixture requires POSIX filename semantics")
     def test_packager_rejects_unsafe_consumer_paths(self) -> None:
@@ -900,7 +1079,7 @@ class StandalonePackagingTests(unittest.TestCase):
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
     )
-    def test_missed_contracts_case_is_frozen_and_complete(self) -> None:
+    def test_missed_contracts_fixture_identity_matches_generalized_guidance(self) -> None:
         evaluation_root = REPOSITORY_ROOT / "evaluations/material-code-review"
         case_path = evaluation_root / "cases/missed-contracts.json"
         self.assertTrue(case_path.is_file(), f"missing frozen case: {case_path}")
@@ -1078,6 +1257,365 @@ class StandalonePackagingTests(unittest.TestCase):
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
     )
+    def test_missed_contracts_worker_guidance_is_unseeded_and_oracle_remains_private(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "missed_contracts_guidance_validator",
+            PACKAGE_VALIDATOR,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+
+        case = json.loads(
+            (
+                REPOSITORY_ROOT
+                / "evaluations/material-code-review/cases/missed-contracts.json"
+            ).read_text(encoding="utf-8")
+        )
+        denied_values = (
+            *case["required_root_ids"],
+            *case["root_contracts"].values(),
+            *validator.MISSED_CONTRACT_RETIRED_GUIDANCE,
+        )
+        self.assertEqual(
+            set(case["root_contracts"]),
+            set(case["required_root_ids"]),
+        )
+        self.assertEqual(
+            tuple(validator.MISSED_CONTRACT_WORKER_GUIDANCE_PATHS),
+            (
+                "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+                "evaluations/material-code-review/prompts/reviewer.md",
+                "evaluations/material-code-review/prompts/challenger.md",
+                "evaluations/material-code-review/prompts/judge.md",
+                "evaluations/material-code-review/rubric.md",
+            ),
+        )
+        for relative in validator.MISSED_CONTRACT_WORKER_GUIDANCE_PATHS:
+            text = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8").casefold()
+            for denied in denied_values:
+                self.assertNotIn(denied.casefold(), text, (relative, denied))
+
+        errors: list[str] = []
+        validator.validate_missed_contracts_worker_guidance(
+            REPOSITORY_ROOT,
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            agents_path = (
+                fixture_root
+                / "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md"
+            )
+            original_agents = agents_path.read_text(encoding="utf-8")
+            for denied in denied_values:
+                with self.subTest(known_leak=denied):
+                    agents_path.write_text(
+                        f"{original_agents}\n{denied}\n",
+                        encoding="utf-8",
+                    )
+                    contamination_errors: list[str] = []
+                    validator.validate_missed_contracts_worker_guidance(
+                        fixture_root,
+                        contamination_errors,
+                    )
+                    self.assertEqual(
+                        contamination_errors,
+                        [
+                            "missed-contracts worker guidance is contaminated: "
+                            "evaluations/material-code-review/fixtures/"
+                            "missed-contracts/base/AGENTS.md"
+                        ],
+                    )
+            agents_path.write_text(original_agents, encoding="utf-8")
+
+            for relative in validator.MISSED_CONTRACT_WORKER_GUIDANCE_PATHS:
+                with self.subTest(worker_input=relative):
+                    path = fixture_root / relative
+                    original = path.read_text(encoding="utf-8")
+                    path.write_text(
+                        f"{original}\n{case['required_root_ids'][0]}\n",
+                        encoding="utf-8",
+                    )
+                    contamination_errors = []
+                    validator.validate_missed_contracts_worker_guidance(
+                        fixture_root,
+                        contamination_errors,
+                    )
+                    self.assertEqual(len(contamination_errors), 1)
+                    self.assertIn(relative, contamination_errors[0])
+                    path.write_text(original, encoding="utf-8")
+
+        base = REPOSITORY_ROOT / case["fixture"]["base_root"]
+        review = REPOSITORY_ROOT / case["fixture"]["review_root"]
+        source_controls = (
+            (
+                "scripts/validate_package.py",
+                "ast.parse",
+                'if \'VERSION = "2.0.0"\' not in source',
+            ),
+            (
+                "skills/demo/references/workflow.md",
+                "check-scope",
+                "record-coverage",
+            ),
+            (
+                "skills/demo/schemas/candidate-set.json",
+                '"$ref"',
+                '"minLength"',
+            ),
+            (
+                "skills/demo/schemas/coverage-plan.json",
+                '"uniqueItems"',
+                '"minItems"',
+            ),
+            (
+                "skills/demo/scripts/validate_package.py",
+                'ROOT / "package-layouts.json"',
+                "REQUIRED_ARCHIVE_ENTRIES",
+            ),
+        )
+        for relative, baseline_evidence, review_evidence in source_controls:
+            with self.subTest(source_root=relative):
+                self.assertIn(
+                    baseline_evidence,
+                    (base / relative).read_text(encoding="utf-8"),
+                )
+                self.assertIn(
+                    review_evidence,
+                    (review / relative).read_text(encoding="utf-8"),
+                )
+
+        skill = (
+            REPOSITORY_ROOT / ".agents/skills/material-review-evaluation/SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertLess(
+            skill.index("## 6. Dispatch the blinded judge and reveal afterward"),
+            skill.index("## 7. Apply the bounded missed-contracts acceptance rule"),
+        )
+        self.assertIn(
+            "apply it only after a durable blinded judgment and identity reveal",
+            skill,
+        )
+        self.assertIn("contamination_dispatch=false", skill)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_missed_contracts_case_policy_is_closed_and_dimensionally_validated(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "closed_missed_contracts_policy_validator",
+            PACKAGE_VALIDATOR,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            case_path = (
+                fixture_root
+                / "evaluations/material-code-review/cases/missed-contracts.json"
+            )
+            canonical = json.loads(case_path.read_text(encoding="utf-8"))
+
+            def validate_case(case: object) -> list[str]:
+                case_path.write_text(
+                    json.dumps(case, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                errors: list[str] = []
+                validator.validate_maintainer_evaluator_cases(
+                    fixture_root,
+                    errors,
+                )
+                return errors
+
+            self.assertEqual(validate_case(canonical), [])
+
+            mutations: list[tuple[str, dict[str, object], str]] = []
+
+            missing_top = json.loads(json.dumps(canonical))
+            del missing_top["schema_version"]
+            mutations.append(
+                ("missing top-level", missing_top, "top-level policy missing key")
+            )
+            extra_top = json.loads(json.dumps(canonical))
+            extra_top["unexpected"] = True
+            mutations.append(
+                ("extra top-level", extra_top, "top-level policy has unexpected key")
+            )
+            wrong_top_type = json.loads(json.dumps(canonical))
+            wrong_top_type["require_immediate_parent"] = 1
+            mutations.append(
+                ("top-level wrong type", wrong_top_type, "has wrong type")
+            )
+            wrong_top_value = json.loads(json.dumps(canonical))
+            wrong_top_value["review_mode"] = "single"
+            mutations.append(
+                ("top-level wrong value", wrong_top_value, "top-level policy review_mode has wrong value")
+            )
+
+            missing_fixture = json.loads(json.dumps(canonical))
+            del missing_fixture["fixture"]["author_name"]
+            mutations.append(
+                ("missing fixture", missing_fixture, "fixture policy missing key: author_name")
+            )
+            extra_fixture = json.loads(json.dumps(canonical))
+            extra_fixture["fixture"]["unexpected"] = "value"
+            mutations.append(
+                ("extra fixture", extra_fixture, "fixture policy has unexpected key")
+            )
+            wrong_fixture_type = json.loads(json.dumps(canonical))
+            wrong_fixture_type["fixture"]["base_timestamp"] = False
+            mutations.append(
+                ("fixture wrong type", wrong_fixture_type, "fixture policy base_timestamp has wrong type")
+            )
+            wrong_fixture_value = json.loads(json.dumps(canonical))
+            wrong_fixture_value["fixture"]["author_name"] = "Another Author"
+            mutations.append(
+                ("fixture wrong value", wrong_fixture_value, "fixture policy author_name has wrong value")
+            )
+
+            roots_wrong_type = json.loads(json.dumps(canonical))
+            roots_wrong_type["required_root_ids"] = "version-decoy"
+            mutations.append(
+                ("root list wrong type", roots_wrong_type, "required_root_ids must be a list")
+            )
+            roots_duplicate = json.loads(json.dumps(canonical))
+            roots_duplicate["required_root_ids"][-1] = roots_duplicate["required_root_ids"][0]
+            mutations.append(
+                ("root duplicate", roots_duplicate, "must contain exactly five unique IDs")
+            )
+            roots_wrong_value = json.loads(json.dumps(canonical))
+            roots_wrong_value["required_root_ids"][-1] = "unknown-root"
+            mutations.append(
+                ("root wrong value", roots_wrong_value, "required_root_ids values have drifted")
+            )
+
+            missing_contract = json.loads(json.dumps(canonical))
+            del missing_contract["root_contracts"]["version-decoy"]
+            mutations.append(
+                ("root contract missing", missing_contract, "root-oracle root_contracts policy missing key")
+            )
+            extra_contract = json.loads(json.dumps(canonical))
+            extra_contract["root_contracts"]["unknown-root"] = "unknown"
+            mutations.append(
+                ("root contract extra", extra_contract, "root-oracle root_contracts policy has unexpected key")
+            )
+            wrong_contract_type = json.loads(json.dumps(canonical))
+            wrong_contract_type["root_contracts"] = []
+            mutations.append(
+                ("root contracts wrong type", wrong_contract_type, "root-oracle root_contracts policy must be an object")
+            )
+            wrong_contract_value = json.loads(json.dumps(canonical))
+            wrong_contract_value["root_contracts"]["version-decoy"] = "changed"
+            mutations.append(
+                ("root contract wrong value", wrong_contract_value, "root-oracle root_contracts policy version-decoy has wrong value")
+            )
+
+            for dimension, expected_policy in (
+                ("acceptance", validator.MISSED_CONTRACT_ACCEPTANCE_POLICY),
+                ("attempt", validator.MISSED_CONTRACT_ATTEMPT_POLICY),
+            ):
+                case_key = "attempt_policy" if dimension == "attempt" else dimension
+                extra = json.loads(json.dumps(canonical))
+                extra[case_key]["unexpected"] = True
+                mutations.append(
+                    (
+                        f"{dimension} extra",
+                        extra,
+                        f"{dimension} policy has unexpected key",
+                    )
+                )
+                for key, expected_value in expected_policy.items():
+                    missing = json.loads(json.dumps(canonical))
+                    del missing[case_key][key]
+                    mutations.append(
+                        (
+                            f"{dimension} missing {key}",
+                            missing,
+                            f"{dimension} policy missing key: {key}",
+                        )
+                    )
+                    wrong_type = json.loads(json.dumps(canonical))
+                    wrong_type[case_key][key] = (
+                        1 if isinstance(expected_value, bool) else False
+                    )
+                    mutations.append(
+                        (
+                            f"{dimension} wrong type {key}",
+                            wrong_type,
+                            f"{dimension} policy {key} has wrong type",
+                        )
+                    )
+                    wrong_value = json.loads(json.dumps(canonical))
+                    wrong_value[case_key][key] = (
+                        not expected_value
+                        if isinstance(expected_value, bool)
+                        else expected_value + 1
+                    )
+                    mutations.append(
+                        (
+                            f"{dimension} wrong value {key}",
+                            wrong_value,
+                            f"{dimension} policy {key} has wrong value",
+                        )
+                    )
+
+            for name, mutated, expected_error in mutations:
+                with self.subTest(name=name):
+                    errors = validate_case(mutated)
+                    self.assertTrue(
+                        any(expected_error in error for error in errors),
+                        errors,
+                    )
+
+            cross_dimension = json.loads(json.dumps(canonical))
+            cross_dimension["acceptance"]["require_no_mutation"] = False
+            cross_dimension["fixture"]["base_tree"] = "0" * 40
+            errors = validate_case(cross_dimension)
+            self.assertTrue(
+                any(
+                    "acceptance policy require_no_mutation has wrong value" in error
+                    for error in errors
+                ),
+                errors,
+            )
+            self.assertIn("missed-contracts fixture base_tree has drifted", errors)
+
+            case_path.write_text("[]\n", encoding="utf-8")
+            errors = []
+            validator.validate_maintainer_evaluator_cases(fixture_root, errors)
+            self.assertTrue(
+                any("must contain an object" in error for error in errors),
+                errors,
+            )
+            case_path.write_text("{\n", encoding="utf-8")
+            malformed_result = self.run_package_validator(
+                fixture_root,
+                distribution_layout=False,
+            )
+            self.assertNotEqual(malformed_result.returncode, 0)
+            self.assertIn("invalid JSON", malformed_result.stderr)
+
+            case_path.write_text(
+                json.dumps(canonical, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            errors = []
+            validator.validate_maintainer_evaluator_cases(fixture_root, errors)
+            self.assertEqual(errors, [])
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_challenger_is_case_only_and_blinded(self) -> None:
         skill = (
             REPOSITORY_ROOT / ".agents/skills/material-review-evaluation/SKILL.md"
@@ -1097,12 +1635,177 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertIn(controlled_term, skill)
         for controlled_term in (
             "The root dispatcher must provide zero inherited task history.",
-            "Candidate findings are forbidden",
+            "Candidate findings and check results are forbidden",
             "expected roots",
             "variant identities",
             "NO_COVERAGE_GAP",
         ):
             self.assertIn(controlled_term, challenger)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_challenger_claim_is_limited_to_declarative_coverage(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "declarative_challenger_validator",
+            PACKAGE_VALIDATOR,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+
+        errors: list[str] = []
+        validator.validate_maintainer_evaluator_challenger(
+            REPOSITORY_ROOT,
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+        skill_text = (
+            REPOSITORY_ROOT / ".agents/skills/material-review-evaluation/SKILL.md"
+        ).read_text(encoding="utf-8")
+        contract_errors: list[str] = []
+        contract = validator.parse_evaluator_contract(
+            skill_text,
+            validator.EVALUATOR_CHALLENGER_CONTRACT_START,
+            validator.EVALUATOR_CHALLENGER_CONTRACT_END,
+            contract_errors,
+            "challenger boundary contract",
+        )
+        self.assertEqual(contract_errors, [])
+        self.assertEqual(contract, validator.EVALUATOR_CHALLENGER_CONTRACT)
+        self.assertEqual(
+            set(contract["challenger_inputs"].split(",")),
+            {
+                "frozen-source",
+                "change-units",
+                "risk-decisions",
+                "obligations",
+                "assignments",
+                "limitations",
+            },
+        )
+        forbidden = set(contract["challenger_forbidden"].split(","))
+        self.assertTrue(
+            {"candidates", "candidate-sets", "check-results"}.issubset(forbidden)
+        )
+        self.assertEqual(contract["no_coverage_gap_proves"], "declarative-coverage-only")
+        self.assertEqual(contract["challenge_response_to_reviewer"], "false")
+        self.assertEqual(contract["default_discogs_challenger"], "false")
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            skill_path = (
+                fixture_root / ".agents/skills/material-review-evaluation/SKILL.md"
+            )
+            canonical_skill = skill_path.read_text(encoding="utf-8")
+
+            def validate_skill(mutated_skill: str) -> list[str]:
+                skill_path.write_text(mutated_skill, encoding="utf-8")
+                mutation_errors: list[str] = []
+                validator.validate_maintainer_evaluator_challenger(
+                    fixture_root,
+                    mutation_errors,
+                )
+                return mutation_errors
+
+            complete_inputs = contract["challenger_inputs"]
+            for field in complete_inputs.split(","):
+                with self.subTest(missing_declarative_field=field):
+                    missing_inputs = ",".join(
+                        value
+                        for value in complete_inputs.split(",")
+                        if value != field
+                    )
+                    mutated = canonical_skill.replace(
+                        f"challenger_inputs={complete_inputs}",
+                        f"challenger_inputs={missing_inputs}",
+                        1,
+                    )
+                    self.assertIn(
+                        "maintainer evaluator challenger boundary contract is incomplete",
+                        validate_skill(mutated),
+                    )
+
+            for forbidden_input in ("candidates", "candidate-sets", "check-results"):
+                with self.subTest(forbidden_input=forbidden_input):
+                    mutated = canonical_skill.replace(
+                        f"challenger_inputs={complete_inputs}",
+                        f"challenger_inputs={complete_inputs},{forbidden_input}",
+                        1,
+                    )
+                    self.assertIn(
+                        "maintainer evaluator challenger boundary contract is incomplete",
+                        validate_skill(mutated),
+                    )
+
+            for original, replacement, label in (
+                (
+                    "challenger_outcomes=NO_COVERAGE_GAP,COVERAGE_GAP",
+                    "challenger_outcomes=",
+                    "empty response language",
+                ),
+                (
+                    "challenger_outcomes=NO_COVERAGE_GAP,COVERAGE_GAP",
+                    "challenger_outcomes=NO_COVERAGE_GAP,UNKNOWN",
+                    "invalid response language",
+                ),
+                (
+                    "invalid_empty_or_gap=blocks-success-no-retry",
+                    "invalid_empty_or_gap=allows-success",
+                    "invalid response acceptance",
+                ),
+            ):
+                with self.subTest(response_state=label):
+                    mutated = canonical_skill.replace(original, replacement, 1)
+                    self.assertIn(
+                        "maintainer evaluator challenger boundary contract is incomplete",
+                        validate_skill(mutated),
+                    )
+
+            native_result_controls = {
+                "native_check_results_fresh": "stale",
+                "native_check_results_complete": "incomplete",
+                "native_check_results_unblocked": "blocked",
+                "native_check_results_unique": "duplicated",
+                "native_check_results_resolved": "unresolved",
+            }
+            for key, state in native_result_controls.items():
+                with self.subTest(native_check_result=state):
+                    mutated = canonical_skill.replace(
+                        f"{key}=true",
+                        f"{key}=false",
+                        1,
+                    )
+                    self.assertIn(
+                        "maintainer evaluator challenger boundary contract is incomplete",
+                        validate_skill(mutated),
+                    )
+
+            old_check_claim = (
+                "stale, incomplete, blocked, or unsafe check evidence"
+            )
+            challenger_path = (
+                fixture_root
+                / "evaluations/material-code-review/prompts/challenger.md"
+            )
+            challenger_path.write_text(
+                challenger_path.read_text(encoding="utf-8")
+                + f"\n- {old_check_claim};\n",
+                encoding="utf-8",
+            )
+            skill_path.write_text(canonical_skill, encoding="utf-8")
+            prompt_errors: list[str] = []
+            validator.validate_maintainer_evaluator_challenger(
+                fixture_root,
+                prompt_errors,
+            )
+            self.assertIn(
+                "challenger prompt must not claim authority over unseen check-result evidence",
+                prompt_errors,
+            )
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
@@ -1177,15 +1880,15 @@ class StandalonePackagingTests(unittest.TestCase):
         self.assertIn("Do not infer or guess variant identities.", judge)
 
         rubric = required_paths["rubric"].read_text(encoding="utf-8").lower()
-        dimensions = (
-            "finding correctness",
-            "coverage",
-            "precision",
-            "plan quality",
-            "safety",
-            "usability",
+        dimension_headings = (
+            "1. **finding correctness:**",
+            "2. **coverage:**",
+            "3. **precision:**",
+            "4. **plan quality:**",
+            "5. **safety:**",
+            "6. **usability:**",
         )
-        positions = [rubric.index(dimension) for dimension in dimensions]
+        positions = [rubric.index(heading) for heading in dimension_headings]
         self.assertEqual(positions, sorted(positions))
 
         readme = required_paths["README"].read_text(encoding="utf-8")
@@ -2360,6 +3063,299 @@ class StandalonePackagingTests(unittest.TestCase):
                             f"{incomplete_archive.name}: missing archive entry {destination}",
                             result.stderr,
                         )
+
+    def test_review_archive_validation_enforces_bounded_zip_policy_before_reads(self) -> None:
+        def rewrite_central_sizes(
+            source: Path,
+            destination: Path,
+            replacements: dict[str, tuple[int, int]],
+        ) -> None:
+            payload = bytearray(source.read_bytes())
+            signature = b"PK\x01\x02"
+            cursor = 0
+            replaced: set[str] = set()
+            while True:
+                offset = payload.find(signature, cursor)
+                if offset < 0:
+                    break
+                filename_size = int.from_bytes(payload[offset + 28 : offset + 30], "little")
+                extra_size = int.from_bytes(payload[offset + 30 : offset + 32], "little")
+                comment_size = int.from_bytes(payload[offset + 32 : offset + 34], "little")
+                filename_start = offset + 46
+                filename_end = filename_start + filename_size
+                filename = bytes(payload[filename_start:filename_end]).decode("utf-8")
+                if filename in replacements:
+                    compressed_size, expanded_size = replacements[filename]
+                    payload[offset + 20 : offset + 24] = compressed_size.to_bytes(4, "little")
+                    payload[offset + 24 : offset + 28] = expanded_size.to_bytes(4, "little")
+                    replaced.add(filename)
+                cursor = filename_end + extra_size + comment_size
+            self.assertEqual(replaced, set(replacements))
+            destination.write_bytes(payload)
+
+        spec = importlib.util.spec_from_file_location(
+            "bounded_review_archive_validator",
+            PACKAGE_VALIDATOR,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        self.assertEqual(validator.MAX_ARCHIVE_MEMBERS, 10_000)
+        self.assertEqual(validator.MAX_ARCHIVE_MEMBER_SIZE, 100 * 1024 * 1024)
+        self.assertEqual(
+            validator.MAX_ARCHIVE_CUMULATIVE_SIZE,
+            500 * 1024 * 1024,
+        )
+        self.assertEqual(validator.MAX_ARCHIVE_COMPRESSION_RATIO, 100)
+
+        class LyingArchive:
+            def getinfo(self, name: str) -> str:
+                return name
+
+            def open(self, _member: str, _mode: str) -> io.BytesIO:
+                return io.BytesIO(b"123456789")
+
+        with mock.patch.object(validator, "MAX_ARCHIVE_MEMBER_SIZE", 8):
+            with self.assertRaisesRegex(
+                validator.ArchiveResourceError,
+                "exceeds bounded read limit",
+            ):
+                validator.read_bounded_archive_member(
+                    LyingArchive(),
+                    "lying-member.bin",
+                    "lying.zip",
+                )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            _, full_archive, standalone_archive = self.build_review_archives(
+                temp_root,
+                fixture_root,
+            )
+
+            for layout_name, source_archive, standalone in (
+                ("full", full_archive, False),
+                ("standalone", standalone_archive, True),
+            ):
+                with self.subTest(layout=layout_name, state="normal"):
+                    result = self.run_review_archive_validator(
+                        fixture_root,
+                        source_archive,
+                        standalone=standalone,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+                binary_archive = temp_root / f"{layout_name}-binary.zip"
+                shutil.copy2(source_archive, binary_archive)
+                with zipfile.ZipFile(binary_archive, "a") as archive:
+                    archive.writestr(
+                        "ancillary/random.bin",
+                        b"\xff\x00\xfe\x01" * 64,
+                        compress_type=zipfile.ZIP_STORED,
+                    )
+                with self.subTest(layout=layout_name, state="binary-in-limit"):
+                    result = self.run_review_archive_validator(
+                        fixture_root,
+                        binary_archive,
+                        standalone=standalone,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+                with zipfile.ZipFile(source_archive) as archive:
+                    regular_names = [
+                        member.filename
+                        for member in archive.infolist()
+                        if not member.filename.endswith("/")
+                    ]
+                self.assertGreaterEqual(len(regular_names), 6)
+                metadata_cases = (
+                    (
+                        "member-size",
+                        {regular_names[0]: (1, 100 * 1024 * 1024 + 1)},
+                        "exceeds maximum size",
+                    ),
+                    (
+                        "cumulative-size",
+                        {
+                            name: (90 * 1024 * 1024, 90 * 1024 * 1024)
+                            for name in regular_names[:6]
+                        },
+                        "cumulative expanded size exceeds maximum",
+                    ),
+                    (
+                        "ratio",
+                        {regular_names[0]: (1, 101)},
+                        "compression ratio exceeds maximum",
+                    ),
+                    (
+                        "zero-compressed",
+                        {regular_names[0]: (0, 1)},
+                        "has zero compressed size",
+                    ),
+                )
+                for case_name, replacements, expected_error in metadata_cases:
+                    with self.subTest(layout=layout_name, state=case_name):
+                        malformed = temp_root / f"{layout_name}-{case_name}.zip"
+                        rewrite_central_sizes(
+                            source_archive,
+                            malformed,
+                            replacements,
+                        )
+                        result = self.run_review_archive_validator(
+                            fixture_root,
+                            malformed,
+                            standalone=standalone,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(expected_error, result.stderr)
+                        self.assertNotIn("missing archive entry", result.stderr)
+
+                member_count_archive = temp_root / f"{layout_name}-member-count.zip"
+                with zipfile.ZipFile(member_count_archive, "w") as archive:
+                    for index in range(10_001):
+                        archive.writestr(f"empty-{index:05d}/", b"")
+                with self.subTest(layout=layout_name, state="member-count"):
+                    result = self.run_review_archive_validator(
+                        fixture_root,
+                        member_count_archive,
+                        standalone=standalone,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("exceeds maximum member count of 10000", result.stderr)
+                    self.assertNotIn("missing archive entry", result.stderr)
+
+                manifest_entry = (
+                    "package-layouts.json"
+                    if standalone
+                    else "skills/material-code-review/package-layouts.json"
+                )
+                malformed_text_archive = temp_root / f"{layout_name}-malformed-text.zip"
+                self.rewrite_archive_entry(
+                    source_archive,
+                    malformed_text_archive,
+                    manifest_entry,
+                    b'{"schema_version":',
+                )
+                with self.subTest(layout=layout_name, state="semantic-after-preflight"):
+                    result = self.run_review_archive_validator(
+                        fixture_root,
+                        malformed_text_archive,
+                        standalone=standalone,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(
+                        "archived package layout manifest has invalid JSON",
+                        result.stderr,
+                    )
+                    self.assertNotIn("maximum", result.stderr)
+
+    def test_full_plugin_manifest_requires_complete_simplification_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            manifest, full_archive, standalone_archive = self.build_review_archives(
+                temp_root, fixture_root
+            )
+            simplification_sources = {
+                path.relative_to(fixture_root).as_posix()
+                for path in (
+                    fixture_root / "skills/material-code-simplification"
+                ).rglob("*")
+                if path.is_file()
+                and not path.is_symlink()
+                and "__pycache__" not in path.parts
+                and path.suffix not in {".pyc", ".pyo"}
+            }
+            simplification_sources.add("scripts/package_simplification_skill.py")
+            full_mappings = manifest["layouts"]["full-plugin"]["required_mappings"]
+            mapped = {
+                mapping["source"]: mapping["destination"]
+                for mapping in full_mappings
+            }
+            self.assertEqual(
+                {source: mapped.get(source) for source in simplification_sources},
+                {source: source for source in simplification_sources},
+            )
+
+            source_validation = self.run_package_validator(fixture_root)
+            self.assertEqual(source_validation.returncode, 0, source_validation.stderr)
+            archive_validation = self.run_review_archive_validator(
+                fixture_root, full_archive, standalone=False
+            )
+            self.assertEqual(
+                archive_validation.returncode, 0, archive_validation.stderr
+            )
+
+            for index, destination in enumerate(sorted(simplification_sources)):
+                with self.subTest(missing=destination):
+                    incomplete = temp_root / f"missing-simplification-{index:02d}.zip"
+                    self.remove_archive_entry(
+                        full_archive, incomplete, destination
+                    )
+                    result = self.run_review_archive_validator(
+                        fixture_root, incomplete, standalone=False
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(
+                        f"missing archive entry {destination}", result.stderr
+                    )
+
+            with zipfile.ZipFile(standalone_archive) as archive:
+                self.assertFalse(
+                    any(
+                        name.startswith("skills/material-code-simplification/")
+                        for name in archive.namelist()
+                    )
+                )
+            simplification_archive = temp_root / "simplification.zip"
+            simplification_result = self.run_packager(
+                fixture_root, simplification_archive
+            )
+            self.assertEqual(
+                simplification_result.returncode, 0, simplification_result.stderr
+            )
+            simplification_validation = self.run_simplification_archive_validator(
+                simplification_archive
+            )
+            self.assertEqual(
+                simplification_validation.returncode,
+                0,
+                simplification_validation.stderr,
+            )
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            manifest = self.expected_review_layout_manifest(fixture_root)
+            self.write_review_layout_manifest(fixture_root, manifest)
+            missing_source = fixture_root / "skills/material-code-simplification/SKILL.md"
+            missing_source.unlink()
+            full_output = temp_root / "full.zip"
+            standalone_output = temp_root / "standalone.zip"
+            destinations = (
+                full_output,
+                full_output.with_suffix(".zip.sha256"),
+                standalone_output,
+                standalone_output.with_suffix(".zip.sha256"),
+            )
+            for index, destination in enumerate(destinations):
+                destination.write_bytes(f"sentinel-{index}".encode("utf-8"))
+            result = self.run_full_packager(
+                fixture_root,
+                full_output,
+                standalone_output=standalone_output,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "required source is missing: skills/material-code-simplification/SKILL.md",
+                result.stderr,
+            )
+            for index, destination in enumerate(destinations):
+                self.assertEqual(
+                    destination.read_bytes(), f"sentinel-{index}".encode("utf-8")
+                )
 
     def test_review_archives_reject_missing_materiality_and_adjudication_contracts(
         self,
@@ -3630,6 +4626,221 @@ class StandalonePackagingTests(unittest.TestCase):
         self.assertIn("member.py", results[0])
         self.assertIn("TOOL_VERSION", results[0])
         self.assertIn("UTF-8", results[0])
+
+    def test_static_version_helper_accepts_only_immediate_module_body_literal(self) -> None:
+        helpers = tuple(
+            self.load_static_version_helper(path)
+            for path in (PACKAGE_VALIDATOR, REVIEW_VALIDATOR, SIMPLIFICATION_VALIDATOR)
+        )
+        cases = (
+            ("direct", 'TOOL_VERSION = "1.4.0"\n', None),
+            ("wrong", 'TOOL_VERSION = "0.0.0"\n', "wrong value"),
+            ("missing", "# TOOL_VERSION = '1.4.0'\n", "missing"),
+            ("if false", 'if False:\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
+            ("while", 'while False:\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
+            ("for", 'for unused in ():\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
+            ("with", 'with context():\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
+            ("try", 'try:\n    TOOL_VERSION = "1.4.0"\nexcept Exception:\n    pass\n', "non-direct/nonliteral"),
+            ("match", 'match value:\n    case _:\n        TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
+            (
+                "direct plus nested",
+                'TOOL_VERSION = "1.4.0"\nif False:\n    TOOL_VERSION = "1.4.0"\n',
+                "duplicate/competing",
+            ),
+            (
+                "function local excluded",
+                'def local():\n    TOOL_VERSION = "0.0.0"\nTOOL_VERSION = "1.4.0"\n',
+                None,
+            ),
+            (
+                "module evaluated default",
+                'TOOL_VERSION = "1.4.0"\ndef local(value=(TOOL_VERSION := "0.0.0")):\n    pass\n',
+                "duplicate/competing",
+            ),
+            (
+                "class local excluded",
+                'TOOL_VERSION = "1.4.0"\nclass Local:\n    TOOL_VERSION = "0.0.0"\n',
+                None,
+            ),
+            (
+                "class global competing",
+                'TOOL_VERSION = "1.4.0"\nclass Local:\n    global TOOL_VERSION\n    TOOL_VERSION = "0.0.0"\n',
+                "duplicate/competing",
+            ),
+            (
+                "never execute inspected source",
+                'raise RuntimeError("must not execute")\nTOOL_VERSION = "1.4.0"\n',
+                None,
+            ),
+        )
+        for name, source, expected_cause in cases:
+            with self.subTest(name=name):
+                results = tuple(
+                    helper(source, "TOOL_VERSION", "1.4.0", "fixture.py")
+                    for helper in helpers
+                )
+                self.assertEqual(results, (results[0],) * len(results))
+                if expected_cause is None:
+                    self.assertIsNone(results[0])
+                else:
+                    self.assertIsNotNone(results[0])
+                    self.assertIn(expected_cause, results[0])
+
+        for relative, constant_name, expected_value in (
+            ("scripts/package_plugin.py", "VERSION", "1.4.0"),
+            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.4.0"),
+            ("skills/material-code-simplification/scripts/simplifyctl.py", "ADAPTER_VERSION", "1.3.0"),
+        ):
+            for helper in helpers:
+                self.assertIsNone(
+                    helper(
+                        (REPOSITORY_ROOT / relative).read_bytes(),
+                        constant_name,
+                        expected_value,
+                        relative,
+                    )
+                )
+
+    def test_static_version_helper_has_one_source_owner_and_ships_to_every_layout(self) -> None:
+        helper = REPOSITORY_ROOT / "skills/material-code-review/scripts/static_version_contract.py"
+        validators = (
+            PACKAGE_VALIDATOR,
+            REVIEW_VALIDATOR,
+            SIMPLIFICATION_VALIDATOR,
+        )
+        inspected_sources = (helper, *validators)
+        self.assertEqual(
+            sum(
+                path.read_text(encoding="utf-8").count(
+                    "def validate_static_version_declaration("
+                )
+                for path in inspected_sources
+            ),
+            1,
+        )
+        for validator in validators:
+            source = validator.read_text(encoding="utf-8")
+            self.assertIn("from static_version_contract import", source)
+            self.assertNotIn("class BindingVisitor", source)
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            _, full_archive, review_archive = self.build_review_archives(
+                temp_root,
+                fixture_root,
+            )
+            simplification_archive = temp_root / "simplification.zip"
+            simplification_result = self.run_packager(
+                fixture_root,
+                simplification_archive,
+            )
+            self.assertEqual(
+                simplification_result.returncode,
+                0,
+                simplification_result.stderr,
+            )
+
+            archive_helpers = (
+                (full_archive, "skills/material-code-review/scripts/static_version_contract.py"),
+                (review_archive, "scripts/static_version_contract.py"),
+                (simplification_archive, "core/static_version_contract.py"),
+            )
+            for archive_path, member in archive_helpers:
+                with self.subTest(archive=archive_path.name, member=member):
+                    with zipfile.ZipFile(archive_path) as archive:
+                        self.assertEqual(archive.namelist().count(member), 1)
+
+            full_root = temp_root / "extracted-full"
+            review_root = temp_root / "extracted-review"
+            simplification_root = temp_root / "extracted-simplification"
+            self.extract_archive_with_modes(full_archive, full_root)
+            self.extract_archive_with_modes(review_archive, review_root)
+            self.extract_archive_with_modes(simplification_archive, simplification_root)
+
+            isolated_commands = (
+                (
+                    sys.executable,
+                    "-B",
+                    str(full_root / "scripts/validate_package.py"),
+                    "--package-root",
+                    str(full_root),
+                    "--distribution-layout",
+                ),
+                (
+                    sys.executable,
+                    "-B",
+                    str(full_root / "skills/material-code-review/scripts/validate_package.py"),
+                ),
+                (
+                    sys.executable,
+                    "-B",
+                    str(full_root / "skills/material-code-simplification/scripts/validate_package.py"),
+                ),
+                (
+                    sys.executable,
+                    "-B",
+                    str(review_root / "scripts/validate_package.py"),
+                ),
+                (
+                    sys.executable,
+                    "-B",
+                    str(simplification_root / "scripts/validate_package.py"),
+                ),
+            )
+            for command in isolated_commands:
+                with self.subTest(validator=command[2]):
+                    result = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=60,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+            missing_full = temp_root / "missing-full-helper.zip"
+            self.remove_archive_entry(
+                full_archive,
+                missing_full,
+                "skills/material-code-review/scripts/static_version_contract.py",
+            )
+            missing_full_result = self.run_review_archive_validator(
+                fixture_root,
+                missing_full,
+                standalone=False,
+            )
+            self.assertNotEqual(missing_full_result.returncode, 0)
+            self.assertIn("static_version_contract.py", missing_full_result.stderr)
+
+            missing_review = temp_root / "missing-review-helper.zip"
+            self.remove_archive_entry(
+                review_archive,
+                missing_review,
+                "scripts/static_version_contract.py",
+            )
+            missing_review_result = self.run_review_archive_validator(
+                fixture_root,
+                missing_review,
+                standalone=True,
+            )
+            self.assertNotEqual(missing_review_result.returncode, 0)
+            self.assertIn("static_version_contract.py", missing_review_result.stderr)
+
+            missing_simplification = temp_root / "missing-simplification-helper.zip"
+            self.remove_archive_entry(
+                simplification_archive,
+                missing_simplification,
+                "core/static_version_contract.py",
+            )
+            missing_simplification_result = self.run_simplification_archive_validator(
+                missing_simplification
+            )
+            self.assertNotEqual(missing_simplification_result.returncode, 0)
+            self.assertIn(
+                "missing archive entry: core/static_version_contract.py",
+                missing_simplification_result.stderr,
+            )
 
     def test_review_validators_reject_version_decoys(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:

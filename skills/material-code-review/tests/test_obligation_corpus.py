@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import importlib.util
+import io
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -35,38 +39,97 @@ class ObligationCorpusTest(unittest.TestCase):
         cls.cases = cls.corpus["cases"]
 
     def normalized_case_wave(self, case: dict, candidate_sets: list[dict]) -> tuple[dict, list[dict]]:
-        plan = validate_coverage_contract(
-            case["valid_plan"],
-            changed_paths=set(case["changed_paths"]),
-            allowed_context_paths=set(case["context_paths"]),
-        )
-        assignments = {item["assignment_id"]: item for item in plan["assignments"]}
-        obligations = {
-            item["obligation_id"]: item for item in plan["review_obligations"]
-        }
-        normalized = []
-        for raw in candidate_sets:
-            if raw["scope_hash"] != plan["scope_hash"]:
-                raise reviewctl.ReviewError("scope_hash does not match the corpus plan")
-            if raw["coverage_plan_hash"] != case["coverage_plan_hash"]:
-                raise reviewctl.ReviewError("coverage_plan_hash does not match the corpus plan")
-            if raw["coverage_context_hash"] != case["coverage_context_hash"]:
-                raise reviewctl.ReviewError(
-                    "coverage_context_hash does not match the corpus context"
-                )
-            assignment = assignments.get(raw["assignment_id"])
-            if assignment is None:
-                raise reviewctl.ReviewError("assignment_id is absent from the coverage plan")
-            obligation = obligations.get(assignment.get("obligation_id"))
-            normalized.append(
-                validate_assignment_result(
-                    raw,
-                    assignment=assignment,
-                    obligation=obligation,
-                )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"], cwd=repo, check=True
             )
-        reviewctl.validate_candidate_wave_against_coverage(plan, normalized)
-        return plan, normalized
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"], cwd=repo, check=True
+            )
+            for relative_path in [*case["changed_paths"], *case["context_paths"]]:
+                path = repo / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("baseline contract boundary\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+            for relative_path in case["changed_paths"]:
+                (repo / relative_path).write_text(
+                    "observed contract boundary\n", encoding="utf-8"
+                )
+
+            run_id = "obligation-corpus"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = reviewctl.main(
+                    [
+                        "init",
+                        "--repo-root",
+                        str(repo),
+                        "--scope",
+                        "uncommitted",
+                        "--run-id",
+                        run_id,
+                    ]
+                )
+            if result != 0:
+                raise AssertionError(stderr.getvalue())
+            run_dir = repo / ".git" / "material-code-review" / "runs" / run_id
+            state = reviewctl.load_state(run_dir)
+            plan_input = copy.deepcopy(case["valid_plan"])
+            plan_input["scope_hash"] = state["scope_hash"]
+            plan_path = root / "coverage-plan.json"
+            plan_path.write_text(json.dumps(plan_input), encoding="utf-8")
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = reviewctl.main(
+                    [
+                        "record-coverage",
+                        "--repo-root",
+                        str(repo),
+                        "--run-id",
+                        run_id,
+                        "--input",
+                        str(plan_path),
+                    ]
+                )
+            if result != 0:
+                raise AssertionError(stderr.getvalue())
+            state = reviewctl.load_state(run_dir)
+            plan = reviewctl.load_recorded_coverage_plan(run_dir, state)
+
+            normalized = []
+            fixture_candidates = {
+                candidate["assignment_id"]: candidate
+                for candidate in case["valid_candidate_sets"]
+            }
+            for index, raw_candidate in enumerate(candidate_sets):
+                raw = copy.deepcopy(raw_candidate)
+                fixture_candidate = fixture_candidates[raw["assignment_id"]]
+                live_bindings = {
+                    "scope_hash": state["scope_hash"],
+                    "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+                    "coverage_context_hash": state["hashes"]["coverage_context_hash"],
+                }
+                for field, live_value in live_bindings.items():
+                    if raw[field] == fixture_candidate[field]:
+                        raw[field] = live_value
+                normalized_set, rejections = reviewctl.validate_candidate_set(
+                    raw,
+                    source_file=root / f"candidate-{index}.json",
+                    repo=repo,
+                    run_dir=run_dir,
+                    state=state,
+                    plan=plan,
+                )
+                if rejections:
+                    raise reviewctl.ReviewError(str(rejections[0]))
+                normalized.append(normalized_set)
+            reviewctl.validate_candidate_wave_against_coverage(plan, normalized)
+            return plan, normalized
 
     def apply_mutation(self, candidate_sets: list[dict], mutation: dict) -> None:
         target = next(
@@ -90,6 +153,28 @@ class ObligationCorpusTest(unittest.TestCase):
             target["check_results"][0]["evidence"] = []
         else:
             self.fail(f"Unknown corpus mutation: {mutation_type}")
+
+    def assert_negative_mutations_fail_for_case(self, case: dict) -> None:
+        self.assertEqual(
+            {mutation["mutation"] for mutation in case["negative_mutations"]},
+            {
+                "wrong_lens",
+                "omitted_check",
+                "compound_assignment",
+                "blocked_result",
+                "stale_context",
+                "semantic_bypass",
+            },
+        )
+        for mutation in case["negative_mutations"]:
+            with self.subTest(case=case["case_id"], mutation=mutation["name"]):
+                candidate_sets = copy.deepcopy(case["valid_candidate_sets"])
+                self.apply_mutation(candidate_sets, mutation)
+                with self.assertRaisesRegex(
+                    (ObligationContractError, reviewctl.ReviewError),
+                    mutation["expected_error"],
+                ):
+                    self.normalized_case_wave(case, candidate_sets)
 
     def test_every_missed_contract_case_requires_its_causal_obligation(self) -> None:
         self.assertEqual(
@@ -122,17 +207,39 @@ class ObligationCorpusTest(unittest.TestCase):
                 )
                 self.assertTrue(case["expected_defect"])
 
+    def test_positive_corpus_uses_complete_v3_candidate_contract(self) -> None:
+        schema = json.loads(
+            (SKILL_ROOT / "schemas" / "candidate-set-v3.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        category_enum = set(
+            schema["$defs"]["finding"]["properties"]["category"]["enum"]
+        )
+        self.assertEqual(category_enum, set(reviewctl.CATEGORIES))
+        self.assertIn("api_contract", category_enum)
+        self.assertNotIn("contract", category_enum)
+
+        for case in self.cases:
+            with self.subTest(case=case["case_id"], category="api_contract"):
+                self.normalized_case_wave(
+                    case, copy.deepcopy(case["valid_candidate_sets"])
+                )
+            invalid = copy.deepcopy(case["valid_candidate_sets"])
+            emitted = next(
+                finding
+                for candidate_set in invalid
+                for finding in candidate_set["findings"]
+            )
+            emitted["category"] = "contract"
+            with self.subTest(case=case["case_id"], category="contract"):
+                with self.assertRaisesRegex(reviewctl.ReviewError, "category"):
+                    self.normalized_case_wave(case, invalid)
+            self.assert_negative_mutations_fail_for_case(case)
+
     def test_every_negative_mutation_fails_for_declared_reason(self) -> None:
         for case in self.cases:
-            for mutation in case["negative_mutations"]:
-                with self.subTest(case=case["case_id"], mutation=mutation["name"]):
-                    candidate_sets = copy.deepcopy(case["valid_candidate_sets"])
-                    self.apply_mutation(candidate_sets, mutation)
-                    with self.assertRaisesRegex(
-                        (ObligationContractError, reviewctl.ReviewError),
-                        mutation["expected_error"],
-                    ):
-                        self.normalized_case_wave(case, candidate_sets)
+            self.assert_negative_mutations_fail_for_case(case)
 
     def test_low_risk_control_has_only_three_core_assignments(self) -> None:
         case = self.corpus["low_risk_case"]

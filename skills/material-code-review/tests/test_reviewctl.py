@@ -6,12 +6,15 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "reviewctl.py"
@@ -702,6 +705,7 @@ class ReviewCtlTest(unittest.TestCase):
         *,
         allowed_paths: list[str] | None = None,
         test_command: str = "grep -Fq 'return a + b' calc.py",
+        test_timeout_seconds: int = 30,
         global_tests: list[dict] | None = None,
     ) -> dict:
         finding = self.load("ledger.json")["findings"][0]
@@ -744,7 +748,7 @@ class ReviewCtlTest(unittest.TestCase):
                             "command": test_command,
                             "working_directory": ".",
                             "required": True,
-                            "timeout_seconds": 30,
+                            "timeout_seconds": test_timeout_seconds,
                             "purpose": "Verify the approved operator repair.",
                         }
                     ],
@@ -767,6 +771,7 @@ class ReviewCtlTest(unittest.TestCase):
         self,
         *,
         test_command: str = "grep -Fq 'return a + b' calc.py",
+        test_timeout_seconds: int = 30,
         global_tests: list[dict] | None = None,
     ) -> tuple[str, dict]:
         scope_hash = self.reach_adjudicated()
@@ -786,6 +791,7 @@ class ReviewCtlTest(unittest.TestCase):
             scope_hash,
             gate_hash,
             test_command=test_command,
+            test_timeout_seconds=test_timeout_seconds,
             global_tests=global_tests,
         )
         plan_path = self.write_json("plan.json", plan)
@@ -860,8 +866,12 @@ class ReviewCtlTest(unittest.TestCase):
         self,
         *,
         test_command: str = "grep -Fq 'return a + b' calc.py",
+        test_timeout_seconds: int = 30,
     ) -> tuple[str, dict]:
-        scope_hash, plan = self.approve_and_plan(test_command=test_command)
+        scope_hash, plan = self.approve_and_plan(
+            test_command=test_command,
+            test_timeout_seconds=test_timeout_seconds,
+        )
         self.run_tool("begin-fix", "--repo-root", str(self.repo), "--run-id", self.run_id)
         self.run_tool(
             "start-finding",
@@ -1397,6 +1407,389 @@ class ReviewCtlTest(unittest.TestCase):
         result = state_after["finding_test_refresh_results"]["F001"]["unit-regression"][-1]
         self.assertTrue(result["restored_after_mutation"])
         self.assertEqual(result["changed_paths_by_test"], ["calc.py"])
+
+    def test_final_refresh_recovers_captured_head_refs_index_and_workspace_only(self) -> None:
+        commit_command = (
+            "if grep -Fq '# later shared repair' calc.py; then "
+            "git add calc.py && git commit -qm refresh-created-commit; "
+            "else grep -Fq 'return a + b' calc.py; fi"
+        )
+        self.reach_fixed_stale_final_state(test_command=commit_command)
+        attachment_before = reviewctl.current_head_attachment(self.repo)
+        refs_before = reviewctl.local_head_refs(self.repo)
+        guard_before = reviewctl.workspace_guard(self.repo)
+        state_before = self.load("state.json")
+        history_before = copy.deepcopy(state_before["finding_status"]["F001"]["history"])
+
+        _, stderr = self.run_tool(
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+            expected=2,
+        )
+        self.assertIn("mutated the workspace and was restored", stderr)
+        self.assertEqual(reviewctl.current_head_attachment(self.repo), attachment_before)
+        self.assertEqual(reviewctl.local_head_refs(self.repo), refs_before)
+        self.assertEqual(reviewctl.workspace_guard(self.repo), guard_before)
+        state = self.load("state.json")
+        result = state["finding_test_refresh_results"]["F001"]["unit-regression"][-1]
+        self.assertTrue(result["recovery_attempted"])
+        self.assertTrue(result["recovery_completed"])
+        self.assertTrue(result["restored_after_mutation"])
+        self.assertFalse(result["human_recovery_required"])
+        self.assertIsNone(result["recovery_error"])
+        self.assertIn("HEAD", result["control_mutations_by_test"])
+        self.assertIn("local branch refs", result["control_mutations_by_test"])
+        self.assertEqual(state["finding_status"]["F001"]["history"], history_before)
+        self.assertEqual(
+            state["finding_status"]["F001"]["attempts"],
+            state_before["finding_status"]["F001"]["attempts"],
+        )
+        self.assertIsNone(state["active_finding"])
+
+        self.tearDown()
+        self.setUp()
+        for mutation in ("branch-switch", "detached-switch", "index-only"):
+            with self.subTest(mutation=mutation):
+                checkpoint_dir = self.root / f"checkpoint-{mutation}"
+                checkpoint = reviewctl.create_checkpoint(
+                    self.repo, checkpoint_dir, ["calc.py"]
+                )
+                if mutation == "branch-switch":
+                    self.git("switch", "-qc", "refresh-created-branch")
+                elif mutation == "detached-switch":
+                    self.git("switch", "-q", "--detach", "HEAD")
+                else:
+                    self.git("add", "calc.py")
+                if mutation != "index-only":
+                    with self.assertRaises(reviewctl.ReviewError):
+                        reviewctl.restore_checkpoint(self.repo, checkpoint_dir)
+                restored = reviewctl.restore_refresh_checkpoint(
+                    self.repo, checkpoint_dir
+                )
+                self.assertEqual(
+                    reviewctl.current_head_attachment(self.repo),
+                    checkpoint["head_attachment"],
+                )
+                self.assertEqual(
+                    reviewctl.local_head_refs(self.repo), checkpoint["local_head_refs"]
+                )
+                self.assertEqual(
+                    restored["guard_hash"], checkpoint["workspace_guard"]["guard_hash"]
+                )
+                self.tearDown()
+                self.setUp()
+
+        saved_branch = reviewctl.current_branch(self.repo)
+        self.git("switch", "-q", "--detach", "HEAD")
+        detached_checkpoint_dir = self.root / "checkpoint-saved-detached"
+        detached_checkpoint = reviewctl.create_checkpoint(
+            self.repo, detached_checkpoint_dir, ["calc.py"]
+        )
+        self.git("switch", "-q", saved_branch)
+        reviewctl.restore_refresh_checkpoint(self.repo, detached_checkpoint_dir)
+        self.assertIsNone(reviewctl.current_head_attachment(self.repo))
+        self.assertEqual(
+            reviewctl.resolve_commit(self.repo, "HEAD"), detached_checkpoint["head_sha"]
+        )
+
+        self.tearDown()
+        self.setUp()
+        corrupted_dir = self.root / "checkpoint-corrupt"
+        reviewctl.create_checkpoint(self.repo, corrupted_dir, ["calc.py"])
+        corrupted_path = corrupted_dir / "checkpoint.json"
+        corrupted = json.loads(corrupted_path.read_text(encoding="utf-8"))
+        corrupted["head_attachment"] = "refs/heads/forged"
+        corrupted_path.write_text(json.dumps(corrupted), encoding="utf-8")
+        with self.assertRaisesRegex(reviewctl.ReviewError, "embedded hash"):
+            reviewctl.restore_refresh_checkpoint(self.repo, corrupted_dir)
+
+        self.tearDown()
+        self.setUp()
+        conflict_dir = self.root / "checkpoint-conflict"
+        reviewctl.create_checkpoint(self.repo, conflict_dir, ["calc.py"])
+        original_run_process = reviewctl.run_process
+        self.git("add", "calc.py")
+        self.git("commit", "-qm", "test mutation")
+        injected = False
+
+        def inject_ref_conflict(arguments, **kwargs):
+            nonlocal injected
+            if list(arguments[:3]) == ["git", "update-ref", "--stdin"] and not injected:
+                injected = True
+                original_run_process(
+                    ["git", "commit", "--allow-empty", "-qm", "concurrent mutation"],
+                    cwd=self.repo,
+                )
+            return original_run_process(arguments, **kwargs)
+
+        with mock.patch.object(reviewctl, "run_process", side_effect=inject_ref_conflict):
+            with self.assertRaises(reviewctl.ReviewError):
+                reviewctl.restore_refresh_checkpoint(self.repo, conflict_dir)
+        self.assertTrue(injected)
+
+        self.tearDown()
+        self.setUp()
+        self.reach_fixed_stale_final_state(test_command=commit_command)
+        with mock.patch.object(
+            reviewctl,
+            "restore_refresh_checkpoint",
+            side_effect=reviewctl.ReviewError("compare-and-swap conflict"),
+        ):
+            _, stderr = self.run_tool(
+                "refresh-finding-test",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                "--finding",
+                "F001",
+                "--test",
+                "unit-regression",
+                expected=2,
+            )
+        self.assertIn("human recovery is required", stderr)
+        state = self.load("state.json")
+        incomplete = state["finding_test_refresh_results"]["F001"]["unit-regression"][-1]
+        self.assertTrue(incomplete["recovery_attempted"])
+        self.assertFalse(incomplete["recovery_completed"])
+        self.assertFalse(incomplete["restored_after_mutation"])
+        self.assertTrue(incomplete["human_recovery_required"])
+        self.assertEqual(incomplete["recovery_error"], "compare-and-swap conflict")
+
+    def test_final_refresh_nonzero_timeout_and_ordered_success_are_causal(self) -> None:
+        sentinel = self.out / "refresh-pass"
+        sentinel.write_text("pass\n", encoding="utf-8")
+        command = f"test -f {shlex.quote(str(sentinel))}"
+        self.reach_fixed_stale_final_state(test_command=command)
+        state_before = self.load("state.json")
+        history_before = copy.deepcopy(state_before["finding_status"]["F001"]["history"])
+        sentinel.unlink()
+
+        _, stderr = self.run_tool(
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+            expected=1,
+        )
+        self.assertEqual(stderr, "")
+        state = self.load("state.json")
+        failed = state["finding_test_refresh_results"]["F001"]["unit-regression"][-1]
+        self.assertEqual(failed["exit_code"], 1)
+        self.assertFalse(failed["timed_out"])
+        self.assertEqual(failed["changed_paths_by_test"], [])
+        self.assertEqual(failed["control_mutations_by_test"], [])
+        self.assertFalse(failed["restored_after_mutation"])
+        self.assertEqual(state["finding_status"]["F001"]["history"], history_before)
+        self.assertEqual(
+            state["finding_status"]["F001"]["attempts"],
+            state_before["finding_status"]["F001"]["attempts"],
+        )
+        self.assertIsNone(state["active_finding"])
+        _, prepare_error = self.run_tool(
+            "prepare-verification",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            expected=2,
+        )
+        self.assertIn("F001:unit-regression failed", prepare_error)
+
+        sentinel.write_text("pass\n", encoding="utf-8")
+        self.run_tool(
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+        )
+        state = self.load("state.json")
+        attempt = state["finding_status"]["F001"]["history"][-1]
+        latest = reviewctl.latest_finding_test_evidence(
+            state,
+            finding_id="F001",
+            test_id="unit-regression",
+            fixed_attempt=attempt,
+        )
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest["exit_code"], 0)
+
+        sentinel.unlink()
+        self.run_tool(
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+            expected=1,
+        )
+        state = self.load("state.json")
+        latest = reviewctl.latest_finding_test_evidence(
+            state,
+            finding_id="F001",
+            test_id="unit-regression",
+            fixed_attempt=state["finding_status"]["F001"]["history"][-1],
+        )
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest["exit_code"], 1)
+
+        self.tearDown()
+        self.setUp()
+        timeout_sentinel = self.out / "refresh-timeout-pass"
+        timeout_sentinel.write_text("pass\n", encoding="utf-8")
+        timeout_command = (
+            f"if test -f {shlex.quote(str(timeout_sentinel))}; "
+            "then true; else sleep 5; fi"
+        )
+        self.reach_fixed_stale_final_state(
+            test_command=timeout_command,
+            test_timeout_seconds=1,
+        )
+        timeout_sentinel.unlink()
+        _, stderr = self.run_tool(
+            "refresh-finding-test",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--finding",
+            "F001",
+            "--test",
+            "unit-regression",
+            expected=1,
+        )
+        self.assertEqual(stderr, "")
+        state = self.load("state.json")
+        timed_out = state["finding_test_refresh_results"]["F001"]["unit-regression"][-1]
+        self.assertTrue(timed_out["timed_out"])
+        self.assertIsNone(timed_out["exit_code"])
+        self.assertEqual(timed_out["changed_paths_by_test"], [])
+        self.assertEqual(timed_out["control_mutations_by_test"], [])
+        self.assertFalse(timed_out["restored_after_mutation"])
+        _, prepare_error = self.run_tool(
+            "prepare-verification",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            expected=2,
+        )
+        self.assertIn("F001:unit-regression failed", prepare_error)
+
+    def test_final_test_evidence_is_bound_to_newest_retained_attempt(self) -> None:
+        attempt_n = {
+            "attempt_hash": "a" * 64,
+            "tests": {"unit-regression": [{"exit_code": 0, "source": "attempt-n"}]},
+        }
+        attempt_n_plus_one = {
+            "attempt_hash": "b" * 64,
+            "tests": {
+                "unit-regression": [
+                    {"exit_code": 0, "source": "attempt-n-plus-one"}
+                ]
+            },
+        }
+        state = {
+            "finding_test_refresh_results": {
+                "F001": {
+                    "unit-regression": [
+                        {
+                            "fixed_attempt_hash": attempt_n["attempt_hash"],
+                            "exit_code": 0,
+                            "source": "stale-refresh",
+                        }
+                    ]
+                }
+            }
+        }
+        selected = reviewctl.latest_finding_test_evidence(
+            state,
+            finding_id="F001",
+            test_id="unit-regression",
+            fixed_attempt=attempt_n_plus_one,
+        )
+        self.assertEqual(selected["source"], "attempt-n-plus-one")
+
+        state["finding_test_refresh_results"]["F001"]["unit-regression"].extend(
+            [
+                {
+                    "fixed_attempt_hash": attempt_n_plus_one["attempt_hash"],
+                    "exit_code": 0,
+                    "source": "current-refresh-pass",
+                },
+                {
+                    "fixed_attempt_hash": attempt_n["attempt_hash"],
+                    "exit_code": 0,
+                    "source": "later-stale-refresh",
+                },
+            ]
+        )
+        selected = reviewctl.latest_finding_test_evidence(
+            state,
+            finding_id="F001",
+            test_id="unit-regression",
+            fixed_attempt=attempt_n_plus_one,
+        )
+        self.assertEqual(selected["source"], "current-refresh-pass")
+
+        state["finding_test_refresh_results"]["F001"]["unit-regression"].append(
+            {
+                "fixed_attempt_hash": attempt_n_plus_one["attempt_hash"],
+                "exit_code": 1,
+                "source": "current-refresh-fail",
+            }
+        )
+        selected = reviewctl.latest_finding_test_evidence(
+            state,
+            finding_id="F001",
+            test_id="unit-regression",
+            fixed_attempt=attempt_n_plus_one,
+        )
+        self.assertEqual(selected["source"], "current-refresh-fail")
+        self.assertEqual(selected["exit_code"], 1)
+
+        no_current_evidence = {
+            "attempt_hash": "c" * 64,
+            "tests": {"unit-regression": []},
+        }
+        self.assertIsNone(
+            reviewctl.latest_finding_test_evidence(
+                state,
+                finding_id="F001",
+                test_id="unit-regression",
+                fixed_attempt=no_current_evidence,
+            )
+        )
+
+        malformed = {"finding_test_refresh_results": {"F001": []}}
+        with self.assertRaisesRegex(reviewctl.ReviewError, "must be an object"):
+            reviewctl.latest_finding_test_evidence(
+                malformed,
+                finding_id="F001",
+                test_id="unit-regression",
+                fixed_attempt=attempt_n_plus_one,
+            )
 
     def test_marked_state_v1_run_can_refresh_and_complete_without_migration(self) -> None:
         scope_hash, plan = self.reach_fixed_stale_final_state()
@@ -2535,6 +2928,136 @@ class ReviewCtlTest(unittest.TestCase):
                 self.assertFalse((self.run_dir / "coverage-plan.json").exists())
                 self.assertFalse((self.run_dir / "coverage-context.json").exists())
 
+    def test_declared_frozen_context_can_supply_comparison_evidence_only(self) -> None:
+        for mode in ("working-tree", "commit"):
+            with self.subTest(mode=mode):
+                self.commit_context_files({"owner.py": b"OWNER = 'canonical'\n"})
+                if mode == "commit":
+                    base_sha = self.git("rev-parse", "HEAD")
+                    self.git("add", "calc.py")
+                    self.git("commit", "-qm", "comparison")
+                    head_sha = self.git("rev-parse", "HEAD")
+                    self.run_tool(
+                        "init",
+                        "--repo-root",
+                        str(self.repo),
+                        "--scope",
+                        "range",
+                        "--base",
+                        base_sha,
+                        "--head",
+                        head_sha,
+                        "--run-id",
+                        self.run_id,
+                    )
+                    scope_hash = self.load("state.json")["scope_hash"]
+                else:
+                    scope_hash = self.init()
+                plan = self.coverage_plan_v2(
+                    scope_hash, context_paths=["owner.py"]
+                )
+                self.run_tool(
+                    "record-coverage",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--input",
+                    str(self.write_json(f"{mode}-context-plan.json", plan)),
+                )
+                paths = self.candidate_paths_for_coverage_v3(scope_hash)
+                candidate_path = next(
+                    path for path in paths if "core-correctness" in path.name
+                )
+                candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+                candidate["coverage"]["files_reviewed"].append("owner.py")
+                candidate["findings"][0].update(
+                    file="owner.py",
+                    line_start=1,
+                    line_end=1,
+                    evidence_side="comparison",
+                    evidence_quote="OWNER = 'canonical'",
+                    scope_relation="secondary",
+                    related_changed_files=["calc.py"],
+                    direct_dependency=True,
+                )
+                state = reviewctl.load_state(self.run_dir)
+                recorded_plan = reviewctl.load_recorded_coverage_plan(
+                    self.run_dir, state
+                )
+
+                normalized, rejections = reviewctl.validate_candidate_set(
+                    candidate,
+                    source_file=candidate_path,
+                    repo=self.repo,
+                    run_dir=self.run_dir,
+                    state=state,
+                    plan=recorded_plan,
+                )
+                self.assertEqual(rejections, [])
+                self.assertEqual(normalized["findings"][0]["file"], "owner.py")
+
+                baseline = copy.deepcopy(candidate)
+                baseline["findings"][0]["evidence_side"] = "baseline"
+                with self.assertRaisesRegex(reviewctl.ReviewError, "Evidence source is missing"):
+                    reviewctl.validate_candidate_set(
+                        baseline,
+                        source_file=candidate_path,
+                        repo=self.repo,
+                        run_dir=self.run_dir,
+                        state=state,
+                        plan=recorded_plan,
+                    )
+
+                undeclared = copy.deepcopy(candidate)
+                undeclared["findings"][0].update(
+                    file="test_calc.py",
+                    evidence_quote="assert add(1, 2) == 3",
+                )
+                with self.assertRaisesRegex(reviewctl.ReviewError, "Evidence source is missing"):
+                    reviewctl.validate_candidate_set(
+                        undeclared,
+                        source_file=candidate_path,
+                        repo=self.repo,
+                        run_dir=self.run_dir,
+                        state=state,
+                        plan=recorded_plan,
+                    )
+
+                (self.repo / "owner.py").write_text(
+                    "OWNER = 'later live edit'\n", encoding="utf-8"
+                )
+                normalized, rejections = reviewctl.validate_candidate_set(
+                    candidate,
+                    source_file=candidate_path,
+                    repo=self.repo,
+                    run_dir=self.run_dir,
+                    state=state,
+                    plan=recorded_plan,
+                )
+                self.assertEqual(rejections, [])
+                self.assertEqual(
+                    normalized["findings"][0]["evidence_quote"],
+                    "OWNER = 'canonical'",
+                )
+
+                snapshot = self.run_dir / "coverage-context/sources/owner.py"
+                snapshot.write_text("OWNER = 'tampered'\n", encoding="utf-8")
+                with self.assertRaisesRegex(
+                    reviewctl.ReviewError, "failed integrity validation"
+                ):
+                    reviewctl.validate_candidate_set(
+                        candidate,
+                        source_file=candidate_path,
+                        repo=self.repo,
+                        run_dir=self.run_dir,
+                        state=state,
+                        plan=recorded_plan,
+                    )
+
+                self.tearDown()
+                self.setUp()
+
     def test_v2_coverage_and_v3_candidate_schemas_share_canonical_paths(self) -> None:
         schema_root = Path(__file__).resolve().parents[1] / "schemas"
         coverage_schema = json.loads(
@@ -2598,6 +3121,81 @@ class ReviewCtlTest(unittest.TestCase):
                     reviewctl.canonical_git_path(path, "path")
                 with self.assertRaises(reviewctl.ReviewError):
                     reviewctl.require_canonical_repo_path(path, "path")
+
+    def test_adjudication_v4_schema_and_runtime_share_canonical_path_language(self) -> None:
+        schema_root = Path(__file__).resolve().parents[1] / "schemas"
+        adjudication_schema = json.loads(
+            (schema_root / "adjudication-v4.schema.json").read_text(encoding="utf-8")
+        )
+        candidate_schema = json.loads(
+            (schema_root / "candidate-set-v3.schema.json").read_text(encoding="utf-8")
+        )
+        path_definition = adjudication_schema["$defs"]["repositoryRelativeGitPath"]
+        self.assertEqual(
+            path_definition,
+            candidate_schema["$defs"]["repositoryRelativeGitPath"],
+        )
+        self.assertEqual(
+            adjudication_schema["properties"]["groups"]["items"]["properties"]["file"],
+            {"$ref": "#/$defs/repositoryRelativeGitPath"},
+        )
+
+        accepted = (
+            "directory with space/name.py",
+            "src/name.with.dots.py",
+            ".config/tool.py",
+            "src/name:with-colon.py",
+            "résumé.md",
+        )
+        rejected = (
+            "../x.py",
+            "a/../x.py",
+            "./x.py",
+            "C:/x.py",
+            "C:x.py",
+            "\\\\server\\x.py",
+            "a\\x.py",
+            "/x.py",
+            "a//x.py",
+            ".git/config",
+            "x.py/",
+            " x.py",
+            "x.py ",
+            "\ufeffx.py",
+            "x.py\x00",
+            "",
+        )
+        compiled = re.compile(path_definition["pattern"])
+        for path in accepted:
+            with self.subTest(path=path, accepted=True):
+                self.assertIsNotNone(compiled.fullmatch(path))
+                self.assertEqual(reviewctl.require_canonical_repo_path(path, "path"), path)
+        for path in rejected:
+            with self.subTest(path=path, accepted=False):
+                self.assertIsNone(compiled.fullmatch(path))
+                with self.assertRaises(reviewctl.ReviewError):
+                    reviewctl.require_canonical_repo_path(path, "path")
+
+        scope_hash = self.init_with_recorded_coverage()
+        paths = self.candidate_paths_for_coverage(scope_hash)
+        self.ingest_candidate_paths(paths)
+        state = self.load("state.json")
+        candidates = self.load("candidates.json")
+        adjudication = self.adjudication(
+            scope_hash, candidates["candidate_bundle_hash"]
+        )
+        normalized = reviewctl.validate_adjudication(
+            adjudication, candidates_bundle=candidates, state=state
+        )
+        self.assertEqual(normalized["groups"][0]["file"], "calc.py")
+
+        for alias in ("./calc.py", "directory/../calc.py", "calc.py/", ".git/config"):
+            invalid = copy.deepcopy(adjudication)
+            invalid["groups"][0]["file"] = alias
+            with self.subTest(alias=alias), self.assertRaises(reviewctl.ReviewError):
+                reviewctl.validate_adjudication(
+                    invalid, candidates_bundle=candidates, state=state
+                )
 
     def test_historical_discovery_contracts_cannot_enter_state_v3(self) -> None:
         scope_hash = self.init()
@@ -3140,6 +3738,82 @@ class ReviewCtlTest(unittest.TestCase):
                 _, stderr = self.ingest_candidate_paths(paths, expected=2)
                 self.assertIn(expected, stderr)
                 self.assertFalse((self.run_dir / "candidates.json").exists())
+
+    def test_overlength_v3_local_id_rejects_complete_wave_atomically(self) -> None:
+        scope_hash = self.init_with_recorded_coverage_v2()
+        valid_paths = self.candidate_paths_for_coverage_v3(scope_hash)
+        candidate_path = next(path for path in valid_paths if "core-correctness" in path.name)
+        payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+        accepted_local_id = "a" * 128
+        payload["findings"][0]["local_id"] = accepted_local_id
+        candidate_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.ingest_candidate_paths(valid_paths)
+        self.assertTrue((self.run_dir / "candidates.json").exists())
+
+        self.tearDown()
+        self.setUp()
+        scope_hash = self.init_with_recorded_coverage_v2()
+        invalid_paths = self.candidate_paths_for_coverage_v3(scope_hash)
+        candidate_path = next(path for path in invalid_paths if "core-correctness" in path.name)
+        payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+        rejected_local_id = "a" * 129
+        payload["findings"][0]["local_id"] = rejected_local_id
+        candidate_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        state_before = (self.run_dir / "state.json").read_bytes()
+        _, stderr = self.ingest_candidate_paths(invalid_paths, expected=2)
+        self.assertIn("at most 128 characters", stderr)
+        self.assertEqual((self.run_dir / "state.json").read_bytes(), state_before)
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+        self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
+
+    def test_candidate_v3_documents_and_enforces_evidence_range_order(self) -> None:
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "schemas"
+                / "candidate-set-v3.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        finding_schema = schema["$defs"]["finding"]
+        self.assertIn(
+            "line_end must be greater than or equal to line_start",
+            finding_schema["$comment"],
+        )
+        self.assertIn(
+            "material-review controller",
+            finding_schema["properties"]["line_end"]["description"],
+        )
+
+        scope_hash = self.init_with_recorded_coverage_v2()
+        paths = self.candidate_paths_for_coverage_v3(scope_hash)
+        correctness_path = next(path for path in paths if "core-correctness" in path.name)
+        payload = json.loads(correctness_path.read_text(encoding="utf-8"))
+        payload["findings"][0].update(
+            line_start=1,
+            line_end=2,
+            evidence_quote="def add(a, b):\n    return a - b",
+        )
+        correctness_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.ingest_candidate_paths(paths)
+        self.assertTrue((self.run_dir / "candidates.json").exists())
+
+        self.tearDown()
+        self.setUp()
+        scope_hash = self.init_with_recorded_coverage_v2()
+        paths = self.candidate_paths_for_coverage_v3(scope_hash)
+        correctness_path = next(path for path in paths if "core-correctness" in path.name)
+        payload = json.loads(correctness_path.read_text(encoding="utf-8"))
+        payload["findings"][0].update(line_start=2, line_end=1)
+        correctness_path.write_text(json.dumps(payload), encoding="utf-8")
+        state_before = (self.run_dir / "state.json").read_bytes()
+
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+
+        self.assertIn("line_end must be >= line_start", stderr)
+        self.assertEqual((self.run_dir / "state.json").read_bytes(), state_before)
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+        self.assertTrue((self.run_dir / "candidate-ingestion-failure.json").exists())
 
     def test_exact_v3_candidate_retry_is_no_write(self) -> None:
         scope_hash = self.init_with_recorded_coverage_v2()

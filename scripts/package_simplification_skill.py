@@ -103,6 +103,7 @@ def iter_files(root: Path):
         if source.is_file():
             yield validate_source_file(source, root), name
     yield validate_source_file(core / "scripts" / "obligation_contract.py", core), "core/obligation_contract.py"
+    yield validate_source_file(core / "scripts" / "static_version_contract.py", core), "core/static_version_contract.py"
     yield validate_source_file(core / "scripts" / "reviewctl.py", core), "core/reviewctl.py"
     for source in sorted((core / "schemas").glob("*.json")):
         yield validate_source_file(source, core), f"core/schemas/{source.name}"

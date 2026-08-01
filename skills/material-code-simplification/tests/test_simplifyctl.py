@@ -1427,7 +1427,9 @@ class SimplifyCtlTest(unittest.TestCase):
             str(candidate_path),
             expected=2,
         )
-        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertIn(
+            "does not match the material-code-simplification entrypoint", stderr
+        )
         self.assertEqual(state_path.read_bytes(), state_before)
         self.assertEqual((self.repo / "src" / "service.py").read_bytes(), source_before)
         self.assertFalse((self.run_dir / "candidates.json").exists())
@@ -1449,7 +1451,157 @@ class SimplifyCtlTest(unittest.TestCase):
             "Attempt to advance an ambiguous delegated state.",
             expected=2,
         )
-        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertIn(
+            "does not match the material-code-simplification entrypoint", stderr
+        )
+
+    def test_public_entrypoints_enforce_exact_workflow_profile_matrix(self) -> None:
+        def run_core(*arguments: str, expected: int = 0) -> tuple[str, str]:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = simplifyctl.core.main(list(arguments))
+            self.assertEqual(result, expected, stderr.getvalue())
+            return stdout.getvalue(), stderr.getvalue()
+
+        self.init_src("--exclude-untracked")
+        state_path = self.run_dir / "state.json"
+        simplification_bytes = state_path.read_bytes()
+        _, stderr = run_core(
+            "status",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            expected=2,
+        )
+        self.assertIn("does not match the material-review entrypoint", stderr)
+        self.assertEqual(state_path.read_bytes(), simplification_bytes)
+        self.run_tool(
+            "status", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+
+        (self.repo / "src" / "service.py").write_text(
+            "def value():\n    return 2\n", encoding="utf-8"
+        )
+        review_run_id = "material-review-profile"
+        run_core(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "uncommitted",
+            "--run-id",
+            review_run_id,
+        )
+        review_run_dir = (
+            self.repo / ".git" / "material-code-review" / "runs" / review_run_id
+        )
+        review_state_path = review_run_dir / "state.json"
+        review_bytes = review_state_path.read_bytes()
+        _, stderr = self.run_tool(
+            "status",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            review_run_id,
+            expected=2,
+        )
+        self.assertIn(
+            "does not match the material-code-simplification entrypoint", stderr
+        )
+        self.assertEqual(review_state_path.read_bytes(), review_bytes)
+        run_core(
+            "status",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            review_run_id,
+        )
+
+        current_review_state = json.loads(review_bytes.decode("utf-8"))
+        for schema_version in (
+            "material-review/state/v1",
+            "material-review/state/v2",
+        ):
+            with self.subTest(schema_version=schema_version):
+                legacy = copy.deepcopy(current_review_state)
+                legacy["schema_version"] = schema_version
+                review_state_path.write_text(json.dumps(legacy), encoding="utf-8")
+                run_core(
+                    "status",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    review_run_id,
+                )
+                before = review_state_path.read_bytes()
+                _, stderr = self.run_tool(
+                    "status",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    review_run_id,
+                    expected=2,
+                )
+                self.assertIn(
+                    "does not match the material-code-simplification entrypoint",
+                    stderr,
+                )
+                self.assertEqual(review_state_path.read_bytes(), before)
+
+        unprofiled = copy.deepcopy(current_review_state)
+        unprofiled["schema_version"] = "material-review/state/v1"
+        unprofiled.pop("coverage_required")
+        unprofiled.pop("workflow_profile")
+        review_state_path.write_text(json.dumps(unprofiled), encoding="utf-8")
+        run_core(
+            "status",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            review_run_id,
+        )
+        before = review_state_path.read_bytes()
+        _, stderr = self.run_tool(
+            "status",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            review_run_id,
+            expected=2,
+        )
+        self.assertIn(
+            "does not match the material-code-simplification entrypoint", stderr
+        )
+        self.assertEqual(review_state_path.read_bytes(), before)
+
+        contradictory = copy.deepcopy(current_review_state)
+        contradictory["profile"] = "material-code-simplification"
+        review_state_path.write_text(json.dumps(contradictory), encoding="utf-8")
+        contradictory_bytes = review_state_path.read_bytes()
+        for entrypoint in ("review", "simplification"):
+            with self.subTest(entrypoint=entrypoint):
+                if entrypoint == "review":
+                    _, stderr = run_core(
+                        "status",
+                        "--repo-root",
+                        str(self.repo),
+                        "--run-id",
+                        review_run_id,
+                        expected=2,
+                    )
+                else:
+                    _, stderr = self.run_tool(
+                        "status",
+                        "--repo-root",
+                        str(self.repo),
+                        "--run-id",
+                        review_run_id,
+                        expected=2,
+                    )
+                self.assertIn("Unsupported or contradictory state identity", stderr)
+                self.assertEqual(review_state_path.read_bytes(), contradictory_bytes)
 
 
 if __name__ == "__main__":

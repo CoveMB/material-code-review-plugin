@@ -69,6 +69,18 @@ $material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<sk
 6. Resolve the selected case from a fixed mapping: no selector maps to `discogs-custom-playlists.json`; `case:missed-contracts` maps to `missed-contracts.json`. Require its controlled `target_type`, immediate-parent enforcement, range review, immutable posture, and every case-specific identity or fixture hash. For Discogs, require base `361e1740fa164fafc590e7dc8903a87b069592cb` and review commit `3050f047c4cb1a7b32237844ec7cf68a5675c957`. For missed-contracts, require all declared fixture files, exact base/review tree hashes, exact deterministic commits, and exactly the five declared changed paths. Keep `required_root_ids` and `root_contracts` private; candidate findings are forbidden from the challenger bundle.
 7. For Discogs, select the clone source once. Prefer an explicitly supplied or already known trusted local clone source only when its normalized `origin` matches the case repository, it contains both exact case commits, and its porcelain status is empty. Capture that checkout's path, `HEAD`, status, and remotes. Do not search unrelated directories. If no eligible local checkout is known, select the case's public HTTPS repository and record that no active Discogs checkout was used. For missed-contracts, do not use an active target checkout: copy the allowlisted base tree into a run-owned temporary directory, initialize Git, commit it with the exact case identity/message/timestamp and `commit.gpgsign=false`, overlay only the allowlisted review files, and commit again with signing disabled. Verify both tree hashes, both exact commits, immediate parentage, changed paths, and clean status before any worker dispatch.
 
+For `case:missed-contracts`, before any reviewer, challenger, or judge dispatch, scan the complete worker-visible guidance allowlist below against the private `required_root_ids`, exact `root_contracts` definitions, and the retired one-to-one fixture guidance. Stop before dispatch if any private root or known semantic seed appears. This contamination check covers guidance and prompt inputs, not the frozen source evidence whose defects workers must inspect. Keep the private oracle unavailable to every worker and apply it only after a durable blinded judgment and identity reveal.
+
+<!-- evaluator-worker-contamination-contract:start
+case=missed-contracts
+check_timing=before-any-worker-dispatch
+worker_visible_guidance=evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md,evaluations/material-code-review/prompts/reviewer.md,evaluations/material-code-review/prompts/challenger.md,evaluations/material-code-review/prompts/judge.md,evaluations/material-code-review/rubric.md
+deny=root-ids,root-contract-definitions,retired-one-to-one-guidance
+frozen_source_evidence_scan=false
+private_oracle_timing=after-durable-judgment-and-identity-reveal
+contamination_dispatch=false
+evaluator-worker-contamination-contract:end -->
+
 Do not continue if any identity or attestation is unavailable. Never substitute a moving ref.
 
 ## 2. Create private run state and isolated inputs
@@ -124,9 +136,29 @@ The initial request may say that the maintainer intends to approve all retained 
 
 ### Missed-contracts challenger checkpoint
 
-For `case:missed-contracts` only, require each primary reviewer to pause after the native controller has frozen context and recorded coverage-plan/v2 plus the complete assignment set, but before Gate A. Capture a read-only summary of frozen context identity, change units, risk decisions, obligations, assignments, and limitations. Do not include candidate findings, candidate sets, adjudication, the ledger, expected roots, variant identity, refs, or the other variant.
+For `case:missed-contracts` only, require each primary reviewer to pause after the native controller has frozen context and recorded coverage-plan/v2 plus the complete assignment set, but before candidate ingestion and Gate A. Capture a read-only declarative summary of frozen context identity, change units, risk decisions, obligations, assignments, and limitations. Do not include candidate findings, candidate sets, assignment `check_results`, adjudication, the ledger, expected roots, variant identity, refs, private mapping, prior output, or the other variant.
 
-Immediately dispatch one zero-history challenger per anonymous variant with `fork_turns=none`, its distinct read-only fixture clone, that variant's coverage/assignment summary, and `evaluations/material-code-review/prompts/challenger.md`. The challenger is case-only: it returns `NO_COVERAGE_GAP` or a bounded `COVERAGE_GAP` over missing/duplicated change units, risk decisions, obligations, assignments, or stale/unsafe evidence. It cannot add findings, repair artifacts, act as an independent finding validator, progress a gate, or mutate source. Persist its response as `variant-a/challenge.md` or `variant-b/challenge.md`, then allow the corresponding primary reviewer to continue to Gate A without revealing the challenge response as candidate-generation guidance.
+Immediately dispatch one zero-history challenger per anonymous variant with `fork_turns=none`, its distinct read-only fixture clone, that variant's declarative coverage summary, and `evaluations/material-code-review/prompts/challenger.md`. The challenger is case-only: it returns `NO_COVERAGE_GAP` or a bounded `COVERAGE_GAP` over missing or duplicated change units, unsupported risk decisions, missing or mismatched obligations, compound or mismatched assignments, or limitations that defeat the declaration. `NO_COVERAGE_GAP` certifies only that bounded declarative claim; it never establishes that any check result was performed, fresh, complete, unblocked, resolved, or safe. The challenger cannot add findings, repair artifacts, act as an independent finding validator, progress a gate, or mutate source. Persist its response as `variant-a/challenge.md` or `variant-b/challenge.md`, then allow the corresponding primary reviewer to continue without revealing the challenge response as candidate-generation guidance. Native controller validation and evaluator-root acceptance of assignments, obligations, `check_results`, and Gate-A evidence remain mandatory and fail closed independently of the challenger result.
+
+<!-- evaluator-challenger-boundary-contract:start
+case=missed-contracts
+challenger_inputs=frozen-source,change-units,risk-decisions,obligations,assignments,limitations
+challenger_forbidden=candidates,candidate-sets,check-results,adjudication,ledgers,plans,expected-roots,variant-identities,refs,private-mapping,other-variant,prior-output
+challenger_claim=declarative-coverage-only
+challenger_outcomes=NO_COVERAGE_GAP,COVERAGE_GAP
+no_coverage_gap_proves=declarative-coverage-only
+native_assignment_validation=required-independent
+native_obligation_validation=required-independent
+native_check_results_fresh=true
+native_check_results_complete=true
+native_check_results_unblocked=true
+native_check_results_unique=true
+native_check_results_resolved=true
+native_gate_a_validation=required-independent
+invalid_empty_or_gap=blocks-success-no-retry
+challenge_response_to_reviewer=false
+default_discogs_challenger=false
+evaluator-challenger-boundary-contract:end -->
 
 For the default Discogs case, do not dispatch a challenger and do not create challenge artifacts. If a missed-contracts challenger is invalid, unavailable, receives forbidden inputs, or reports a gap, preserve the response and mark that variant insufficient for a successful-strengthening claim; do not retry the challenger.
 
@@ -259,8 +291,8 @@ After judgment and identity reveal, evaluate `case:missed-contracts` against its
 - the candidate ledger supports every one of the five `required_root_ids` with source evidence;
 - every material baseline root remains represented in the candidate ledger;
 - the candidate adds no unsupported high-severity finding;
-- coverage-plan/v2, assignment, obligation, check-result, and Gate-A evidence is controller-valid;
-- both candidate-side challenger evidence and limitations support `NO_COVERAGE_GAP`;
+- coverage-plan/v2, assignment, obligation, check-result, and Gate-A evidence is controller-valid independently of the challenger;
+- both candidate-side challenger evidence and limitations support `NO_COVERAGE_GAP` for the bounded declarative coverage claim only;
 - no product or fixture mutation occurred; and
 - the blinded judge found the candidate variant materially stronger.
 

@@ -13,6 +13,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from obligation_contract import (  # noqa: E402
     ASSIGNMENT_KINDS,
+    CANDIDATE_LOCAL_ID_MAX_LENGTH,
     CHECK_OUTCOMES,
     CORE_LENS_IDS,
     CONTROLLED_RISK_CODES,
@@ -365,6 +366,73 @@ class ObligationContractTest(unittest.TestCase):
             )["check_results"][0]["outcome"],
             "blocked",
         )
+
+    def test_candidate_local_id_length_matches_v3_schema(self) -> None:
+        schema = json.loads(
+            (SKILL_ROOT / "schemas" / "candidate-set-v3.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        schema_limit = schema["$defs"]["finding"]["properties"]["local_id"][
+            "maxLength"
+        ]
+        self.assertEqual(CANDIDATE_LOCAL_ID_MAX_LENGTH, schema_limit)
+
+        plan = validate_coverage_contract(
+            make_plan(),
+            changed_paths={"validator.py"},
+            allowed_context_paths={"runtime.py"},
+        )
+        assignment = next(
+            item for item in plan["assignments"] if item["assignment_kind"] == "obligation"
+        )
+        obligation = plan["review_obligations"][0]
+
+        def result_with_local_id(local_id: str) -> dict:
+            result = {
+                "schema_version": "material-review/candidate-set/v3",
+                "scope_hash": "a" * 64,
+                "coverage_plan_hash": "b" * 64,
+                "coverage_context_hash": "c" * 64,
+                "assignment_id": assignment["assignment_id"],
+                "assignment_kind": "obligation",
+                "obligation_id": obligation["obligation_id"],
+                "lens_id": assignment["lens_id"],
+                "reviewer_id": assignment["reviewer_id"],
+                "independence_group": assignment["independence_group"],
+                "review_mode": assignment["review_mode"],
+                "check_results": [
+                    {
+                        "check_code": check_code,
+                        "outcome": "finding_emitted",
+                        "evidence": ["The frozen comparison contains a material defect."],
+                        "finding_local_ids": [local_id],
+                    }
+                    for check_code in obligation["required_checks"]
+                ],
+                "findings": [{"local_id": local_id}],
+                "coverage": {
+                    "files_reviewed": ["validator.py", "runtime.py"],
+                    "areas": [assignment["lens_id"]],
+                    "limitations": [],
+                },
+            }
+            return result
+
+        accepted = "a" * CANDIDATE_LOCAL_ID_MAX_LENGTH
+        normalized = validate_assignment_result(
+            result_with_local_id(accepted), assignment=assignment, obligation=obligation
+        )
+        self.assertEqual(normalized["findings"][0]["local_id"], accepted)
+        self.assertEqual(
+            normalized["check_results"][0]["finding_local_ids"], [accepted]
+        )
+
+        rejected = "a" * (CANDIDATE_LOCAL_ID_MAX_LENGTH + 1)
+        with self.assertRaisesRegex(ObligationContractError, "at most 128 characters"):
+            validate_assignment_result(
+                result_with_local_id(rejected), assignment=assignment, obligation=obligation
+            )
 
     def test_core_assignment_result_requires_empty_checks_and_no_obligation(self) -> None:
         plan = validate_coverage_contract(

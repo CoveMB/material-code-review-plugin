@@ -8,6 +8,7 @@
     },
     "finding": {
       "type": "object",
+      "$comment": "Semantic invariant: line_end must be greater than or equal to line_start. Portable Draft 2020-12 structural validation cannot compare sibling values; the material-review controller enforces this invariant authoritatively during candidate ingestion.",
       "additionalProperties": false,
       "required": [
         "local_id", "title", "nature", "category", "severity", "confidence",
@@ -25,8 +26,8 @@
         "severity": {"enum": ["blocker", "high", "medium", "low"]},
         "confidence": {"enum": ["certain", "high", "medium", "low"]},
         "file": {"$ref": "#/$defs/repositoryRelativeGitPath"},
-        "line_start": {"type": "integer", "minimum": 1},
-        "line_end": {"type": "integer", "minimum": 1},
+        "line_start": {"type": "integer", "minimum": 1, "description": "Inclusive first evidence line. The material-review controller requires line_end >= line_start."},
+        "line_end": {"type": "integer", "minimum": 1, "description": "Inclusive final evidence line. Must be greater than or equal to line_start; this cross-field rule is enforced by the material-review controller."},
         "evidence_side": {"enum": ["comparison", "baseline", "diff"]},
         "evidence_quote": {"type": "string", "minLength": 1},
         "scope_relation": {"enum": ["primary", "secondary", "pre_existing"]},

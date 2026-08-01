@@ -2,6 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.invalid/material-code-review/adjudication-v4.schema.json",
   "title": "Material Code Review adjudication with source-lens provenance",
+  "$defs": {
+    "repositoryRelativeGitPath": {
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?![^\\u0000]*\\\\)(?![^\\u0000]*//)(?![^\\u0000]*/$)(?!\\.git(?:/|$))(?!\\.{1,2}(?:/|$))(?![^\\u0000]*/\\.{1,2}(?:/|$))(?![\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])(?![^\\u0000]*[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]$)(?![^\\u0000]*\\u0000)[^\\u0000]+$"
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -123,9 +129,7 @@
             ]
           },
           "file": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "^(?![A-Za-z]:[\\\\/])(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+            "$ref": "#/$defs/repositoryRelativeGitPath"
           },
           "line_start": {
             "type": "integer",
@@ -633,4 +637,3 @@
     }
   }
 }
-

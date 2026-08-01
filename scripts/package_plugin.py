@@ -9,6 +9,8 @@ import json
 import os
 import stat
 import sys
+import tempfile
+import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Iterable
@@ -213,12 +215,8 @@ def write_entry(zf: zipfile.ZipFile, source: Path, archive_name: str) -> None:
 
 
 def build_archive(output: Path, entries: Iterable[tuple[Path, str]], comment: str) -> str:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temp = output.with_name(f".{output.name}.tmp")
-    if temp.exists():
-        temp.unlink()
     seen: set[str] = set()
-    with zipfile.ZipFile(temp, "w", allowZip64=True) as zf:
+    with zipfile.ZipFile(output, "w", allowZip64=True) as zf:
         zf.comment = comment.encode("utf-8")
         for source, archive_name in entries:
             normalized = archive_name.replace("\\", "/").lstrip("/")
@@ -226,11 +224,86 @@ def build_archive(output: Path, entries: Iterable[tuple[Path, str]], comment: st
                 raise ValueError(f"Unsafe or duplicate archive entry: {archive_name}")
             seen.add(normalized)
             write_entry(zf, source, normalized)
-    temp.replace(output)
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    checksum_path = output.with_suffix(output.suffix + ".sha256")
-    checksum_path.write_text(f"{digest}  {output.name}\n", encoding="utf-8", newline="\n")
     return digest
+
+
+def destination_identity(path: Path) -> tuple[Path, str]:
+    resolved = path.resolve(strict=False)
+    portable_key = unicodedata.normalize("NFC", str(resolved)).casefold()
+    return resolved, portable_key
+
+
+def validate_publication_destinations(
+    *, root: Path, destinations: list[Path], source_paths: set[Path]
+) -> None:
+    identities: list[tuple[Path, Path, str]] = []
+    for destination in destinations:
+        resolved, portable_key = destination_identity(destination)
+        try:
+            info = destination.lstat()
+        except FileNotFoundError:
+            info = None
+        if destination.is_symlink():
+            raise ValueError(f"output destination must not be a symlink: {destination}")
+        if info is not None and not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"output destination must be absent or a regular file: {destination}")
+        identities.append((destination, resolved, portable_key))
+
+    for index, (destination, resolved, portable_key) in enumerate(identities):
+        for other_destination, other_resolved, other_key in identities[index + 1 :]:
+            if portable_key == other_key or resolved == other_resolved:
+                raise ValueError(
+                    f"output destinations alias each other: {destination} and {other_destination}"
+                )
+            if resolved in other_resolved.parents or other_resolved in resolved.parents:
+                raise ValueError(
+                    f"output destinations overlap as parent and child: {destination} and {other_destination}"
+                )
+        if resolved in source_paths:
+            raise ValueError(f"output destination aliases a packaged source file: {destination}")
+        if resolved == root:
+            raise ValueError(f"output destination aliases the package root: {destination}")
+
+
+def allocate_owned_path(destination: Path, purpose: str) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{destination.name}.material-review-{purpose}-",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    return Path(raw_path)
+
+
+def publish_staged_outputs(staged_outputs: list[tuple[Path, Path]]) -> None:
+    backups: dict[Path, Path] = {}
+    published: list[Path] = []
+    try:
+        for destination, _ in staged_outputs:
+            if destination.exists():
+                backup = allocate_owned_path(destination, "backup")
+                backup.unlink()
+                os.replace(destination, backup)
+                backups[destination] = backup
+        for destination, staged in staged_outputs:
+            os.replace(staged, destination)
+            published.append(destination)
+    except OSError:
+        for destination in reversed(published):
+            if destination.is_file() and not destination.is_symlink():
+                destination.unlink()
+        for destination, backup in reversed(list(backups.items())):
+            if backup.exists():
+                os.replace(backup, destination)
+        raise
+    finally:
+        for _, staged in staged_outputs:
+            if staged.is_file() and not staged.is_symlink():
+                staged.unlink()
+        for backup in backups.values():
+            if backup.is_file() and not backup.is_symlink():
+                backup.unlink()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -257,8 +330,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[FAIL] Not a Codex plugin root: {root}", file=sys.stderr)
         return 1
 
-    output = Path(args.output).expanduser().resolve()
-    standalone_output = Path(args.standalone_output).expanduser().resolve() if args.standalone_output else None
+    output = Path(os.path.abspath(Path(args.output).expanduser()))
+    standalone_output = (
+        Path(os.path.abspath(Path(args.standalone_output).expanduser()))
+        if args.standalone_output
+        else None
+    )
     explicit_outputs = {output}
     if standalone_output:
         explicit_outputs.add(standalone_output)
@@ -286,21 +363,71 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
 
-    full_digest = build_archive(
-        output,
-        full_entries,
-        f"material-code-review Codex plugin {VERSION}",
-    )
+    destinations = [output, output.with_suffix(output.suffix + ".sha256")]
+    if standalone_output:
+        destinations.extend(
+            [
+                standalone_output,
+                standalone_output.with_suffix(standalone_output.suffix + ".sha256"),
+            ]
+        )
+    source_paths = {source.resolve() for source, _ in full_entries}
+    if standalone_entries is not None:
+        source_paths.update(source.resolve() for source, _ in standalone_entries)
+
+    staged_outputs: list[tuple[Path, Path]] = []
+    try:
+        validate_publication_destinations(
+            root=root, destinations=destinations, source_paths=source_paths
+        )
+        full_stage = allocate_owned_path(output, "archive")
+        staged_outputs.append((output, full_stage))
+        full_digest = build_archive(
+            full_stage,
+            full_entries,
+            f"material-code-review Codex plugin {VERSION}",
+        )
+        full_checksum = output.with_suffix(output.suffix + ".sha256")
+        full_checksum_stage = allocate_owned_path(full_checksum, "checksum")
+        full_checksum_stage.write_text(
+            f"{full_digest}  {output.name}\n", encoding="utf-8", newline="\n"
+        )
+        staged_outputs.append((full_checksum, full_checksum_stage))
+
+        standalone_digest: str | None = None
+        if standalone_output:
+            assert standalone_entries is not None
+            standalone_stage = allocate_owned_path(standalone_output, "archive")
+            staged_outputs.append((standalone_output, standalone_stage))
+            standalone_digest = build_archive(
+                standalone_stage,
+                standalone_entries,
+                f"material-code-review standalone Codex skill {VERSION}",
+            )
+            standalone_checksum = standalone_output.with_suffix(
+                standalone_output.suffix + ".sha256"
+            )
+            standalone_checksum_stage = allocate_owned_path(
+                standalone_checksum, "checksum"
+            )
+            standalone_checksum_stage.write_text(
+                f"{standalone_digest}  {standalone_output.name}\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            staged_outputs.append((standalone_checksum, standalone_checksum_stage))
+        publish_staged_outputs(staged_outputs)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        for _, staged in staged_outputs:
+            if staged.is_file() and not staged.is_symlink():
+                staged.unlink()
+        print(f"[FAIL] {exc}", file=sys.stderr)
+        return 1
+
     print(f"[OK] Full Codex plugin ZIP: {output}")
     print(f"SHA-256: {full_digest}")
-
     if standalone_output:
-        assert standalone_entries is not None
-        standalone_digest = build_archive(
-            standalone_output,
-            standalone_entries,
-            f"material-code-review standalone Codex skill {VERSION}",
-        )
+        assert standalone_digest is not None
         print(f"[OK] Standalone Codex skill ZIP: {standalone_output}")
         print(f"SHA-256: {standalone_digest}")
     return 0

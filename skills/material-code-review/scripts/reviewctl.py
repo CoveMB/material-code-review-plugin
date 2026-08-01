@@ -566,11 +566,24 @@ FINALIZABLE_MATERIAL_REVIEW_V1_COMMANDS = frozenset(
 def enforce_command_compatibility(args: argparse.Namespace) -> None:
     if args.command == "init":
         return
+    workflow_profile = getattr(args, "_workflow_profile", None)
+    if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
+        raise ReviewError("Controller caller has no valid workflow profile")
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
     state = load_state(run_dir)
     contract = classify_state_contract(state, run_dir=run_dir)
-    if contract in {STATE_CONTRACT_MATERIAL_REVIEW, STATE_CONTRACT_SIMPLIFICATION}:
+    if workflow_profile == SIMPLIFICATION_PROFILE:
+        if contract != STATE_CONTRACT_SIMPLIFICATION:
+            raise ReviewError(
+                "Run workflow profile does not match the material-code-simplification entrypoint"
+            )
+        return
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        raise ReviewError(
+            "Run workflow profile does not match the material-review entrypoint"
+        )
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
         return
     if (
         contract
@@ -734,6 +747,44 @@ def current_branch(repo: Path) -> str:
     if result.returncode != 0:
         return "DETACHED"
     return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def current_head_attachment(repo: Path) -> str | None:
+    result = run_process(
+        ["git", "symbolic-ref", "--quiet", "HEAD"], cwd=repo, check=False
+    )
+    if result.returncode != 0:
+        return None
+    ref = result.stdout.decode("utf-8", errors="replace").strip()
+    if not ref.startswith("refs/heads/") or ref == "refs/heads/":
+        raise ReviewError(f"HEAD has an unsupported symbolic target: {ref!r}")
+    return ref
+
+
+def local_head_refs(repo: Path) -> dict[str, str]:
+    raw = git_text(
+        repo,
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)",
+        "refs/heads",
+    )
+    refs: dict[str, str] = {}
+    for line in raw.splitlines():
+        if not line:
+            continue
+        parts = line.split("\x00")
+        if len(parts) != 2:
+            raise ReviewError("Git returned malformed local branch-ref data")
+        ref, object_id = parts
+        if (
+            not ref.startswith("refs/heads/")
+            or ref == "refs/heads/"
+            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
+            or ref in refs
+        ):
+            raise ReviewError("Git returned invalid local branch-ref data")
+        refs[ref] = object_id
+    return dict(sorted(refs.items()))
 
 
 def resolve_commit(repo: Path, ref: str) -> str:
@@ -1847,6 +1898,8 @@ def create_checkpoint(repo: Path, checkpoint_dir: Path, extra_paths: Iterable[st
         "created_at": utc_now(),
         "head_sha": guard["identity"]["head_sha"],
         "branch": guard["identity"]["branch"],
+        "head_attachment": current_head_attachment(repo),
+        "local_head_refs": local_head_refs(repo),
         "workspace_guard": guard,
         "path_states": path_states,
         "index_path": str(index_path),
@@ -2024,6 +2077,124 @@ def restore_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
     return current
 
 
+def verify_refresh_checkpoint(
+    repo: Path, checkpoint_dir: Path
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    metadata, path_states, index_path = verify_checkpoint_integrity(
+        repo, checkpoint_dir, require_current_ref=False
+    )
+    attachment = metadata.get("head_attachment")
+    if attachment is not None:
+        attachment = require_string(attachment, "checkpoint.head_attachment")
+        if not attachment.startswith("refs/heads/") or attachment == "refs/heads/":
+            raise ReviewError("Checkpoint HEAD attachment is not a local branch ref")
+    raw_refs = require_object(metadata.get("local_head_refs"), "checkpoint.local_head_refs")
+    refs: dict[str, str] = {}
+    for raw_ref, raw_object_id in raw_refs.items():
+        ref = require_string(raw_ref, "checkpoint local ref")
+        object_id = require_string(
+            raw_object_id, f"checkpoint.local_head_refs.{ref}"
+        )
+        if (
+            not ref.startswith("refs/heads/")
+            or ref == "refs/heads/"
+            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
+            or ref in refs
+        ):
+            raise ReviewError("Checkpoint contains invalid local branch-ref data")
+        refs[ref] = object_id
+    if attachment is not None and refs.get(attachment) != metadata["head_sha"]:
+        raise ReviewError("Checkpoint attached HEAD does not match its saved branch tip")
+    metadata["head_attachment"] = attachment
+    metadata["local_head_refs"] = dict(sorted(refs.items()))
+    return metadata, path_states, index_path
+
+
+def restore_refresh_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
+    metadata, path_states, index_path = verify_refresh_checkpoint(repo, checkpoint_dir)
+    observed_head = resolve_commit(repo, "HEAD")
+    observed_attachment = current_head_attachment(repo)
+    observed_refs = local_head_refs(repo)
+    if (
+        resolve_commit(repo, "HEAD") != observed_head
+        or current_head_attachment(repo) != observed_attachment
+        or local_head_refs(repo) != observed_refs
+    ):
+        raise ReviewError("Repository refs changed concurrently before refresh recovery")
+
+    saved_refs = metadata["local_head_refs"]
+    transaction: list[str] = ["start"]
+    for ref in sorted(set(saved_refs) | set(observed_refs)):
+        saved = saved_refs.get(ref)
+        observed = observed_refs.get(ref)
+        if saved == observed:
+            continue
+        if saved is None:
+            transaction.append(f"delete {ref} {observed}")
+        elif observed is None:
+            transaction.append(f"create {ref} {saved}")
+        else:
+            transaction.append(f"update {ref} {saved} {observed}")
+    if len(transaction) > 1:
+        transaction.extend(["prepare", "commit"])
+        run_process(
+            ["git", "update-ref", "--stdin"],
+            cwd=repo,
+            input_bytes=("\n".join(transaction) + "\n").encode("utf-8"),
+        )
+
+    saved_attachment = metadata["head_attachment"]
+    if saved_attachment is None:
+        current_after_refs = resolve_commit(repo, "HEAD")
+        run_process(
+            [
+                "git",
+                "update-ref",
+                "--no-deref",
+                "HEAD",
+                metadata["head_sha"],
+                current_after_refs,
+            ],
+            cwd=repo,
+        )
+    elif current_head_attachment(repo) != saved_attachment:
+        run_process(["git", "symbolic-ref", "HEAD", saved_attachment], cwd=repo)
+
+    current_paths = workspace_status_paths(repo)
+    snap_paths = set(path_states)
+    for path in sorted(current_paths - snap_paths):
+        target = repo_path(repo, path)
+        if path_exists_in_head(repo, path):
+            run_process(
+                ["git", "restore", "--source=HEAD", "--worktree", "--", path],
+                cwd=repo,
+            )
+        else:
+            remove_path(target)
+    if metadata["index_present"]:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_index = index_path.with_name(
+            f".{index_path.name}.material-review-refresh.tmp"
+        )
+        shutil.copyfile(checkpoint_dir / "index.backup", temporary_index)
+        os.replace(temporary_index, index_path)
+    else:
+        index_path.unlink(missing_ok=True)
+    for path, info in path_states.items():
+        restore_one_snapshot_path(repo, checkpoint_dir, path, info)
+
+    current = workspace_guard(repo)
+    if (
+        current_head_attachment(repo) != saved_attachment
+        or local_head_refs(repo) != saved_refs
+        or current["guard_hash"] != metadata["workspace_guard"]["guard_hash"]
+    ):
+        raise ReviewError(
+            "Refresh recovery did not reproduce the checkpoint; human recovery is required"
+        )
+    return current
+
+
 def verify_frozen_source_bytes(
     data: bytes | None, state_info: dict[str, Any], *, label: str
 ) -> bytes | None:
@@ -2069,6 +2240,19 @@ def read_snapshot_source(run_dir: Path, scope_identity: dict[str, Any], side: st
         return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
     return None
 
+
+def read_coverage_context_source(
+    run_dir: Path, coverage_context: dict[str, Any], path: str
+) -> bytes | None:
+    for source in coverage_context["sources"]:
+        if source["path"] != path:
+            continue
+        data = (run_dir / source["snapshot_path"]).read_bytes()
+        if len(data) != source["size"] or sha256_bytes(data) != source["sha256"]:
+            raise ReviewError(f"Frozen coverage context failed integrity validation: {path}")
+        return data
+    return None
+
 def verify_evidence_quote(
     *,
     repo: Path,
@@ -2079,6 +2263,7 @@ def verify_evidence_quote(
     line_end: int,
     side: str,
     quote: str,
+    coverage_context: dict[str, Any] | None = None,
 ) -> None:
     if side == "diff":
         patch = (run_dir / "scope.patch").read_text(encoding="utf-8", errors="replace")
@@ -2088,6 +2273,8 @@ def verify_evidence_quote(
         return
 
     data = read_snapshot_source(run_dir, scope_identity, side, file, repo)
+    if data is None and side == "comparison" and coverage_context is not None:
+        data = read_coverage_context_source(run_dir, coverage_context, file)
     if data is None:
         raise ReviewError(f"Evidence source is missing for {side}:{file}")
     text = data.decode("utf-8", errors="replace")
@@ -2307,6 +2494,18 @@ def validate_candidate_set(
     scope_info = load_verified_scope(run_dir, state)
     scope_identity = scope_info["identity"]
     scope_paths = all_scope_paths(scope_identity)
+    coverage_context: dict[str, Any] | None = None
+    if material_review:
+        assert plan is not None
+        coverage_context = load_verified_coverage_context(
+            run_dir,
+            state,
+            expected_paths=collect_coverage_context_paths(plan),
+        )
+        if coverage_context["coverage_context_hash"] != coverage_context_hash:
+            raise ReviewError(
+                f"{source_file}: coverage_context_hash does not match verified frozen context"
+            )
     findings_raw = require_array(obj["findings"], f"{source_file}.findings")
     valid_findings: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
@@ -2414,6 +2613,7 @@ def validate_candidate_set(
                 line_end=line_end,
                 side=evidence_side,
                 quote=evidence_quote,
+                coverage_context=coverage_context,
             )
 
             normalized = {
@@ -2899,7 +3099,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         confidence = require_string(group["confidence"], f"{context}.confidence")
         if nature not in NATURES or category not in CATEGORIES or severity not in SEVERITIES or confidence not in CONFIDENCES:
             raise ReviewError(f"{context} contains an invalid nature/category/severity/confidence")
-        file = normalize_repo_path(require_string(group["file"], f"{context}.file"))
+        file = require_canonical_repo_path(group["file"], f"{context}.file")
         line_start = require_int(group["line_start"], f"{context}.line_start", minimum=1)
         line_end = require_int(group["line_end"], f"{context}.line_end", minimum=1)
         if line_end < line_start:
@@ -5079,15 +5279,42 @@ def command_refresh_finding_test(args: argparse.Namespace) -> int:
     ):
         if after_test["identity"][field] != before_test["identity"][field]:
             control_mutations.append(label)
+    after_attachment = current_head_attachment(repo)
+    after_local_refs = local_head_refs(repo)
+    if after_attachment != checkpoint["head_attachment"]:
+        control_mutations.append("HEAD attachment")
+    if after_local_refs != checkpoint["local_head_refs"]:
+        control_mutations.append("local branch refs")
 
     result["changed_paths_by_test"] = sorted(changed_by_test)
-    result["control_mutations_by_test"] = control_mutations
+    result["control_mutations_by_test"] = list(dict.fromkeys(control_mutations))
     result["restored_after_mutation"] = False
+    result["recovery_attempted"] = False
+    result["recovery_completed"] = False
+    result["recovery_error"] = None
+    result["human_recovery_required"] = False
     if changed_by_test or control_mutations:
-        restore_checkpoint(repo, checkpoint_dir)
-        result["restored_after_mutation"] = True
+        result["recovery_attempted"] = True
+        try:
+            restore_refresh_checkpoint(repo, checkpoint_dir)
+            result["restored_after_mutation"] = True
+            result["recovery_completed"] = True
+        except ReviewError as exc:
+            result["recovery_error"] = str(exc)
+            result["human_recovery_required"] = True
 
-    final_guard, _, final_outside = overall_repair_boundary(repo, run_dir, state, plan)
+    final_outside: set[str] = set()
+    if result["human_recovery_required"]:
+        final_guard = workspace_guard(repo)
+    else:
+        try:
+            final_guard, _, final_outside = overall_repair_boundary(
+                repo, run_dir, state, plan
+            )
+        except ReviewError as exc:
+            final_guard = workspace_guard(repo)
+            result["recovery_error"] = str(exc)
+            result["human_recovery_required"] = True
     result["workspace_guard_hash"] = final_guard["guard_hash"]
     result["allowed_paths_hash"] = path_subset_hash(repo, item["allowed_paths"])
     result["boundary_violations"] = sorted(final_outside)
@@ -5116,6 +5343,7 @@ def command_refresh_finding_test(args: argparse.Namespace) -> int:
         and not changed_by_test
         and not control_mutations
         and not final_outside
+        and not result["human_recovery_required"]
     )
     print(f"[{'OK' if passed else 'FAIL'}] Refreshed {args.finding} test {args.test}")
     print(
@@ -5128,6 +5356,13 @@ def command_refresh_finding_test(args: argparse.Namespace) -> int:
             details.append("paths: " + ", ".join(sorted(changed_by_test)))
         if control_mutations:
             details.append("controls: " + ", ".join(control_mutations))
+        if result["human_recovery_required"]:
+            raise ReviewError(
+                "Approved test mutated repository state and automatic recovery was incomplete; "
+                "human recovery is required ("
+                + "; ".join(details)
+                + f"). Cause: {result['recovery_error']}"
+            )
         raise ReviewError(
             "Approved test mutated the workspace and was restored ("
             + "; ".join(details)
@@ -5146,12 +5381,25 @@ def latest_finding_test_evidence(
     fixed_attempt: dict[str, Any],
 ) -> dict[str, Any] | None:
     refresh_runs = finding_test_refresh_runs(state, finding_id, test_id)
-    if refresh_runs:
-        latest = refresh_runs[-1]
-        if latest.get("fixed_attempt_hash") != fixed_attempt.get("attempt_hash"):
-            return None
-        return latest
-    attempt_runs = fixed_attempt["tests"].get(test_id, [])
+    attempt_hash = require_sha256(
+        fixed_attempt.get("attempt_hash"),
+        f"finding_status.{finding_id}.fixed_attempt.attempt_hash",
+    )
+    matching_refresh_runs = [
+        run for run in refresh_runs if run.get("fixed_attempt_hash") == attempt_hash
+    ]
+    if matching_refresh_runs:
+        return matching_refresh_runs[-1]
+    tests = require_object(
+        fixed_attempt.get("tests"), f"finding_status.{finding_id}.fixed_attempt.tests"
+    )
+    attempt_runs = tests.get(test_id, [])
+    if not isinstance(attempt_runs, list) or any(
+        not isinstance(run, dict) for run in attempt_runs
+    ):
+        raise ReviewError(
+            f"finding_status.{finding_id}.fixed_attempt.tests.{test_id} must be an array of objects"
+        )
     return attempt_runs[-1] if attempt_runs else None
 
 
@@ -5850,8 +6098,7 @@ def main(
         raise ValueError(f"Unsupported internal workflow profile: {workflow_profile}")
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "init":
-        args._workflow_profile = workflow_profile
+    args._workflow_profile = workflow_profile
     if hasattr(args, "base") and args.base == "":
         args.base = None
     if hasattr(args, "head") and args.head == "":
