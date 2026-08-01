@@ -156,6 +156,17 @@ class ObligationContractTest(unittest.TestCase):
         for requirement in RISK_REQUIREMENTS.values():
             self.assertTrue(requirement["required_lens"])
             self.assertTrue(requirement["required_checks"])
+        self.assertEqual(
+            RISK_REQUIREMENTS["machine_contract_semantics"]["required_checks"],
+            frozenset(
+                {
+                    "schema_runtime_parity",
+                    "canonical_git_path_language",
+                    "required_value_cardinality",
+                    "privileged_field_type_exactness",
+                }
+            ),
+        )
 
     def test_canonical_git_path_rejects_non_repository_spellings(self) -> None:
         rejected = (
@@ -274,7 +285,9 @@ class ObligationContractTest(unittest.TestCase):
             "unknown risk code": lambda value: value["change_units"][0]["risk_codes"].append("unknown"),
             "exhaustive risk decisions": lambda value: value["change_units"][0]["rejected_risk_rationale"].pop(),
             "required lens": lambda value: value["review_obligations"][0].update(required_lens="correctness"),
-            "required checks": lambda value: value["review_obligations"][0]["required_checks"].pop(),
+            "required checks": lambda value: value["review_obligations"][0][
+                "required_checks"
+            ].remove("privileged_field_type_exactness"),
             "allowed context paths": lambda value: value["change_units"][0].update(context_paths=["untracked.py"]),
         }
         for expected, mutation in mutations.items():

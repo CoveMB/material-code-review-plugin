@@ -42,7 +42,7 @@ from obligation_contract import (  # noqa: E402
 )
 
 
-TOOL_VERSION = "1.4.0"
+TOOL_VERSION = "1.4.1"
 MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v3"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1 = "material-review/state/v1"

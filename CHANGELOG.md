@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.1 — 2026-08-01
+
+- Added fail-closed `privileged_field_type_exactness` coverage to machine-contract review obligations for affected fields controlling authorization, ownership, deletion or cleanup, mutation, publication or external writes, migration, or schema/version interpretation.
+- Required exact runtime-type and supported-value-domain evidence with relevant serialized wrong-type controls, including boolean and integer/float cross-type cases that can otherwise satisfy equality checks.
+- Kept coverage-plan/v2 and candidate-set/v3 shapes unchanged; recorded 1.4.0 coverage plans are not backfilled and must restart when they omit the new required check.
+- Kept standalone material simplification at 1.3.0 while updating its embedded shared-controller/helper provenance to 1.4.1.
+
 ## 1.4.0 — 2026-07-30
 
 - Added fail-closed change-unit partitioning and bounded frozen source-context hashes before coverage recording.

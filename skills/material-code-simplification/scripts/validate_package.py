@@ -28,7 +28,7 @@ from static_version_contract import (  # noqa: E402
     validate_static_version_declaration,
 )
 VERSION = "1.3.0"
-CORE_VERSION = "1.4.0"
+CORE_VERSION = "1.4.1"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",

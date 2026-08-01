@@ -646,6 +646,7 @@
       ],
       "expected_checks": [
         "canonical_git_path_language",
+        "privileged_field_type_exactness",
         "required_value_cardinality",
         "schema_runtime_parity"
       ],
@@ -718,6 +719,7 @@
             "required_lens": "api_config_compatibility",
             "required_checks": [
               "canonical_git_path_language",
+              "privileged_field_type_exactness",
               "required_value_cardinality",
               "schema_runtime_parity"
             ]
@@ -854,6 +856,14 @@
               ]
             },
             {
+              "check_code": "privileged_field_type_exactness",
+              "outcome": "pass",
+              "evidence": [
+                "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
+            },
+            {
               "check_code": "required_value_cardinality",
               "outcome": "pass",
               "evidence": [
@@ -963,6 +973,7 @@
       ],
       "expected_checks": [
         "canonical_git_path_language",
+        "privileged_field_type_exactness",
         "required_value_cardinality",
         "schema_runtime_parity"
       ],
@@ -1035,6 +1046,7 @@
             "required_lens": "api_config_compatibility",
             "required_checks": [
               "canonical_git_path_language",
+              "privileged_field_type_exactness",
               "required_value_cardinality",
               "schema_runtime_parity"
             ]
@@ -1169,6 +1181,14 @@
               "finding_local_ids": [
                 "observed-defect"
               ]
+            },
+            {
+              "check_code": "privileged_field_type_exactness",
+              "outcome": "pass",
+              "evidence": [
+                "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+              ],
+              "finding_local_ids": []
             },
             {
               "check_code": "required_value_cardinality",

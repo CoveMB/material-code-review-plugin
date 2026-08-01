@@ -212,7 +212,12 @@ class ReviewCtlTest(unittest.TestCase):
             ),
             "machine_contract_semantics": (
                 "api_config_compatibility",
-                {"schema_runtime_parity", "canonical_git_path_language", "required_value_cardinality"},
+                {
+                    "schema_runtime_parity",
+                    "canonical_git_path_language",
+                    "required_value_cardinality",
+                    "privileged_field_type_exactness",
+                },
                 set(),
             ),
             "distribution_contract_integrity": (

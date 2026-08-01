@@ -69,7 +69,7 @@ The controller uses only the Python standard library.
 Extract the archive first:
 
 ```bash
-unzip material-code-review-plugin-1.4.0.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.4.1.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a local Codex marketplace:
@@ -97,7 +97,7 @@ Use the smaller archive for direct Codex skill installation:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.4.0.zip \
+unzip material-code-review-codex-skill-1.4.1.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -128,7 +128,7 @@ unzip material-code-simplification-codex-skill-1.3.0.zip \
   -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-Its `core/` directory embeds shared controller and obligation helper 1.4.0 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v3, coverage-plan/v2, candidate-set/v3, assignments, check results, and obligations do not apply to simplification.
+Its `core/` directory embeds shared controller and obligation helper 1.4.1 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v3, coverage-plan/v2, candidate-set/v3, assignments, check results, and obligations do not apply to simplification.
 
 ## Optional project-scoped Codex reviewers
 
@@ -282,10 +282,10 @@ Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may co
 Packaging produces:
 
 ```text
-material-code-review-plugin-1.4.0.zip
-material-code-review-plugin-1.4.0.zip.sha256
-material-code-review-codex-skill-1.4.0.zip
-material-code-review-codex-skill-1.4.0.zip.sha256
+material-code-review-plugin-1.4.1.zip
+material-code-review-plugin-1.4.1.zip.sha256
+material-code-review-codex-skill-1.4.1.zip
+material-code-review-codex-skill-1.4.1.zip.sha256
 material-code-simplification-codex-skill-1.3.0.zip
 material-code-simplification-codex-skill-1.3.0.zip.sha256
 ```

@@ -26,11 +26,13 @@ A `pass` names the authoritative parse result and both controls. `finding_emitte
 
 **Positive trigger:** schemas, runtime validators, serializers, enums, or adapters jointly define a machine-facing input or output contract.
 
-**Non-trigger evidence:** schema and runtime acceptance languages match, repository paths share one canonical spelling, and required values have exact cardinality and uniqueness constraints.
+**Non-trigger evidence:** schema and runtime acceptance languages match, repository paths share one canonical spelling, required values have exact cardinality and uniqueness constraints, and affected privileged fields agree on exact runtime type and supported value domain.
 
 **Required lens:** `api_config_compatibility`.
 
-**Required checks:** `schema_runtime_parity`, `canonical_git_path_language`, `required_value_cardinality`.
+**Required checks:** `schema_runtime_parity`, `canonical_git_path_language`, `required_value_cardinality`, `privileged_field_type_exactness`.
+
+`privileged_field_type_exactness` applies to an affected machine-facing field whose value controls authorization, ownership, deletion or cleanup, mutation, publication or external writes, migration, or schema/version interpretation. A `pass` identifies the field's exact runtime type and supported value domain and cites relevant serialized accepted and rejected controls, including boolean, integer/float cross-type, string, `null`, missing, and unsupported enum/version values where applicable. If no affected privileged field exists, the evidence names the inspected contract and explains why none of its fields controls consequential behavior.
 
 A `pass` cites matching accepted/rejected examples and cardinality controls. `finding_emitted` points to the local mismatch finding. `blocked` identifies the missing schema, runtime owner, or executable contract evidence.
 

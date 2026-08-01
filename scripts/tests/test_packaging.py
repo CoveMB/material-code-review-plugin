@@ -560,12 +560,12 @@ class StandalonePackagingTests(unittest.TestCase):
             with zipfile.ZipFile(full_output) as archive:
                 self.assertEqual(
                     archive.comment,
-                    b"material-code-review Codex plugin 1.4.0",
+                    b"material-code-review Codex plugin 1.4.1",
                 )
             with zipfile.ZipFile(standalone_output) as archive:
                 self.assertEqual(
                     archive.comment,
-                    b"material-code-review standalone Codex skill 1.4.0",
+                    b"material-code-review standalone Codex skill 1.4.1",
                 )
             for output in (full_output, standalone_output):
                 checksum = output.with_suffix(output.suffix + ".sha256")
@@ -3800,7 +3800,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertIn(
-                "material-code-review package 1.4.0 is structurally valid",
+                "material-code-review package 1.4.1 is structurally valid",
                 validation_result.stdout,
             )
             targeted_test_result = subprocess.run(
@@ -4031,7 +4031,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertTrue(
-                (distribution_directory / "material-code-review-plugin-1.4.0.zip").is_file()
+                (distribution_directory / "material-code-review-plugin-1.4.1.zip").is_file()
             )
 
     @unittest.skipIf(
@@ -4457,7 +4457,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 }.issubset(names)
             )
             self.assertIn(
-                'TOOL_VERSION = "1.4.0"',
+                'TOOL_VERSION = "1.4.1"',
                 controller,
             )
             self.assertIn(
@@ -4494,8 +4494,8 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"missing archive entry: {member}", result.stderr)
 
-    def test_release_1_4_0_and_simplification_1_3_0_are_aligned(self) -> None:
-        full_version = "1.4.0"
+    def test_release_1_4_1_and_simplification_1_3_0_are_aligned(self) -> None:
+        full_version = "1.4.1"
         simplification_version = "1.3.0"
 
         for relative in (
@@ -4527,6 +4527,11 @@ class StandalonePackagingTests(unittest.TestCase):
                 "skills/material-code-simplification/scripts/validate_package.py",
                 "VERSION",
                 simplification_version,
+            ),
+            (
+                "skills/material-code-simplification/scripts/validate_package.py",
+                "CORE_VERSION",
+                full_version,
             ),
         )
         for relative, constant_name, expected_value in python_version_owners:
@@ -4633,50 +4638,50 @@ class StandalonePackagingTests(unittest.TestCase):
             for path in (PACKAGE_VALIDATOR, REVIEW_VALIDATOR, SIMPLIFICATION_VALIDATOR)
         )
         cases = (
-            ("direct", 'TOOL_VERSION = "1.4.0"\n', None),
+            ("direct", 'TOOL_VERSION = "1.4.1"\n', None),
             ("wrong", 'TOOL_VERSION = "0.0.0"\n', "wrong value"),
-            ("missing", "# TOOL_VERSION = '1.4.0'\n", "missing"),
-            ("if false", 'if False:\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
-            ("while", 'while False:\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
-            ("for", 'for unused in ():\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
-            ("with", 'with context():\n    TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
-            ("try", 'try:\n    TOOL_VERSION = "1.4.0"\nexcept Exception:\n    pass\n', "non-direct/nonliteral"),
-            ("match", 'match value:\n    case _:\n        TOOL_VERSION = "1.4.0"\n', "non-direct/nonliteral"),
+            ("missing", "# TOOL_VERSION = '1.4.1'\n", "missing"),
+            ("if false", 'if False:\n    TOOL_VERSION = "1.4.1"\n', "non-direct/nonliteral"),
+            ("while", 'while False:\n    TOOL_VERSION = "1.4.1"\n', "non-direct/nonliteral"),
+            ("for", 'for unused in ():\n    TOOL_VERSION = "1.4.1"\n', "non-direct/nonliteral"),
+            ("with", 'with context():\n    TOOL_VERSION = "1.4.1"\n', "non-direct/nonliteral"),
+            ("try", 'try:\n    TOOL_VERSION = "1.4.1"\nexcept Exception:\n    pass\n', "non-direct/nonliteral"),
+            ("match", 'match value:\n    case _:\n        TOOL_VERSION = "1.4.1"\n', "non-direct/nonliteral"),
             (
                 "direct plus nested",
-                'TOOL_VERSION = "1.4.0"\nif False:\n    TOOL_VERSION = "1.4.0"\n',
+                'TOOL_VERSION = "1.4.1"\nif False:\n    TOOL_VERSION = "1.4.1"\n',
                 "duplicate/competing",
             ),
             (
                 "function local excluded",
-                'def local():\n    TOOL_VERSION = "0.0.0"\nTOOL_VERSION = "1.4.0"\n',
+                'def local():\n    TOOL_VERSION = "0.0.0"\nTOOL_VERSION = "1.4.1"\n',
                 None,
             ),
             (
                 "module evaluated default",
-                'TOOL_VERSION = "1.4.0"\ndef local(value=(TOOL_VERSION := "0.0.0")):\n    pass\n',
+                'TOOL_VERSION = "1.4.1"\ndef local(value=(TOOL_VERSION := "0.0.0")):\n    pass\n',
                 "duplicate/competing",
             ),
             (
                 "class local excluded",
-                'TOOL_VERSION = "1.4.0"\nclass Local:\n    TOOL_VERSION = "0.0.0"\n',
+                'TOOL_VERSION = "1.4.1"\nclass Local:\n    TOOL_VERSION = "0.0.0"\n',
                 None,
             ),
             (
                 "class global competing",
-                'TOOL_VERSION = "1.4.0"\nclass Local:\n    global TOOL_VERSION\n    TOOL_VERSION = "0.0.0"\n',
+                'TOOL_VERSION = "1.4.1"\nclass Local:\n    global TOOL_VERSION\n    TOOL_VERSION = "0.0.0"\n',
                 "duplicate/competing",
             ),
             (
                 "never execute inspected source",
-                'raise RuntimeError("must not execute")\nTOOL_VERSION = "1.4.0"\n',
+                'raise RuntimeError("must not execute")\nTOOL_VERSION = "1.4.1"\n',
                 None,
             ),
         )
         for name, source, expected_cause in cases:
             with self.subTest(name=name):
                 results = tuple(
-                    helper(source, "TOOL_VERSION", "1.4.0", "fixture.py")
+                    helper(source, "TOOL_VERSION", "1.4.1", "fixture.py")
                     for helper in helpers
                 )
                 self.assertEqual(results, (results[0],) * len(results))
@@ -4687,8 +4692,8 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertIn(expected_cause, results[0])
 
         for relative, constant_name, expected_value in (
-            ("scripts/package_plugin.py", "VERSION", "1.4.0"),
-            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.4.0"),
+            ("scripts/package_plugin.py", "VERSION", "1.4.1"),
+            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.4.1"),
             ("skills/material-code-simplification/scripts/simplifyctl.py", "ADAPTER_VERSION", "1.3.0"),
         ):
             for helper in helpers:
@@ -4848,8 +4853,8 @@ class StandalonePackagingTests(unittest.TestCase):
             controller = fixture_root / "skills/material-code-review/scripts/reviewctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.4.0"',
-                '# TOOL_VERSION = "1.4.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.4.1"',
+                '# TOOL_VERSION = "1.4.1"\nTOOL_VERSION = "0.0.0"',
             )
             root_result = self.run_package_validator(fixture_root)
             review_result = self.run_review_validator(fixture_root)
@@ -4865,8 +4870,8 @@ class StandalonePackagingTests(unittest.TestCase):
             packager = fixture_root / "scripts/package_plugin.py"
             self.replace_once(
                 packager,
-                'VERSION = "1.4.0"',
-                'VERSION = "1.4.0"\nif True:\n    VERSION = "1.4.0"',
+                'VERSION = "1.4.1"',
+                'VERSION = "1.4.1"\nif True:\n    VERSION = "1.4.1"',
             )
             result = self.run_package_validator(fixture_root)
             self.assertNotEqual(result.returncode, 0)
@@ -4881,8 +4886,8 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.4.0"',
-                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.4.0"',
+                'TOOL_VERSION = "1.4.1"',
+                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.4.1"',
             )
             self.replace_once(
                 adapter,
@@ -4906,8 +4911,8 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.4.0"',
-                '# TOOL_VERSION = "1.4.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.4.1"',
+                '# TOOL_VERSION = "1.4.1"\nTOOL_VERSION = "0.0.0"',
             )
             self.replace_once(
                 adapter,
