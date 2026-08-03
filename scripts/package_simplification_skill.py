@@ -88,6 +88,56 @@ def write_file(archive: zipfile.ZipFile, source: Path, archive_path: str) -> Non
     archive.writestr(info, source.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
+def allocate_owned_path(destination: Path, purpose: str) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{destination.name}.material-simplification-{purpose}-",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    return Path(raw_path)
+
+
+def path_entry_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def unlink_owned_non_directory(path: Path) -> None:
+    if path_entry_exists(path) and (path.is_symlink() or not path.is_dir()):
+        path.unlink()
+
+
+def publish_staged_outputs(staged_outputs: list[tuple[Path, Path]]) -> None:
+    backups: dict[Path, Path] = {}
+    published: list[Path] = []
+    try:
+        for destination, _ in staged_outputs:
+            if destination.is_dir() and not destination.is_symlink():
+                raise IsADirectoryError(
+                    f"destination must not be a directory: {destination}"
+                )
+        for destination, _ in staged_outputs:
+            if path_entry_exists(destination):
+                backup = allocate_owned_path(destination, "backup")
+                backup.unlink()
+                os.replace(destination, backup)
+                backups[destination] = backup
+        for destination, staged in staged_outputs:
+            os.replace(staged, destination)
+            published.append(destination)
+    except OSError:
+        for destination in reversed(published):
+            unlink_owned_non_directory(destination)
+        for destination, backup in reversed(list(backups.items())):
+            if path_entry_exists(backup):
+                os.replace(backup, destination)
+        raise
+    finally:
+        for _, staged in staged_outputs:
+            unlink_owned_non_directory(staged)
+        for backup in backups.values():
+            unlink_owned_non_directory(backup)
+
+
 def iter_files(root: Path):
     skill = root / "skills" / SKILL_NAME
     core = root / "skills" / "material-code-review"
@@ -163,15 +213,18 @@ def main() -> int:
         checksum_fd, checksum_temp_name = tempfile.mkstemp(
             prefix=f".{checksum_path.name}.", dir=checksum_path.parent
         )
+        checksum_temp = Path(checksum_temp_name)
         try:
-            os.write(checksum_fd, f"{digest}  {output.name}\n".encode("utf-8"))
-            os.close(checksum_fd)
-            os.replace(temp, output)
-            os.replace(checksum_temp_name, checksum_path)
-        except Exception:
-            os.close(checksum_fd)
-            Path(checksum_temp_name).unlink(missing_ok=True)
-            raise
+            with os.fdopen(checksum_fd, "wb") as checksum_file:
+                checksum_file.write(f"{digest}  {output.name}\n".encode("utf-8"))
+            publish_staged_outputs(
+                [
+                    (output, temp),
+                    (checksum_path, checksum_temp),
+                ]
+            )
+        finally:
+            checksum_temp.unlink(missing_ok=True)
     finally:
         temp.unlink(missing_ok=True)
     print(f"[OK] Wrote {output}")

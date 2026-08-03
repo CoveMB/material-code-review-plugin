@@ -686,6 +686,171 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertEqual(full_output.read_bytes(), b"full sentinel")
             self.assertEqual(standalone_output.read_bytes(), b"standalone sentinel")
 
+    def test_simplification_packager_publication_is_recoverable(self) -> None:
+        def load_simplification_packager(fixture_root: Path, label: str):
+            path = fixture_root / "scripts/package_simplification_skill.py"
+            spec = importlib.util.spec_from_file_location(
+                f"simplification_packager_{label}", path
+            )
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        def invoke(module, fixture_root: Path, output: Path) -> int:
+            arguments = [
+                str(fixture_root / "scripts/package_simplification_skill.py"),
+                "--root",
+                str(fixture_root),
+                "--output",
+                str(output),
+            ]
+            with mock.patch.object(sys, "argv", arguments), contextlib.redirect_stdout(
+                io.StringIO()
+            ), contextlib.redirect_stderr(io.StringIO()):
+                return module.main()
+
+        def owned_paths(directory: Path, output: Path) -> list[Path]:
+            checksum = output.with_suffix(output.suffix + ".sha256")
+            prefixes = (f".{output.name}.", f".{checksum.name}.")
+            return sorted(
+                path for path in directory.iterdir() if path.name.startswith(prefixes)
+            )
+
+        def assert_publication_failure(
+            failure_step: int, *, existing_destinations: bool
+        ) -> None:
+            with tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                destination_state = "existing" if existing_destinations else "absent"
+                module = load_simplification_packager(
+                    fixture_root, f"{destination_state}_{failure_step}"
+                )
+                output = temp_root / "simplification.zip"
+                checksum = output.with_suffix(output.suffix + ".sha256")
+                if existing_destinations:
+                    output.write_bytes(b"archive sentinel")
+                    checksum.write_bytes(b"checksum sentinel")
+                unrelated = temp_root / "unrelated.tmp"
+                unrelated.write_bytes(b"unrelated")
+                original_replace = module.os.replace
+                calls = 0
+
+                def fail_once(source, destination):
+                    nonlocal calls
+                    calls += 1
+                    if calls == failure_step:
+                        raise OSError(f"injected publication failure {failure_step}")
+                    return original_replace(source, destination)
+
+                with mock.patch.object(module.os, "replace", side_effect=fail_once):
+                    with self.assertRaisesRegex(
+                        OSError, f"injected publication failure {failure_step}"
+                    ):
+                        invoke(module, fixture_root, output)
+
+                if existing_destinations:
+                    self.assertEqual(output.read_bytes(), b"archive sentinel")
+                    self.assertEqual(checksum.read_bytes(), b"checksum sentinel")
+                else:
+                    self.assertFalse(output.exists())
+                    self.assertFalse(checksum.exists())
+                self.assertEqual(unrelated.read_bytes(), b"unrelated")
+                self.assertEqual(owned_paths(temp_root, output), [])
+
+        for failure_step in range(1, 5):
+            with self.subTest(existing_destination_failure=failure_step):
+                assert_publication_failure(
+                    failure_step, existing_destinations=True
+                )
+
+        for failure_step in range(1, 3):
+            with self.subTest(absent_destination_failure=failure_step):
+                assert_publication_failure(
+                    failure_step, existing_destinations=False
+                )
+
+        if not sys.platform.startswith("win"):
+            with tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                module = load_simplification_packager(fixture_root, "symlink_success")
+                output = temp_root / "simplification.zip"
+                target = temp_root / "symlink-target.zip"
+                target.write_bytes(b"symlink target sentinel")
+                output.symlink_to(target)
+
+                self.assertEqual(invoke(module, fixture_root, output), 0)
+
+                self.assertFalse(output.is_symlink())
+                self.assertEqual(target.read_bytes(), b"symlink target sentinel")
+                self.assertEqual(owned_paths(temp_root, output), [])
+
+            with tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                module = load_simplification_packager(fixture_root, "dangling_symlink_failure")
+                output = temp_root / "simplification.zip"
+                checksum = output.with_suffix(output.suffix + ".sha256")
+                symlink_target = temp_root / "missing-symlink-target.zip"
+                output.symlink_to(symlink_target)
+                original_replace = module.os.replace
+
+                def fail_checksum_publication(source, destination):
+                    if Path(destination) == checksum:
+                        raise OSError("injected checksum publication failure")
+                    return original_replace(source, destination)
+
+                with mock.patch.object(
+                    module.os, "replace", side_effect=fail_checksum_publication
+                ):
+                    with self.assertRaisesRegex(
+                        OSError, "injected checksum publication failure"
+                    ):
+                        invoke(module, fixture_root, output)
+
+                self.assertTrue(output.is_symlink())
+                self.assertEqual(output.readlink(), symlink_target)
+                self.assertFalse(checksum.exists())
+                self.assertEqual(owned_paths(temp_root, output), [])
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            module = load_simplification_packager(fixture_root, "directory_destination")
+            output = temp_root / "simplification.zip"
+            checksum = output.with_suffix(output.suffix + ".sha256")
+            output.mkdir()
+            directory_sentinel = output / "sentinel.txt"
+            directory_sentinel.write_bytes(b"directory sentinel")
+            checksum.write_bytes(b"checksum sentinel")
+
+            with self.assertRaises(IsADirectoryError):
+                invoke(module, fixture_root, output)
+
+            self.assertTrue(output.is_dir())
+            self.assertEqual(directory_sentinel.read_bytes(), b"directory sentinel")
+            self.assertEqual(checksum.read_bytes(), b"checksum sentinel")
+            self.assertEqual(owned_paths(temp_root, output), [])
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            module = load_simplification_packager(fixture_root, "success")
+            output = temp_root / "simplification.zip"
+            checksum = output.with_suffix(output.suffix + ".sha256")
+            output.write_bytes(b"archive sentinel")
+            checksum.write_bytes(b"checksum sentinel")
+
+            self.assertEqual(invoke(module, fixture_root, output), 0)
+
+            digest, filename = checksum.read_text(encoding="utf-8").split()
+            self.assertEqual(filename, output.name)
+            self.assertEqual(digest, hashlib.sha256(output.read_bytes()).hexdigest())
+            self.assertEqual(owned_paths(temp_root, output), [])
+
     @unittest.skipIf(sys.platform.startswith("win"), "fixture requires POSIX filename semantics")
     def test_packager_rejects_unsafe_consumer_paths(self) -> None:
         for unsafe_name in ("..\\escape.txt", "C:\\escape.txt"):
