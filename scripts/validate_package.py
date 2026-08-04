@@ -26,7 +26,12 @@ sys.path.insert(0, str(STATIC_VERSION_HELPER_DIR))
 from static_version_contract import (  # noqa: E402
     validate_static_version_declaration,
 )
-VERSION = "1.4.1"
+from package_layout_contract import (  # noqa: E402
+    is_safe_relative_package_path,
+    normalize_package_path,
+    schema_version_is_supported,
+)
+VERSION = "1.5.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -42,10 +47,10 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 CONTROLLED_WORKFLOW_MARKERS = (
-    "material-review/state/v3",
-    "material-review/coverage-plan/v2",
-    "material-review/candidate-set/v3",
-    "material-review/candidates-normalized/v3",
+    "material-review/state/v4",
+    "material-review/coverage-plan/v3",
+    "material-review/candidate-set/v4",
+    "material-review/candidates-normalized/v4",
     "change_units",
     "review_obligations",
     "assignment_id",
@@ -115,6 +120,12 @@ EVALUATOR_ASSET_ALLOWLIST_END = "<!-- evaluator-asset-allowlist:end -->"
 EVALUATOR_NO_FALLBACK = (
     "Do not search alternate directories, fall back to skill-relative resolution, "
     "or use parent traversal from the skill directory."
+)
+EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_START = (
+    "<!-- evaluator-fixture-object-format-contract:start"
+)
+EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_END = (
+    "evaluator-fixture-object-format-contract:end -->"
 )
 EVALUATOR_DISPATCH_CONTRACT_START = "<!-- evaluator-dispatch-contract:start"
 EVALUATOR_DISPATCH_CONTRACT_END = "evaluator-dispatch-contract:end -->"
@@ -417,18 +428,7 @@ def read_bounded_archive_member(
 
 
 def normalize_layout_path(value: object, label: str) -> str:
-    if not isinstance(value, str) or not value or "\\" in value:
-        raise ValueError(f"unsafe layout {label}: {value!r}")
-    path = PurePosixPath(value)
-    normalized = path.as_posix()
-    if (
-        path.is_absolute()
-        or ".." in path.parts
-        or normalized in {"", "."}
-        or normalized != value
-    ):
-        raise ValueError(f"unsafe layout {label}: {value}")
-    return normalized
+    return normalize_package_path(value, f"layout {label}")
 
 
 def load_layout_manifest(
@@ -444,7 +444,9 @@ def load_layout_manifest(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         fail(errors, f"invalid package layout manifest: {exc}")
         return None
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+    if not isinstance(manifest, dict) or not schema_version_is_supported(
+        manifest.get("schema_version")
+    ):
         fail(errors, "package layout manifest schema_version must be 1")
         return None
     layouts = manifest.get("layouts")
@@ -988,6 +990,37 @@ def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
         resolved_asset = asset_path.resolve()
         if resolved_asset != resolved_root and resolved_root not in resolved_asset.parents:
             fail(errors, "maintainer evaluator asset path escapes the repository root")
+
+    object_format_contract = parse_evaluator_contract(
+        text,
+        EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_START,
+        EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_END,
+        errors,
+        "fixture object-format contract",
+    )
+    if object_format_contract is None:
+        return
+    if object_format_contract.get("initialization") != "git init --object-format=sha1":
+        fail(
+            errors,
+            "maintainer evaluator must initialize fixture repositories as SHA-1",
+        )
+    if object_format_contract.get("attestation") != "git rev-parse --show-object-format":
+        fail(errors, "maintainer evaluator must attest the fixture object format")
+    if (
+        object_format_contract.get("required_format") != "sha1"
+        or object_format_contract.get("attestation_timing")
+        != "before-add-commit-or-dispatch"
+    ):
+        fail(
+            errors,
+            "maintainer evaluator must attest SHA-1 before fixture mutation or dispatch",
+        )
+    if (
+        object_format_contract.get("case") != "missed-contracts"
+        or object_format_contract.get("failure") != "hard-stop-no-fallback"
+    ):
+        fail(errors, "maintainer evaluator fixture object-format failure must fail closed")
 
 
 def parse_evaluator_contract(
@@ -1648,7 +1681,7 @@ def check_zip(
                 fail(errors, f"{path.name}: duplicate archive entries")
             for raw_name, canonical_name in archive_entries:
                 rel = PurePosixPath(canonical_name)
-                if rel.is_absolute() or ".." in rel.parts:
+                if not is_safe_relative_package_path(raw_name):
                     archive_paths_safe = False
                     fail(errors, f"{path.name}: unsafe archive path {raw_name}")
                 if any(part in FORBIDDEN_PARTS for part in rel.parts) or rel.suffix in FORBIDDEN_SUFFIXES:

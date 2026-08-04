@@ -4,6 +4,7 @@ import contextlib
 import copy
 import hashlib
 import importlib.util
+import inspect
 import io
 import json
 import re
@@ -22,6 +23,8 @@ CONTROLLER_1_2_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewct
 CONTROLLER_1_2_COMPAT_SHA256 = "67460c72d04a23758dc94d6d336a6c0884b8b5e3cf4dd4d1d8d544c153abdac2"
 CONTROLLER_1_3_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewctl_1_3_compat.py"
 CONTROLLER_1_3_COMPAT_SHA256 = "9e80034e8dcbfbe31cc576f03ed855f04ce3007d97ac0dbfbc66ad71c47cf28f"
+CONTROLLER_1_4_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewctl_1_4_compat.py"
+CONTROLLER_1_4_COMPAT_SHA256 = "93ddef8c5c712a7426acf4ab0307a4f62824f68a924cc76ad9ddd2f3245b7280"
 SPEC = importlib.util.spec_from_file_location("material_reviewctl", SCRIPT)
 assert SPEC and SPEC.loader
 reviewctl = importlib.util.module_from_spec(SPEC)
@@ -124,6 +127,20 @@ class ReviewCtlTest(unittest.TestCase):
             [
                 sys.executable,
                 str(CONTROLLER_1_3_COMPAT),
+                "--run-dir",
+                str(self.run_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def make_run_state_v3_with_frozen_1_4_fixture(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CONTROLLER_1_4_COMPAT),
                 "--run-dir",
                 str(self.run_dir),
             ],
@@ -317,9 +334,10 @@ class ReviewCtlTest(unittest.TestCase):
                     }
                 )
         return {
-            "schema_version": "material-review/coverage-plan/v2",
+            "schema_version": "material-review/coverage-plan/v3",
             "scope_hash": scope_hash,
             "workflow_profile": "material_review",
+            "depth": "auto",
             "change_units": [
                 {
                     "unit_id": "unit-001",
@@ -334,6 +352,26 @@ class ReviewCtlTest(unittest.TestCase):
                             "rationale": "This unit does not alter that controlled boundary.",
                         }
                         for code in sorted(controlled_risks - risk_codes)
+                    ],
+                    "specialist_decisions": [
+                        {
+                            "lens_id": lens_id,
+                            "decision": "rejected",
+                            "basis": "behavior_evidence",
+                            "evidence": [
+                                f"The fixture behavior does not trigger {lens_id}."
+                            ],
+                        }
+                        for lens_id in (
+                            "security_privacy",
+                            "reliability",
+                            "api_contract",
+                            "migration_deployment",
+                            "concurrency",
+                            "performance",
+                            "documentation",
+                            "architecture_simplification",
+                        )
                     ],
                 }
             ],
@@ -441,7 +479,7 @@ class ReviewCtlTest(unittest.TestCase):
         findings: list[dict] | None = None,
     ) -> dict:
         payload = {
-            "schema_version": "material-review/candidate-set/v3",
+            "schema_version": "material-review/candidate-set/v4",
             "scope_hash": scope_hash,
             "coverage_plan_hash": coverage_plan_hash,
             "coverage_context_hash": coverage_context_hash,
@@ -474,6 +512,10 @@ class ReviewCtlTest(unittest.TestCase):
                 }
                 for check_code in obligation["required_checks"]
             ]
+        elif assignment["assignment_kind"] == "specialist":
+            for field in ("unit_ids", "primary_paths", "context_paths"):
+                payload[field] = assignment[field]
+            payload["coverage"]["files_reviewed"] = assignment["primary_paths"]
         return payload
 
     def candidate_paths_for_coverage_v3(
@@ -1195,7 +1237,7 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
 
-    def test_boundary_violation_is_rejected_and_checkpoint_restores(self) -> None:
+    def test_boundary_violation_is_rejected_and_manual_rollback_preserves_it(self) -> None:
         self.approve_and_plan()
         self.run_tool("begin-fix", "--repo-root", str(self.repo), "--run-id", self.run_id)
         self.run_tool(
@@ -1207,9 +1249,12 @@ class ReviewCtlTest(unittest.TestCase):
             "--finding",
             "F001",
         )
-        original_test = (self.repo / "test_calc.py").read_text(encoding="utf-8")
-        (self.repo / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
-        (self.repo / "test_calc.py").write_text("raise RuntimeError('unapproved')\n", encoding="utf-8")
+        attempted_fix = "def add(a, b):\n    return a + b\n"
+        unapproved_change = "raise RuntimeError('unapproved')\n"
+        (self.repo / "calc.py").write_text(attempted_fix, encoding="utf-8")
+        (self.repo / "test_calc.py").write_text(
+            unapproved_change, encoding="utf-8"
+        )
         self.run_tool(
             "finish-finding",
             "--repo-root",
@@ -1224,7 +1269,7 @@ class ReviewCtlTest(unittest.TestCase):
             "Bad attempt.",
             expected=2,
         )
-        self.run_tool(
+        _, stderr = self.run_tool(
             "rollback-finding",
             "--repo-root",
             str(self.repo),
@@ -1234,9 +1279,20 @@ class ReviewCtlTest(unittest.TestCase):
             "F001",
             "--reason",
             "Unapproved test file changed.",
+            expected=2,
         )
-        self.assertEqual((self.repo / "calc.py").read_text(encoding="utf-8"), "def add(a, b):\n    return a - b\n")
-        self.assertEqual((self.repo / "test_calc.py").read_text(encoding="utf-8"), original_test)
+        self.assertIn("not authorized for automatic recovery", stderr)
+        self.assertEqual(
+            (self.repo / "calc.py").read_text(encoding="utf-8"), attempted_fix
+        )
+        self.assertEqual(
+            (self.repo / "test_calc.py").read_text(encoding="utf-8"),
+            unapproved_change,
+        )
+        active = self.load("state.json")["active_finding"]
+        self.assertEqual(active["finding_id"], "F001")
+        checkpoint_dir = self.run_dir / active["checkpoint"]
+        self.assertTrue((checkpoint_dir / "recovery-conflict.json").is_file())
 
     def test_approved_test_cannot_silently_mutate_an_allowed_path(self) -> None:
         mutation_command = "printf 'def add(a, b):\\n    return 999\\n' > calc.py"
@@ -1450,7 +1506,7 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse(result["human_recovery_required"])
         self.assertIsNone(result["recovery_error"])
         self.assertIn("HEAD", result["control_mutations_by_test"])
-        self.assertIn("local branch refs", result["control_mutations_by_test"])
+        self.assertIn("refs namespace", result["control_mutations_by_test"])
         self.assertEqual(state["finding_status"]["F001"]["history"], history_before)
         self.assertEqual(
             state["finding_status"]["F001"]["attempts"],
@@ -1472,12 +1528,13 @@ class ReviewCtlTest(unittest.TestCase):
                     self.git("switch", "-q", "--detach", "HEAD")
                 else:
                     self.git("add", "calc.py")
-                if mutation != "index-only":
-                    with self.assertRaises(reviewctl.ReviewError):
-                        reviewctl.restore_checkpoint(self.repo, checkpoint_dir)
-                restored = reviewctl.restore_refresh_checkpoint(
-                    self.repo, checkpoint_dir
+                expected_post = reviewctl.repository_authority(self.repo)
+                restored_authority = reviewctl.restore_checkpoint(
+                    self.repo,
+                    checkpoint_dir,
+                    expected_post=expected_post,
                 )
+                restored = restored_authority["identity"]["workspace_guard"]
                 self.assertEqual(
                     reviewctl.current_head_attachment(self.repo),
                     checkpoint["head_attachment"],
@@ -1498,7 +1555,11 @@ class ReviewCtlTest(unittest.TestCase):
             self.repo, detached_checkpoint_dir, ["calc.py"]
         )
         self.git("switch", "-q", saved_branch)
-        reviewctl.restore_refresh_checkpoint(self.repo, detached_checkpoint_dir)
+        reviewctl.restore_checkpoint(
+            self.repo,
+            detached_checkpoint_dir,
+            expected_post=reviewctl.repository_authority(self.repo),
+        )
         self.assertIsNone(reviewctl.current_head_attachment(self.repo))
         self.assertEqual(
             reviewctl.resolve_commit(self.repo, "HEAD"), detached_checkpoint["head_sha"]
@@ -1513,7 +1574,11 @@ class ReviewCtlTest(unittest.TestCase):
         corrupted["head_attachment"] = "refs/heads/forged"
         corrupted_path.write_text(json.dumps(corrupted), encoding="utf-8")
         with self.assertRaisesRegex(reviewctl.ReviewError, "embedded hash"):
-            reviewctl.restore_refresh_checkpoint(self.repo, corrupted_dir)
+            reviewctl.restore_checkpoint(
+                self.repo,
+                corrupted_dir,
+                expected_post=reviewctl.repository_authority(self.repo),
+            )
 
         self.tearDown()
         self.setUp()
@@ -1522,6 +1587,7 @@ class ReviewCtlTest(unittest.TestCase):
         original_run_process = reviewctl.run_process
         self.git("add", "calc.py")
         self.git("commit", "-qm", "test mutation")
+        expected_post = reviewctl.repository_authority(self.repo)
         injected = False
 
         def inject_ref_conflict(arguments, **kwargs):
@@ -1536,7 +1602,11 @@ class ReviewCtlTest(unittest.TestCase):
 
         with mock.patch.object(reviewctl, "run_process", side_effect=inject_ref_conflict):
             with self.assertRaises(reviewctl.ReviewError):
-                reviewctl.restore_refresh_checkpoint(self.repo, conflict_dir)
+                reviewctl.restore_checkpoint(
+                    self.repo,
+                    conflict_dir,
+                    expected_post=expected_post,
+                )
         self.assertTrue(injected)
 
         self.tearDown()
@@ -1544,7 +1614,7 @@ class ReviewCtlTest(unittest.TestCase):
         self.reach_fixed_stale_final_state(test_command=commit_command)
         with mock.patch.object(
             reviewctl,
-            "restore_refresh_checkpoint",
+            "restore_checkpoint_v4",
             side_effect=reviewctl.ReviewError("compare-and-swap conflict"),
         ):
             _, stderr = self.run_tool(
@@ -1796,14 +1866,15 @@ class ReviewCtlTest(unittest.TestCase):
                 fixed_attempt=attempt_n_plus_one,
             )
 
-    def test_marked_state_v1_run_can_refresh_and_complete_without_migration(self) -> None:
-        scope_hash, plan = self.reach_fixed_stale_final_state()
+    def test_marked_state_v1_run_is_restart_only_without_migration(self) -> None:
+        self.reach_fixed_stale_final_state()
         state_path = self.run_dir / "state.json"
         state = self.load("state.json")
         state["schema_version"] = "material-review/state/v1"
         state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        state_before = state_path.read_bytes()
 
-        self.run_tool(
+        _, stderr = self.run_tool(
             "refresh-finding-test",
             "--repo-root",
             str(self.repo),
@@ -1813,53 +1884,10 @@ class ReviewCtlTest(unittest.TestCase):
             "F001",
             "--test",
             "unit-regression",
+            expected=2,
         )
-        self.run_tool(
-            "prepare-verification",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-        )
-        fix_summary = self.load("fix-summary.json")
-        verification = {
-            "schema_version": "material-review/verification/v1",
-            "scope_hash": scope_hash,
-            "plan_hash": plan["plan_hash"],
-            "fix_summary_hash": fix_summary["fix_summary_hash"],
-            "verifier_id": "postfix",
-            "independence_group": "model-c",
-            "mode": "independent",
-            "finding_results": [
-                {
-                    "finding_id": "F001",
-                    "status": "resolved",
-                    "root_cause_resolved": True,
-                    "reason": "The final shared-file state retains the approved repair.",
-                    "evidence_checked": ["calc.py:2 -- return a + b"],
-                    "tests_checked": ["unit-regression"],
-                }
-            ],
-            "regressions": [],
-            "record_only_observations": [],
-            "verdict": "pass",
-            "summary": "The approved finding is resolved at the final shared-file state.",
-            "limitations": [],
-        }
-        verification_path = self.write_json("state-v1-verification.json", verification)
-        self.run_tool(
-            "record-verification",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(verification_path),
-        )
-
-        completed = self.load("state.json")
-        self.assertEqual(completed["schema_version"], "material-review/state/v1")
-        self.assertEqual(completed["phase"], reviewctl.PHASE_COMPLETE)
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertEqual(state_path.read_bytes(), state_before)
 
     @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks unavailable")
     def test_checkpoint_preserves_final_symlink_and_rejects_parent_escape(self) -> None:
@@ -1877,7 +1905,11 @@ class ReviewCtlTest(unittest.TestCase):
         reviewctl.create_checkpoint(self.repo, checkpoint, ["link.txt", "target.txt"])
         link.unlink()
         link.write_text("not a link\n", encoding="utf-8")
-        reviewctl.restore_checkpoint(self.repo, checkpoint)
+        reviewctl.restore_checkpoint(
+            self.repo,
+            checkpoint,
+            expected_post=reviewctl.repository_authority(self.repo),
+        )
         self.assertTrue(link.is_symlink())
         self.assertEqual(link.readlink(), Path("target.txt"))
 
@@ -2086,7 +2118,7 @@ class ReviewCtlTest(unittest.TestCase):
             bundle = self.load("candidates.json")
             self.assertEqual(
                 bundle["schema_version"],
-                "material-review/candidates-normalized/v3",
+                "material-review/candidates-normalized/v4",
             )
             self.assertEqual(
                 [candidate.get("lens_id") for candidate in bundle["candidates"]],
@@ -2234,7 +2266,7 @@ class ReviewCtlTest(unittest.TestCase):
                 )
                 expected_cause = (
                     "normalized candidates schema_version does not match the active "
-                    "workflow profile: expected material-review/candidates-normalized/v3, "
+                    "workflow profile: expected material-review/candidates-normalized/v4, "
                     "got material-review/candidates-normalized/v1"
                     if name == "old-normalized-version"
                     else "normalized candidates.candidates[0] identity does not match its validated assignment source"
@@ -2714,7 +2746,11 @@ class ReviewCtlTest(unittest.TestCase):
         modified = "def add(a, b):\n    return 777\n"
         (self.repo / "calc.py").write_text(modified, encoding="utf-8")
         with self.assertRaises(reviewctl.ReviewError):
-            reviewctl.restore_checkpoint(self.repo, checkpoint)
+            reviewctl.restore_checkpoint(
+                self.repo,
+                checkpoint,
+                expected_post=reviewctl.repository_authority(self.repo),
+            )
         self.assertEqual((self.repo / "calc.py").read_text(encoding="utf-8"), modified)
 
     def test_plan_rejects_unsafe_test_identifier(self) -> None:
@@ -3063,13 +3099,13 @@ class ReviewCtlTest(unittest.TestCase):
                 self.tearDown()
                 self.setUp()
 
-    def test_v2_coverage_and_v3_candidate_schemas_share_canonical_paths(self) -> None:
+    def test_v3_coverage_and_v4_candidate_schemas_share_canonical_paths(self) -> None:
         schema_root = Path(__file__).resolve().parents[1] / "schemas"
         coverage_schema = json.loads(
-            (schema_root / "coverage-plan-v2.schema.json").read_text(encoding="utf-8")
+            (schema_root / "coverage-plan-v3.schema.json").read_text(encoding="utf-8")
         )
         candidate_schema = json.loads(
-            (schema_root / "candidate-set-v3.schema.json").read_text(encoding="utf-8")
+            (schema_root / "candidate-set-v4.schema.json").read_text(encoding="utf-8")
         )
         path_definition = coverage_schema["$defs"]["repositoryRelativeGitPath"]
         self.assertEqual(
@@ -3089,11 +3125,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(
             coverage_schema["properties"]["schema_version"]["const"],
-            "material-review/coverage-plan/v2",
+            "material-review/coverage-plan/v3",
         )
         self.assertEqual(
             candidate_schema["properties"]["schema_version"]["const"],
-            "material-review/candidate-set/v3",
+            "material-review/candidate-set/v4",
         )
 
         accepted = (
@@ -3974,7 +4010,7 @@ class ReviewCtlTest(unittest.TestCase):
         schema_path = (
             Path(__file__).resolve().parents[1]
             / "schemas"
-            / "candidate-set-v3.schema.json"
+            / "candidate-set-v4.schema.json"
         )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertIs(schema["additionalProperties"], False)
@@ -3998,11 +4034,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(
             reviewctl.CANDIDATE_SCHEMA_REVIEW,
-            "material-review/candidate-set/v3",
+            "material-review/candidate-set/v4",
         )
         self.assertEqual(
             schema["properties"]["schema_version"]["const"],
-            "material-review/candidate-set/v3",
+            "material-review/candidate-set/v4",
         )
         self.assertEqual(
             schema["properties"]["coverage_plan_hash"],
@@ -4609,12 +4645,636 @@ class ReviewCtlTest(unittest.TestCase):
                 )
                 self.assertNotIn("Run predates required coverage", stderr)
 
-    def test_new_review_run_uses_state_v3(self) -> None:
+    def test_new_review_run_uses_state_v4(self) -> None:
         self.init()
         state = self.load("state.json")
-        self.assertEqual(state["schema_version"], "material-review/state/v3")
+        self.assertEqual(state["schema_version"], "material-review/state/v4")
         self.assertEqual(state["workflow_profile"], "material_review")
         self.assertIs(state["coverage_required"], True)
+
+    def test_state_v3_review_is_restart_only_after_state_v4_release(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(CONTROLLER_1_4_COMPAT.read_bytes()).hexdigest(),
+            CONTROLLER_1_4_COMPAT_SHA256,
+        )
+        scope_hash = self.init()
+        self.make_run_state_v3_with_frozen_1_4_fixture()
+        state = self.load("state.json")
+        self.assertEqual(state["schema_version"], "material-review/state/v3")
+        self.assertEqual(
+            reviewctl.classify_state_contract(state),
+            "legacy_material_review_v3",
+        )
+
+        self.run_tool(
+            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
+        )
+        self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        coverage = self.write_json("state-v3-coverage.json", self.coverage_plan(scope_hash))
+        _, stderr = self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(coverage),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+
+        for command in (
+            ("rollback-finding", "--finding", "F001", "--reason", "Bounded legacy check."),
+            ("abort-fixes", "--reason", "Bounded legacy check."),
+        ):
+            with self.subTest(command=command[0]):
+                _, stderr = self.run_tool(
+                    command[0],
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    *command[1:],
+                    expected=2,
+                )
+                self.assertNotIn("Run predates required coverage", stderr)
+
+    def test_specialist_provenance_survives_normalization(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan_v2(scope_hash, risk_code=None)
+        unit = plan["change_units"][0]
+        specialist_decision = next(
+            item
+            for item in unit["specialist_decisions"]
+            if item["lens_id"] == "security_privacy"
+        )
+        specialist_decision.update(
+            {
+                "decision": "selected",
+                "basis": "ambiguous",
+                "evidence": ["The trust boundary is ambiguous in the changed behavior."],
+            }
+        )
+        plan["assignments"].append(
+            {
+                "assignment_id": "specialist-security-privacy",
+                "assignment_kind": "specialist",
+                "lens_id": "security_privacy",
+                "reviewer_id": "security-reviewer",
+                "independence_group": "model-b",
+                "review_mode": "subagent",
+                "unit_ids": ["unit-001"],
+                "primary_paths": unit["primary_paths"],
+                "context_paths": unit["context_paths"],
+            }
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(self.write_json("specialist-coverage.json", plan)),
+        )
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage_v3(scope_hash))
+        bundle = self.load("candidates.json")
+        reviewer_set = next(
+            item
+            for item in bundle["reviewer_sets"]
+            if item["assignment_id"] == "specialist-security-privacy"
+        )
+        self.assertEqual(reviewer_set["unit_ids"], ["unit-001"])
+        self.assertEqual(reviewer_set["primary_paths"], ["calc.py"])
+        self.assertEqual(reviewer_set["context_paths"], [])
+
+    def test_side_aware_snapshot_evidence_resolution(self) -> None:
+        source_root = self.root / "snapshot-evidence"
+
+        def frozen_state(relative: str, data: bytes) -> dict:
+            destination = source_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+            return {
+                "type": "file",
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+                "binary": False,
+                "snapshot_path": relative,
+            }
+
+        def entry(
+            *,
+            status: str,
+            path: str,
+            old_path: str | None,
+            baseline: bytes | None,
+            comparison: bytes | None,
+        ) -> dict:
+            baseline_state = (
+                {"type": "missing"}
+                if baseline is None
+                else frozen_state(f"sources/baseline/{old_path or path}", baseline)
+            )
+            comparison_state = (
+                {"type": "missing"}
+                if comparison is None
+                else frozen_state(f"sources/comparison/{path}", comparison)
+            )
+            return {
+                "status": status,
+                "path": path,
+                "old_path": old_path,
+                "tracked": True,
+                "baseline_state": baseline_state,
+                "comparison_state": comparison_state,
+            }
+
+        common_identity = {
+            "baseline_sha": self.git("rev-parse", "HEAD"),
+            "comparison_kind": "working-tree",
+        }
+
+        rename_identity = {
+            **common_identity,
+            "files": [
+                entry(
+                    status="R100",
+                    path="new.py",
+                    old_path="old.py",
+                    baseline=b"original\n",
+                    comparison=b"original\n",
+                )
+            ],
+        }
+        self.assertEqual(
+            reviewctl.read_snapshot_source(
+                source_root, rename_identity, "baseline", "old.py", self.repo
+            ),
+            (reviewctl.SNAPSHOT_MATCHED_BYTES, b"original\n"),
+        )
+        self.assertEqual(
+            reviewctl.read_snapshot_source(
+                source_root, rename_identity, "comparison", "new.py", self.repo
+            ),
+            (reviewctl.SNAPSHOT_MATCHED_BYTES, b"original\n"),
+        )
+        self.assertEqual(
+            reviewctl.read_snapshot_source(
+                source_root, rename_identity, "comparison", "old.py", self.repo
+            ),
+            (reviewctl.SNAPSHOT_NO_MATCH, None),
+        )
+
+        edited_copy_identity = {
+            **common_identity,
+            "files": [
+                entry(
+                    status="R087",
+                    path="renamed.py",
+                    old_path="before.py",
+                    baseline=b"before\n",
+                    comparison=b"after\n",
+                ),
+                entry(
+                    status="C100",
+                    path="copy.py",
+                    old_path="source.py",
+                    baseline=b"copied\n",
+                    comparison=b"copied\n",
+                ),
+            ],
+        }
+        for side, path, expected in (
+            ("baseline", "before.py", b"before\n"),
+            ("comparison", "renamed.py", b"after\n"),
+            ("baseline", "source.py", b"copied\n"),
+            ("comparison", "copy.py", b"copied\n"),
+        ):
+            with self.subTest(side=side, path=path):
+                self.assertEqual(
+                    reviewctl.read_snapshot_source(
+                        source_root, edited_copy_identity, side, path, self.repo
+                    ),
+                    (reviewctl.SNAPSHOT_MATCHED_BYTES, expected),
+                )
+
+        recreated_identity = {
+            **common_identity,
+            "files": [
+                entry(
+                    status="R100",
+                    path="renamed.py",
+                    old_path="old.py",
+                    baseline=b"historical\n",
+                    comparison=b"historical\n",
+                ),
+                entry(
+                    status="A",
+                    path="old.py",
+                    old_path=None,
+                    baseline=None,
+                    comparison=b"recreated\n",
+                ),
+            ],
+        }
+        self.assertEqual(
+            reviewctl.read_snapshot_source(
+                source_root, recreated_identity, "baseline", "old.py", self.repo
+            ),
+            (reviewctl.SNAPSHOT_MATCHED_BYTES, b"historical\n"),
+        )
+        self.assertEqual(
+            reviewctl.read_snapshot_source(
+                source_root, recreated_identity, "comparison", "old.py", self.repo
+            ),
+            (reviewctl.SNAPSHOT_MATCHED_BYTES, b"recreated\n"),
+        )
+
+        deletion_identity = {
+            **common_identity,
+            "files": [
+                entry(
+                    status="D",
+                    path="deleted.py",
+                    old_path=None,
+                    baseline=b"deleted evidence\n",
+                    comparison=None,
+                )
+            ],
+        }
+        self.assertEqual(
+            reviewctl.read_snapshot_source(
+                source_root, deletion_identity, "comparison", "deleted.py", self.repo
+            ),
+            (reviewctl.SNAPSHOT_MATCHED_MISSING, None),
+        )
+        context_data = b"context evidence\n"
+        context_path = source_root / "coverage-context" / "sources" / "context.py"
+        context_path.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_bytes(context_data)
+        coverage_context = {
+            "sources": [
+                {
+                    "path": "context.py",
+                    "sha256": hashlib.sha256(context_data).hexdigest(),
+                    "size": len(context_data),
+                    "snapshot_path": "coverage-context/sources/context.py",
+                },
+                {
+                    "path": "deleted.py",
+                    "sha256": hashlib.sha256(context_data).hexdigest(),
+                    "size": len(context_data),
+                    "snapshot_path": "coverage-context/sources/context.py",
+                },
+            ]
+        }
+        reviewctl.verify_evidence_quote(
+            repo=self.repo,
+            run_dir=source_root,
+            scope_identity=deletion_identity,
+            file="context.py",
+            line_start=1,
+            line_end=1,
+            side="comparison",
+            quote="context evidence",
+            coverage_context=coverage_context,
+        )
+        with self.assertRaisesRegex(
+            reviewctl.ReviewError,
+            "Evidence source is missing for comparison:deleted.py",
+        ):
+            reviewctl.verify_evidence_quote(
+                repo=self.repo,
+                run_dir=source_root,
+                scope_identity=deletion_identity,
+                file="deleted.py",
+                line_start=1,
+                line_end=1,
+                side="comparison",
+                quote="context evidence",
+                coverage_context=coverage_context,
+            )
+
+        tampered_path = source_root / rename_identity["files"][0]["baseline_state"]["snapshot_path"]
+        tampered_path.write_bytes(b"tampered\n")
+        with self.assertRaisesRegex(reviewctl.ReviewError, "content hash check"):
+            reviewctl.read_snapshot_source(
+                source_root, rename_identity, "baseline", "old.py", self.repo
+            )
+
+    def test_v4_restore_fails_closed_on_concurrent_repository_authority_drift(self) -> None:
+        for drift in ("ref", "index", "worktree"):
+            with self.subTest(drift=drift):
+                checkpoint_dir = self.root / f"v4-cas-{drift}"
+                reviewctl.create_checkpoint(self.repo, checkpoint_dir, ["calc.py"])
+                (self.repo / "calc.py").write_text(
+                    "def add(a, b):\n    return 777\n", encoding="utf-8"
+                )
+                expected_post = reviewctl.repository_authority(self.repo)
+                if drift == "ref":
+                    self.git("branch", "concurrent-ref")
+                elif drift == "index":
+                    self.git("add", "calc.py")
+                else:
+                    (self.repo / "calc.py").write_text(
+                        "def add(a, b):\n    return 888\n", encoding="utf-8"
+                    )
+                authority_after_drift = reviewctl.repository_authority(self.repo)
+                source_after_drift = (self.repo / "calc.py").read_bytes()
+
+                with self.assertRaisesRegex(
+                    reviewctl.ReviewError,
+                    "Repository authority changed after the recovery observation",
+                ):
+                    reviewctl.restore_checkpoint(
+                        self.repo,
+                        checkpoint_dir,
+                        expected_post=expected_post,
+                    )
+
+                self.assertEqual(
+                    reviewctl.repository_authority(self.repo), authority_after_drift
+                )
+                self.assertEqual(
+                    (self.repo / "calc.py").read_bytes(), source_after_drift
+                )
+                conflict = json.loads(
+                    (checkpoint_dir / "recovery-conflict.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(conflict["expected_post"], expected_post)
+                self.assertEqual(conflict["observed_current"], authority_after_drift)
+                self.tearDown()
+                self.setUp()
+
+    def test_manual_recovery_observation_rejects_every_unauthorized_drift_kind(self) -> None:
+        for drift in ("branch", "ref", "index", "worktree"):
+            with self.subTest(drift=drift):
+                checkpoint_dir = self.root / f"manual-recovery-{drift}"
+                reviewctl.create_checkpoint(self.repo, checkpoint_dir, ["calc.py"])
+                (self.repo / "calc.py").write_text(
+                    "def add(a, b):\n    return 777\n", encoding="utf-8"
+                )
+                if drift == "branch":
+                    self.git("switch", "-qc", "concurrent-branch")
+                elif drift == "ref":
+                    self.git("branch", "concurrent-ref")
+                elif drift == "index":
+                    self.git("add", "calc.py")
+                else:
+                    (self.repo / "test_calc.py").write_text(
+                        "# concurrent user edit\n", encoding="utf-8"
+                    )
+                authority_before = reviewctl.repository_authority(self.repo)
+
+                with self.assertRaisesRegex(
+                    reviewctl.ReviewError, "not authorized for automatic recovery"
+                ):
+                    reviewctl.manual_recovery_observation(
+                        self.repo,
+                        checkpoint_dir,
+                        allowed_paths=["calc.py"],
+                        context="The repair layer",
+                    )
+
+                self.assertEqual(
+                    reviewctl.repository_authority(self.repo), authority_before
+                )
+                conflict = json.loads(
+                    (checkpoint_dir / "recovery-conflict.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(conflict["observed_current"], authority_before)
+                self.tearDown()
+                self.setUp()
+
+    def test_manual_recovery_callers_preserve_preexisting_unauthorized_drift(self) -> None:
+        for command in ("rollback-finding", "abort-fixes"):
+            with self.subTest(command=command):
+                self.reach_fixing()
+                self.run_tool(
+                    "start-finding",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--finding",
+                    "F001",
+                )
+                (self.repo / "calc.py").write_text(
+                    "def add(a, b):\n    return a + b\n", encoding="utf-8"
+                )
+                (self.repo / "test_calc.py").write_text(
+                    "# concurrent user edit\n", encoding="utf-8"
+                )
+
+                authority_before = reviewctl.repository_authority(self.repo)
+                state_before = (self.run_dir / "state.json").read_bytes()
+                state = self.load("state.json")
+                if command == "rollback-finding":
+                    checkpoint_dir = self.run_dir / state["active_finding"]["checkpoint"]
+                    arguments = (
+                        command,
+                        "--finding",
+                        "F001",
+                        "--reason",
+                        "Reject the attempt.",
+                    )
+                else:
+                    checkpoint_dir = self.run_dir / state["pre_fix_checkpoint"]
+                    arguments = (command, "--reason", "Abort the repair layer.")
+
+                _, stderr = self.run_tool(
+                    *arguments,
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    expected=2,
+                )
+
+                self.assertIn("not authorized for automatic recovery", stderr)
+                self.assertEqual(
+                    reviewctl.repository_authority(self.repo), authority_before
+                )
+                self.assertEqual(
+                    (self.run_dir / "state.json").read_bytes(), state_before
+                )
+                self.assertTrue((checkpoint_dir / "recovery-conflict.json").is_file())
+                self.tearDown()
+                self.setUp()
+
+    def test_manual_recovery_callers_restore_approved_path_deltas(self) -> None:
+        for command in ("rollback-finding", "abort-fixes"):
+            with self.subTest(command=command):
+                original = (self.repo / "calc.py").read_bytes()
+                self.reach_fixing()
+                self.run_tool(
+                    "start-finding",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--finding",
+                    "F001",
+                )
+                (self.repo / "calc.py").write_text(
+                    "def add(a, b):\n    return 777\n", encoding="utf-8"
+                )
+                if command == "rollback-finding":
+                    arguments = (
+                        command,
+                        "--finding",
+                        "F001",
+                        "--reason",
+                        "Reject the approved-path attempt.",
+                    )
+                else:
+                    arguments = (command, "--reason", "Abort the repair layer.")
+
+                self.run_tool(
+                    *arguments,
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                )
+
+                self.assertEqual((self.repo / "calc.py").read_bytes(), original)
+                self.tearDown()
+                self.setUp()
+
+    def test_v4_restore_records_failure_after_reattaching_to_missing_branch(self) -> None:
+        checkpoint_dir = self.root / "v4-unborn-head-failure"
+        checkpoint = reviewctl.create_checkpoint(self.repo, checkpoint_dir, ["calc.py"])
+        saved_attachment = checkpoint["repository_authority"]["identity"][
+            "head_attachment"
+        ]
+        self.assertIsNotNone(saved_attachment)
+        saved_branch = str(saved_attachment).removeprefix("refs/heads/")
+        self.git("switch", "-qc", "recovery-other")
+        self.git("branch", "-D", saved_branch)
+        expected_post = reviewctl.repository_authority(self.repo)
+        original_run_process = reviewctl.run_process
+
+        def fail_ref_transaction(args, **kwargs):
+            if list(args) == ["git", "update-ref", "--stdin"]:
+                raise reviewctl.ReviewError("injected ref transaction failure")
+            return original_run_process(args, **kwargs)
+
+        with mock.patch.object(
+            reviewctl, "run_process", side_effect=fail_ref_transaction
+        ):
+            with self.assertRaisesRegex(
+                reviewctl.ReviewError, "Checkpoint recovery was incomplete"
+            ):
+                reviewctl.restore_checkpoint(
+                    self.repo,
+                    checkpoint_dir,
+                    expected_post=expected_post,
+                )
+
+        evidence = json.loads(
+            (checkpoint_dir / "recovery-failure.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("injected ref transaction failure", evidence["reason"])
+        self.assertTrue(evidence["observed_current"]["observation_incomplete"])
+        self.assertEqual(
+            evidence["observed_current"]["head_attachment"], saved_attachment
+        )
+
+    def test_v4_restore_covers_all_recovery_callers_and_legacy_boundary(self) -> None:
+        checkpoint_dir = self.root / "v4-complete-authority"
+        checkpoint = reviewctl.create_checkpoint(
+            self.repo, checkpoint_dir, ["calc.py", "test_calc.py"]
+        )
+        self.assertEqual(
+            checkpoint["schema_version"], "material-review/checkpoint/v4"
+        )
+        self.git("branch", "temporary-created")
+        self.git("branch", "temporary-moved")
+        self.git("branch", "-m", "temporary-moved", "temporary-renamed")
+        self.git("switch", "-qc", "temporary-attached")
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return 999\n", encoding="utf-8"
+        )
+        self.git("add", "calc.py")
+        self.git("commit", "-qm", "temporary recovery mutation")
+        (self.repo / "test_calc.py").write_text("mutated\n", encoding="utf-8")
+        expected_post = reviewctl.repository_authority(self.repo)
+        restored = reviewctl.restore_checkpoint(
+            self.repo,
+            checkpoint_dir,
+            expected_post=expected_post,
+        )
+        self.assertEqual(restored, checkpoint["repository_authority"])
+        self.assertEqual(
+            reviewctl.repository_authority(self.repo), checkpoint["repository_authority"]
+        )
+
+        saved_branch = reviewctl.current_branch(self.repo)
+        self.git("switch", "-q", "--detach", "HEAD")
+        detached_dir = self.root / "v4-detached-authority"
+        detached = reviewctl.create_checkpoint(self.repo, detached_dir, ["calc.py"])
+        self.git("switch", "-q", saved_branch)
+        detached_post = reviewctl.repository_authority(self.repo)
+        reviewctl.restore_checkpoint(
+            self.repo,
+            detached_dir,
+            expected_post=detached_post,
+        )
+        self.assertIsNone(reviewctl.current_head_attachment(self.repo))
+        self.assertEqual(
+            reviewctl.resolve_commit(self.repo, "HEAD"), detached["head_sha"]
+        )
+
+        self.tearDown()
+        self.setUp()
+        legacy_dir = self.root / "legacy-checkpoint"
+        reviewctl.create_checkpoint(self.repo, legacy_dir, ["calc.py"])
+        legacy_path = legacy_dir / "checkpoint.json"
+        legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+        for field in (
+            "schema_version",
+            "repository_authority",
+            "refs",
+            "head_attachment",
+            "local_head_refs",
+        ):
+            legacy.pop(field, None)
+        legacy["checkpoint_hash"] = reviewctl.canonical_hash(
+            {
+                key: value
+                for key, value in legacy.items()
+                if key not in {"created_at", "checkpoint_hash"}
+            }
+        )
+        legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+        (self.repo / "calc.py").write_text(
+            "def add(a, b):\n    return 333\n", encoding="utf-8"
+        )
+        restored_legacy = reviewctl.restore_checkpoint(self.repo, legacy_dir)
+        self.assertEqual(
+            restored_legacy["guard_hash"], legacy["workspace_guard"]["guard_hash"]
+        )
+
+        recovery_callers = (
+            reviewctl.command_run_test,
+            reviewctl.command_run_global_test,
+            reviewctl.command_refresh_finding_test,
+            reviewctl.command_rollback_finding,
+            reviewctl.command_abort_fixes,
+        )
+        for caller in recovery_callers:
+            with self.subTest(caller=caller.__name__):
+                source = inspect.getsource(caller)
+                self.assertIn("expected_post=", source)
+                self.assertNotIn("restore_refresh_checkpoint", source)
 
     def test_controller_state_compatibility_matrix(self) -> None:
         self.assertEqual(
@@ -4661,7 +5321,7 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse(downgrade_sentinel.exists())
         self.assertFalse((self.run_dir / "candidates.json").exists())
         self.assertEqual((self.run_dir / "state.json").read_bytes(), state_before_downgrade)
-        self.assertEqual(initial_state["schema_version"], "material-review/state/v3")
+        self.assertEqual(initial_state["schema_version"], "material-review/state/v4")
         self.assertIs(initial_state["coverage_required"], True)
         self.assertEqual(initial_state["workflow_profile"], "material_review")
 

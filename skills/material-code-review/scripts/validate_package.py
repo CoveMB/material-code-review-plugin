@@ -13,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from static_version_contract import (  # noqa: E402
     validate_static_version_declaration,
 )
-VERSION = "1.4.1"
+from package_layout_contract import (  # noqa: E402
+    normalize_package_path,
+    schema_version_is_supported,
+)
+VERSION = "1.5.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -29,10 +33,10 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 CONTROLLED_WORKFLOW_MARKERS = (
-    "material-review/state/v3",
-    "material-review/coverage-plan/v2",
-    "material-review/candidate-set/v3",
-    "material-review/candidates-normalized/v3",
+    "material-review/state/v4",
+    "material-review/coverage-plan/v3",
+    "material-review/candidate-set/v4",
+    "material-review/candidates-normalized/v4",
     "change_units",
     "review_obligations",
     "assignment_id",
@@ -61,18 +65,7 @@ MANIFEST_SOURCE = "skills/material-code-review/package-layouts.json"
 
 
 def normalize_layout_path(value: object, label: str) -> str:
-    if not isinstance(value, str) or not value or "\\" in value:
-        raise ValueError(f"unsafe layout {label}: {value!r}")
-    path = PurePosixPath(value)
-    normalized = path.as_posix()
-    if (
-        path.is_absolute()
-        or ".." in path.parts
-        or normalized in {"", "."}
-        or normalized != value
-    ):
-        raise ValueError(f"unsafe layout {label}: {value}")
-    return normalized
+    return normalize_package_path(value, f"layout {label}")
 
 
 def load_layout_contract(
@@ -102,7 +95,9 @@ def load_layout_contract(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"invalid package layout manifest: {exc}")
         return None
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+    if not isinstance(manifest, dict) or not schema_version_is_supported(
+        manifest.get("schema_version")
+    ):
         errors.append("package layout manifest schema_version must be 1")
         return None
     layouts = manifest.get("layouts")

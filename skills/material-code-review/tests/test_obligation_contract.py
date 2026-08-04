@@ -116,10 +116,29 @@ def make_plan(
         }
         for code in sorted(CONTROLLED_RISK_CODES - set(selected_codes))
     ]
+    specialist_decisions = [
+        {
+            "lens_id": lens_id,
+            "decision": "rejected",
+            "basis": "behavior_evidence",
+            "evidence": [f"The fixture behavior does not trigger {lens_id}."],
+        }
+        for lens_id in (
+            "security_privacy",
+            "reliability",
+            "api_contract",
+            "migration_deployment",
+            "concurrency",
+            "performance",
+            "documentation",
+            "architecture_simplification",
+        )
+    ]
     return {
-        "schema_version": "material-review/coverage-plan/v2",
+        "schema_version": "material-review/coverage-plan/v3",
         "scope_hash": "a" * 64,
         "workflow_profile": "material_review",
+        "depth": "auto",
         "change_units": [
             {
                 "unit_id": "unit-001",
@@ -129,6 +148,7 @@ def make_plan(
                 "risk_codes": selected_codes,
                 "selected_risk_rationale": selected,
                 "rejected_risk_rationale": rejected,
+                "specialist_decisions": specialist_decisions,
             }
         ],
         "review_obligations": obligations,
@@ -151,7 +171,10 @@ class ObligationContractTest(unittest.TestCase):
         )
         self.assertEqual(set(RISK_REQUIREMENTS), set(CONTROLLED_RISK_CODES))
         self.assertEqual(CORE_LENS_IDS, {"correctness", "standards_alignment", "test_adequacy"})
-        self.assertEqual(ASSIGNMENT_KINDS, {"core", "obligation", "supplemental"})
+        self.assertEqual(
+            ASSIGNMENT_KINDS,
+            {"core", "obligation", "supplemental", "specialist"},
+        )
         self.assertEqual(CHECK_OUTCOMES, {"pass", "finding_emitted", "blocked"})
         for requirement in RISK_REQUIREMENTS.values():
             self.assertTrue(requirement["required_lens"])
@@ -311,7 +334,7 @@ class ObligationContractTest(unittest.TestCase):
         )
         obligation = plan["review_obligations"][0]
         result = {
-            "schema_version": "material-review/candidate-set/v3",
+            "schema_version": "material-review/candidate-set/v4",
             "scope_hash": "a" * 64,
             "coverage_plan_hash": "b" * 64,
             "coverage_context_hash": "c" * 64,
@@ -380,9 +403,9 @@ class ObligationContractTest(unittest.TestCase):
             "blocked",
         )
 
-    def test_candidate_local_id_length_matches_v3_schema(self) -> None:
+    def test_candidate_local_id_length_matches_v4_schema(self) -> None:
         schema = json.loads(
-            (SKILL_ROOT / "schemas" / "candidate-set-v3.schema.json").read_text(
+            (SKILL_ROOT / "schemas" / "candidate-set-v4.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -403,7 +426,7 @@ class ObligationContractTest(unittest.TestCase):
 
         def result_with_local_id(local_id: str) -> dict:
             result = {
-                "schema_version": "material-review/candidate-set/v3",
+                "schema_version": "material-review/candidate-set/v4",
                 "scope_hash": "a" * 64,
                 "coverage_plan_hash": "b" * 64,
                 "coverage_context_hash": "c" * 64,
@@ -455,7 +478,7 @@ class ObligationContractTest(unittest.TestCase):
         )
         assignment = plan["assignments"][0]
         result = {
-            "schema_version": "material-review/candidate-set/v3",
+            "schema_version": "material-review/candidate-set/v4",
             "scope_hash": "a" * 64,
             "coverage_plan_hash": "b" * 64,
             "coverage_context_hash": "c" * 64,
@@ -485,11 +508,11 @@ class ObligationContractTest(unittest.TestCase):
     def test_new_schema_paths_match_runtime_path_language(self) -> None:
         schemas = [
             json.loads((SKILL_ROOT / "schemas" / name).read_text(encoding="utf-8"))
-            for name in ("coverage-plan-v2.schema.json", "candidate-set-v3.schema.json")
+            for name in ("coverage-plan-v3.schema.json", "candidate-set-v4.schema.json")
         ]
         self.assertEqual(
             [schema["$id"] for schema in schemas],
-            ["material-review/coverage-plan/v2", "material-review/candidate-set/v3"],
+            ["material-review/coverage-plan/v3", "material-review/candidate-set/v4"],
         )
         patterns = [schema["$defs"]["repositoryRelativeGitPath"]["pattern"] for schema in schemas]
         self.assertEqual(patterns[0], patterns[1])
@@ -515,6 +538,42 @@ class ObligationContractTest(unittest.TestCase):
         self.assertEqual(
             candidate_v3["$defs"]["finding"].get("allOf"),
             candidate_v2["properties"]["findings"]["items"]["allOf"],
+        )
+
+    def test_v3_coverage_and_v4_candidate_schemas_publish_specialist_contract(self) -> None:
+        coverage = json.loads(
+            (SKILL_ROOT / "schemas" / "coverage-plan-v3.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        candidate = json.loads(
+            (SKILL_ROOT / "schemas" / "candidate-set-v4.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertEqual(
+            coverage["properties"]["schema_version"]["const"],
+            "material-review/coverage-plan/v3",
+        )
+        self.assertEqual(
+            candidate["properties"]["schema_version"]["const"],
+            "material-review/candidate-set/v4",
+        )
+        self.assertIn("specialist", coverage["$defs"]["assignment"]["properties"]["assignment_kind"]["enum"])
+        self.assertIn("specialist", candidate["properties"]["assignment_kind"]["enum"])
+        self.assertEqual(
+            set(coverage["$defs"]["specialistLens"]["enum"]),
+            {
+                "security_privacy",
+                "reliability",
+                "api_contract",
+                "migration_deployment",
+                "concurrency",
+                "performance",
+                "documentation",
+                "architecture_simplification",
+            },
         )
 
     def test_obligation_corpus_fixture_uses_complete_versioned_contracts(self) -> None:
@@ -545,7 +604,7 @@ class ObligationContractTest(unittest.TestCase):
             with self.subTest(case=case["case_id"]):
                 self.assertEqual(
                     case["valid_plan"]["schema_version"],
-                    "material-review/coverage-plan/v2",
+                    "material-review/coverage-plan/v3",
                 )
                 for candidate in case["valid_candidate_sets"]:
                     expected_fields = set(required_candidate_fields)
@@ -554,7 +613,7 @@ class ObligationContractTest(unittest.TestCase):
                     self.assertEqual(set(candidate), expected_fields)
                     self.assertEqual(
                         candidate["schema_version"],
-                        "material-review/candidate-set/v3",
+                        "material-review/candidate-set/v4",
                     )
                     for check in candidate["check_results"]:
                         for evidence in check["evidence"]:
@@ -570,6 +629,184 @@ class ObligationContractTest(unittest.TestCase):
                         "semantic_bypass",
                     },
                 )
+
+    def test_auto_specialists_bind_selected_units_and_exact_primary_path_union(self) -> None:
+        plan = make_plan(risk_code=None, primary_paths=("api.py",), context_paths=("contract.md",))
+        plan["schema_version"] = "material-review/coverage-plan/v3"
+        plan["depth"] = "auto"
+        decisions = [
+            {
+                "lens_id": lens_id,
+                "decision": "selected" if lens_id == "security_privacy" else "rejected",
+                "basis": "ambiguous" if lens_id == "security_privacy" else "behavior_evidence",
+                "evidence": [
+                    "The changed request parser has incomplete trust-boundary evidence."
+                    if lens_id == "security_privacy"
+                    else f"The changed behavior does not trigger the {lens_id} lens."
+                ],
+            }
+            for lens_id in (
+                "security_privacy",
+                "reliability",
+                "api_contract",
+                "migration_deployment",
+                "concurrency",
+                "performance",
+                "documentation",
+                "architecture_simplification",
+            )
+        ]
+        plan["change_units"][0]["specialist_decisions"] = decisions
+        plan["assignments"].append(
+            {
+                "assignment_id": "specialist-security-privacy",
+                "assignment_kind": "specialist",
+                "lens_id": "security_privacy",
+                "reviewer_id": "security-reviewer",
+                "independence_group": "security-process",
+                "review_mode": "subagent",
+                "unit_ids": ["unit-001"],
+                "primary_paths": ["api.py"],
+                "context_paths": ["contract.md"],
+            }
+        )
+
+        normalized = validate_coverage_contract(
+            plan,
+            changed_paths={"api.py"},
+            allowed_context_paths={"contract.md"},
+        )
+
+        specialist = next(
+            item for item in normalized["assignments"] if item["assignment_kind"] == "specialist"
+        )
+        self.assertEqual(specialist["unit_ids"], ["unit-001"])
+        self.assertEqual(specialist["primary_paths"], ["api.py"])
+        self.assertEqual(specialist["context_paths"], ["contract.md"])
+
+        candidate = {
+            "schema_version": "material-review/candidate-set/v4",
+            "scope_hash": "a" * 64,
+            "coverage_plan_hash": "b" * 64,
+            "coverage_context_hash": "c" * 64,
+            "assignment_id": specialist["assignment_id"],
+            "assignment_kind": "specialist",
+            "lens_id": specialist["lens_id"],
+            "reviewer_id": specialist["reviewer_id"],
+            "independence_group": specialist["independence_group"],
+            "review_mode": specialist["review_mode"],
+            "unit_ids": specialist["unit_ids"],
+            "primary_paths": specialist["primary_paths"],
+            "context_paths": specialist["context_paths"],
+            "check_results": [],
+            "findings": [],
+            "coverage": {
+                "files_reviewed": ["api.py"],
+                "areas": ["security_privacy"],
+                "limitations": [],
+            },
+        }
+        normalized_candidate = validate_assignment_result(
+            candidate,
+            assignment=specialist,
+            obligation=None,
+        )
+        self.assertEqual(normalized_candidate["unit_ids"], ["unit-001"])
+        self.assertEqual(normalized_candidate["primary_paths"], ["api.py"])
+        self.assertEqual(normalized_candidate["context_paths"], ["contract.md"])
+        self.assertEqual(normalized_candidate["check_results"], [])
+
+        for name, mutate, expected_error in (
+            (
+                "wrong-unit",
+                lambda value: value.update({"unit_ids": ["unit-other"]}),
+                "identity mismatch for unit_ids",
+            ),
+            (
+                "wrong-primary-path",
+                lambda value: value.update({"primary_paths": ["other.py"]}),
+                "identity mismatch for primary_paths",
+            ),
+            (
+                "obligation-substitution",
+                lambda value: value.update({"obligation_id": "obligation-unit-001"}),
+                "obligation_id",
+            ),
+            (
+                "blocked-check-substitution",
+                lambda value: value.update(
+                    {
+                        "check_results": [
+                            {
+                                "check_code": "synthetic",
+                                "outcome": "blocked",
+                                "evidence": ["Synthetic blocked result."],
+                                "finding_local_ids": [],
+                            }
+                        ]
+                    }
+                ),
+                "check_results must be empty",
+            ),
+        ):
+            with self.subTest(name=name):
+                invalid = copy.deepcopy(candidate)
+                mutate(invalid)
+                with self.assertRaisesRegex(ObligationContractError, expected_error):
+                    validate_assignment_result(
+                        invalid,
+                        assignment=specialist,
+                        obligation=None,
+                    )
+
+    def test_full_depth_requires_every_specialist_for_every_change_unit(self) -> None:
+        plan = make_plan(risk_code=None, primary_paths=("api.py",), context_paths=())
+        plan["schema_version"] = "material-review/coverage-plan/v3"
+        plan["depth"] = "full"
+        lenses = (
+            "security_privacy",
+            "reliability",
+            "api_contract",
+            "migration_deployment",
+            "concurrency",
+            "performance",
+            "documentation",
+            "architecture_simplification",
+        )
+        plan["change_units"][0]["specialist_decisions"] = [
+            {
+                "lens_id": lens_id,
+                "decision": "selected",
+                "basis": "full_depth",
+                "evidence": ["Full depth selects every controlled specialist lens."],
+            }
+            for lens_id in lenses
+        ]
+        plan["assignments"].extend(
+            {
+                "assignment_id": f"specialist-{lens_id.replace('_', '-')}",
+                "assignment_kind": "specialist",
+                "lens_id": lens_id,
+                "reviewer_id": f"reviewer-{lens_id.replace('_', '-')}",
+                "independence_group": "full-depth-process",
+                "review_mode": "subagent",
+                "unit_ids": ["unit-001"],
+                "primary_paths": ["api.py"],
+                "context_paths": [],
+            }
+            for lens_id in lenses
+        )
+
+        normalized = validate_coverage_contract(
+            plan,
+            changed_paths={"api.py"},
+            allowed_context_paths=set(),
+        )
+
+        self.assertEqual(
+            {item["lens_id"] for item in normalized["assignments"] if item["assignment_kind"] == "specialist"},
+            set(lenses),
+        )
 
 
 if __name__ == "__main__":

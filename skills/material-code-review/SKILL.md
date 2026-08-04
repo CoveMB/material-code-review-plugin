@@ -73,7 +73,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" --help
 
 The control tool requires Python 3.10 or newer and uses only the standard library. It writes runs below `git rev-parse --git-path material-code-review` unless `--artifact-root` is explicitly supplied. A custom artifact root must be outside the worktree or inside the active Git directory.
 
-New material-review runs use `material-review/state/v3` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v2`, `material-review/candidate-set/v3`, and `material-review/candidates-normalized/v3` during discovery. Material-review `state/v1` and `state/v2` runs are never migrated into this lifecycle. They retain only their established inspection, restoration, and marker-bound final-repair completion commands; all other forward progress requires a new run. Unsupported or contradictory state/profile combinations fail before command dispatch.
+New material-review runs use `material-review/state/v4` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v3`, `material-review/candidate-set/v4`, and `material-review/candidates-normalized/v4` during discovery. Material-review `state/v1`, `state/v2`, and `state/v3` runs are never migrated or backfilled into this lifecycle. They retain only bounded inspection and checkpointed restoration commands; all forward progress requires a new run. Unsupported or contradictory state/profile combinations fail before command dispatch.
 
 After `init`, preserve the printed run ID in working memory and in `MATERIAL_REVIEW_RUN_ID` when the shell permits:
 
@@ -102,8 +102,8 @@ Recognize these optional selectors:
 - `scope:uncommitted` — `HEAD` against the current working tree, including staged and unstaged changes and untracked files by default.
 - `scope:branch` — merge base with `base:<ref>` against the current working tree, including committed and uncommitted branch work.
 - `scope:range` — `base:<ref>..head:<ref>`; read-only unless the current workspace is later reinitialized as a mutable, aligned scope.
-- `depth:auto` — select conditional lenses from actual risk.
-- `depth:full` — use the full applicable reviewer roster; this does not lower materiality thresholds.
+- `depth:auto` — classify all eight specialist lenses from behavior evidence and select every applicable, ambiguous, or unknown lens.
+- `depth:full` — select all eight specialist lenses for every change unit; this does not lower materiality thresholds.
 - `external-review:off` — never route source to external models or CLIs.
 - `external-review:ask` — external review may be proposed, but disclose recipient/route/egress and get explicit permission before dispatch.
 
@@ -163,7 +163,7 @@ A mismatch means prior reviewer output is stale. Do not “adjust mentally”; r
 
 #### 0.4 Record exhaustive targeted coverage
 
-Build a `material-review/coverage-plan/v2` using `references/context-checklist.md` and `references/review-obligations.md`.
+Build a `material-review/coverage-plan/v3` using `references/context-checklist.md` and `references/review-obligations.md`.
 
 Every changed comparison path must occur exactly once in one `change_units[*].primary_paths` list. Group paths by coherent behavior or contract ownership, not directory or reviewer persona. A unit may name bounded unchanged `context_paths` only when they are necessary contract owners or consumers. The controller freezes those tracked regular comparison-tree files and binds them through `coverage_context_hash`.
 
@@ -178,7 +178,9 @@ For every unit, make exactly one positive or negative decision for all six contr
 
 Positive decisions appear in `risk_codes` and `selected_risk_rationale` with concrete evidence paths. Negative decisions appear in `rejected_risk_rationale` with checked non-trigger evidence. Filenames are hints only. Every positive `(unit_id, risk_code)` pair creates exactly one item in `review_obligations` and exactly one obligation assignment with the controlled required lens and `required_checks`.
 
-Every plan contains the three core assignments: `core-correctness`, `core-standards`, and `core-tests`. Add only the obligation and controlled supporting assignments required by positive risks. A low-risk plan has those three core assignments and no obligations. A reviewer process may handle multiple assignments sequentially, but each output remains isolated by exact `assignment_id`.
+Every plan contains the three core assignments: `core-correctness`, `core-standards`, and `core-tests`. Add only the obligation and controlled supporting assignments required by positive risks. Independently classify all eight specialist lenses for every unit in `specialist_decisions`. Under `depth:auto`, select a lens when behavior evidence makes it applicable or when applicability is ambiguous or unknown; reject it only with concrete non-trigger evidence. Under `depth:full`, select all eight for every unit. A low-risk auto plan may therefore contain only the three core assignments and no obligations or specialists.
+
+Create exactly one specialist assignment for each selected lens. It binds the exact selected `unit_ids`, the exact union of their `primary_paths`, and only bounded `context_paths` from those units. Specialists cannot satisfy core assignments or controlled obligations. A reviewer process may handle multiple assignments sequentially, but each output remains isolated by exact `assignment_id`.
 
 Run the freshness check after constructing the inventory and before recording it:
 
@@ -196,9 +198,9 @@ The controller validates the exact primary partition, exhaustive risk decisions,
 
 Candidate generation is one bounded read-only assignment-matched wave. In Codex, use a bounded read-only `explorer` subagent or installed project-scoped reviewer when permitted. On another host, use the closest read-only primitive. When subagents are unavailable, run the same assignments sequentially.
 
-Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, required paths, repository constraints, and `schemas/candidate-set-v3.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and exact `required_checks`. Reviewers must echo those assigned values unchanged.
+Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, required paths, repository constraints, and `schemas/candidate-set-v4.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and exact `required_checks`. For a specialist assignment, provide its exact `unit_ids`, `primary_paths`, and `context_paths`. Reviewers must echo those assigned values unchanged.
 
-The three core assignments always cover correctness and edge cases, test adequacy for fragile changed behavior, and repository standards plus explicit requirement alignment. Every positive controlled risk adds its obligation assignment. Add supplemental assignments only when the plan's controlled mapping requires them.
+The three core assignments always cover correctness and edge cases, test adequacy for fragile changed behavior, and repository standards plus explicit requirement alignment. Every positive controlled risk adds its obligation assignment. Add supplemental assignments only when the plan's controlled mapping requires them. Specialist assignments remain separate broad lenses and never replace these authorities.
 
 Do not create an obligation from a filename alone. Conversely, do not omit one when behavior-based evidence meets a controlled positive trigger. A reviewer may run several assignments sequentially, but one broad result cannot satisfy multiple assignment IDs or obligations.
 #### 1.2 Independence and scheduling
@@ -219,15 +221,17 @@ Obtain explicit user permission for that egress. A failed or unverifiable extern
 
 #### 1.3 Candidate and check-result contract
 
-Each assignment returns one object conforming exactly to `schemas/candidate-set-v3.schema.json`. It includes the exact scope, coverage-plan, and coverage-context hashes plus the assigned identity. Obligation assignments echo one `obligation_id` and return every required `check_results` entry exactly once:
+Each assignment returns one object conforming exactly to `schemas/candidate-set-v4.schema.json`. It includes the exact scope, coverage-plan, and coverage-context hashes plus the assigned identity. Obligation assignments echo one `obligation_id` and return every required `check_results` entry exactly once:
 
 - `pass` requires concrete evidence and no finding IDs;
 - `finding_emitted` requires concrete evidence and one or more local IDs present in the same result;
 - `blocked` identifies missing evidence and leaves the obligation incomplete.
 
-Core and supplemental assignments return an empty `check_results` array. Every result names at least one required path in `coverage.files_reviewed`, even when `findings` is empty. A reviewer may not combine assignments, substitute a lens, or report another assignment's obligation.
+Core, supplemental, and specialist assignments return an empty `check_results` array. Specialist results also echo the assigned `unit_ids`, `primary_paths`, and `context_paths` and must review every assigned primary path. Every result names at least one required path in `coverage.files_reviewed`, even when `findings` is empty. A reviewer may not combine assignments, substitute a lens, or report another assignment's obligation.
 
 Reviewers still actively check existing guards, callers, middleware, types, framework behavior, diff causality, explicit project decisions, existing tests, and counterevidence. Use exact source evidence and `references/materiality-rubric.md`. Do not seed reviewers with one another's candidates.
+
+Evidence identity is side-aware. Baseline evidence for a rename or copy uses its exact `old_path`; comparison evidence uses only the exact current `path`. A comparison-side changed path that is frozen as missing remains missing and cannot fall through to coverage context. Only a true no-match may use an unchanged bounded coverage-context source. Frozen hashes and requested line ranges remain mandatory.
 
 Save each return separately and ingest the complete wave together:
 
@@ -242,7 +246,7 @@ The controller validates all results in memory. It rejects missing or duplicate 
 
 The first accepted wave is write-once authority. An exact canonical retry is no-write. A different complete wave requires a new run. Invalid or unavailable retry input may update only `candidate-ingestion-failure.json`; it cannot replace accepted candidates or state.
 
-After deterministic candidate IDs are assigned, the controller resolves each obligation check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v3`. Reviewer sets retain assignment identity, obligation identity when applicable, lens, check results, and coverage. Temporary input filenames and order are excluded from authority. Controller acceptance proves structural completion, not that a reviewer performed the semantic work well.
+After deterministic candidate IDs are assigned, the controller resolves each obligation check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v4`. Reviewer sets retain assignment identity, obligation identity when applicable, specialist unit/path provenance when applicable, lens, check results, and coverage. Temporary input filenames and order are excluded from authority. Controller acceptance proves structural completion, not that a reviewer performed the semantic work well.
 ### Phase 2 — Validate and adjudicate
 
 #### 2.1 Independent per-finding validation
@@ -429,7 +433,7 @@ Only after Gate B:
 python3 "$SKILL_DIR/scripts/reviewctl.py" begin-fix --repo-root .
 ```
 
-This rechecks the frozen scope, confirms the working tree is mutable/aligned, captures a pre-fix restoration snapshot, and establishes a workspace guard. Do not stage or commit.
+This rechecks the frozen scope, confirms the working tree is mutable/aligned, captures a pre-fix v4 restoration checkpoint, and establishes a workspace guard. The checkpoint binds HEAD attachment and commit, the complete refs namespace, semantic Git-index content, workspace state, and path snapshots. Do not stage or commit.
 
 #### 4.2 Per-finding cycle
 
@@ -443,7 +447,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" start-finding --repo-root . --finding 
 
 Then make only the approved changes. Prefer the smallest root-cause correction, but do not preserve a broken architecture merely to minimize line count. Do not perform opportunistic cleanup.
 
-Execute each approved required test through the control tool so the command, output, timeout, and exit code are durable. Tests are evidence, not edit steps: any workspace/index mutation caused by a test is rejected and restored when safe. The tool is not a sandbox; a command runs with the current user's host permissions, so Gate B must review commands for filesystem, network, credential, process, and Git effects:
+Execute each approved required test through the control tool so the command, output, timeout, and exit code are durable. Tests are evidence, not edit steps: any workspace, index, HEAD, or refs mutation caused by a test is rejected and restored when safe. Every v4 recovery caller captures the complete observed post-command repository authority and the common recovery engine compares it again before its first repository write. Concurrent drift fails closed with structured recovery evidence for human handling. The tool is not a sandbox; a command runs with the current user's host permissions, so Gate B must review commands for filesystem, network, credential, process, and Git effects:
 
 ```bash
 python3 "$SKILL_DIR/scripts/reviewctl.py" run-test \
@@ -479,7 +483,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" rollback-finding \
   --reason "Targeted test exposed a contract regression."
 ```
 
-Do not manually undo a failed attempt when the checkpoint tool can restore it; manual partial reversal is harder to audit.
+Automatic rollback is limited to deltas on the finding's approved paths. If HEAD, refs, the index, or an unrelated path differs from the checkpoint, the controller preserves the repository, writes recovery-conflict evidence, and stops for human reconciliation instead of inferring that the drift belongs to the repair attempt. Do not manually undo a failed attempt when the checkpoint tool can restore it; manual partial reversal is harder to audit.
 
 If the workflow must be abandoned or the plan must expand, restore the entire repair layer:
 
@@ -489,7 +493,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" abort-fixes \
   --reason "Repair requires an unapproved schema path."
 ```
 
-This returns the working tree to the frozen pre-fix state. Replan and repeat Gate B rather than editing around the boundary.
+This returns the complete saved repository authority to the frozen pre-fix state when the intervening workspace delta is limited to paths authorized anywhere in the approved plan. Ref, HEAD, index, or unrelated-path drift fails closed without a recovery write. Current v4 recovery uses expected-old ref updates and verifies the restored authority afterward. Historical checkpoints remain on their narrower bounded restoration path; missing v4 metadata is never fabricated. Replan and repeat Gate B rather than editing around the boundary.
 
 #### 4.3 Global tests
 
@@ -589,7 +593,7 @@ Read `references/failure-model.md`. In summary:
 - validator infrastructure failure -> preserve high-impact uncertainty visibly;
 - user gate absent -> stop;
 - changed plan after approval -> invalidate Gate B;
-- unapproved path mutation -> reject/restore attempt;
+- unapproved path mutation -> reject the attempt; automatic rollback preserves it and stops for reconciliation when ownership cannot be bound to a controller-executed command;
 - failing required test -> reject/restore or repair within budget;
 - new post-fix improvement -> record-only;
 - out-of-plan regression repair -> restore and require a new plan approval;

@@ -42,15 +42,16 @@ from obligation_contract import (  # noqa: E402
 )
 
 
-TOOL_VERSION = "1.4.1"
-MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v3"
+TOOL_VERSION = "1.5.0"
+MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v4"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3 = "material-review/state/v3"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1 = "material-review/state/v1"
 SIMPLIFICATION_STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 CANDIDATE_SCHEMA_REVIEW = OBLIGATION_CANDIDATE_SET_SCHEMA
-NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v3"
+NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v4"
 NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA_REVIEW = "material-review/adjudication/v4"
 ADJUDICATION_SCHEMA_SIMPLIFICATION = "material-review/adjudication/v3"
@@ -63,12 +64,17 @@ FIX_SUMMARY_SCHEMA = "material-review/fix-summary/v1"
 VERIFICATION_SCHEMA = "material-review/verification/v1"
 COVERAGE_PLAN_SCHEMA = OBLIGATION_COVERAGE_PLAN_SCHEMA
 COVERAGE_CONTEXT_SCHEMA = "material-review/coverage-context/v1"
+CHECKPOINT_SCHEMA_V4 = "material-review/checkpoint/v4"
+SNAPSHOT_MATCHED_BYTES = "matched_bytes"
+SNAPSHOT_MATCHED_MISSING = "matched_missing"
+SNAPSHOT_NO_MATCH = "no_match"
 WORKFLOW_PROFILE_REVIEW = "material_review"
 SIMPLIFICATION_PROFILE = "material-code-simplification"
 STATE_CONTRACT_MATERIAL_REVIEW = "current_material_review"
 STATE_CONTRACT_SIMPLIFICATION = "current_simplification"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1 = "finalizable_material_review_v1"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2 = "finalizable_material_review_v2"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3 = "legacy_material_review_v3"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW = "legacy_material_review"
 
 RISK_ASSESSMENT_CODES = frozenset({"user_selectable_output_paths", "persisted_config_semantics"})
@@ -494,6 +500,13 @@ def classify_state_contract(
     ):
         return STATE_CONTRACT_SIMPLIFICATION
     if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3
+    if (
         schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2
         and not profile_present
         and coverage_required is True
@@ -553,16 +566,6 @@ def expected_ledger_schema(state: dict[str, Any]) -> str:
 LEGACY_OBSERVATION_COMMANDS = frozenset({"status", "check-scope"})
 LEGACY_RESTORATION_COMMANDS = frozenset({"rollback-finding", "abort-fixes"})
 LEGACY_ALLOWED_COMMANDS = LEGACY_OBSERVATION_COMMANDS | LEGACY_RESTORATION_COMMANDS
-FINALIZABLE_MATERIAL_REVIEW_V1_COMMANDS = frozenset(
-    {
-        "refresh-finding-test",
-        "run-global-test",
-        "prepare-verification",
-        "record-verification",
-    }
-)
-
-
 def enforce_command_compatibility(args: argparse.Namespace) -> None:
     if args.command == "init":
         return
@@ -588,10 +591,11 @@ def enforce_command_compatibility(args: argparse.Namespace) -> None:
     if (
         contract
         in {
+            STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3,
             STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1,
             STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2,
         }
-        and args.command in LEGACY_ALLOWED_COMMANDS | FINALIZABLE_MATERIAL_REVIEW_V1_COMMANDS
+        and args.command in LEGACY_ALLOWED_COMMANDS
     ):
         return
     if args.command not in LEGACY_ALLOWED_COMMANDS:
@@ -762,11 +766,19 @@ def current_head_attachment(repo: Path) -> str | None:
 
 
 def local_head_refs(repo: Path) -> dict[str, str]:
+    return {
+        ref: object_id
+        for ref, object_id in repository_refs(repo).items()
+        if ref.startswith("refs/heads/")
+    }
+
+
+def repository_refs(repo: Path) -> dict[str, str]:
     raw = git_text(
         repo,
         "for-each-ref",
         "--format=%(refname)%00%(objectname)",
-        "refs/heads",
+        "refs",
     )
     refs: dict[str, str] = {}
     for line in raw.splitlines():
@@ -777,12 +789,12 @@ def local_head_refs(repo: Path) -> dict[str, str]:
             raise ReviewError("Git returned malformed local branch-ref data")
         ref, object_id = parts
         if (
-            not ref.startswith("refs/heads/")
-            or ref == "refs/heads/"
+            not ref.startswith("refs/")
+            or ref == "refs/"
             or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
             or ref in refs
         ):
-            raise ReviewError("Git returned invalid local branch-ref data")
+            raise ReviewError("Git returned invalid ref data")
         refs[ref] = object_id
     return dict(sorted(refs.items()))
 
@@ -1463,6 +1475,21 @@ def validate_normalized_candidates_profile(
                 raise ReviewError(
                     f"{context}.obligation_id does not match the coverage assignment"
                 )
+        specialist_fields = ("unit_ids", "primary_paths", "context_paths")
+        if assignment["assignment_kind"] == "specialist":
+            for field in specialist_fields:
+                if reviewer_set.get(field) != assignment[field]:
+                    raise ReviewError(
+                        f"{context}.{field} does not match the coverage assignment"
+                    )
+        else:
+            unexpected_specialist_fields = [
+                field for field in specialist_fields if field in reviewer_set
+            ]
+            if unexpected_specialist_fields:
+                raise ReviewError(
+                    f"{context} has specialist provenance for a non-specialist assignment"
+                )
         reviewer_coverage_hash = require_sha256(
             reviewer_set.get("coverage_plan_hash"), f"{context}.coverage_plan_hash"
         )
@@ -1840,11 +1867,61 @@ def workspace_guard(repo: Path) -> dict[str, Any]:
     return {"identity": identity, "guard_hash": canonical_hash(identity)}
 
 
+def index_identity(repo: Path) -> dict[str, Any]:
+    raw_path = git_text(repo, "rev-parse", "--git-path", "index")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = repo / path
+    path = path.resolve(strict=False)
+    if not path.exists():
+        return {"path": str(path), "present": False, "sha256": None, "size": None}
+    if not path.is_file():
+        raise ReviewError("Git index path is not a regular file")
+    staged_entries = git_bytes(repo, "ls-files", "--stage", "-z")
+    entry_flags = git_bytes(repo, "ls-files", "-v", "-z")
+    content = staged_entries + b"\0--entry-flags--\0" + entry_flags
+    return {
+        "path": str(path),
+        "present": True,
+        "sha256": sha256_bytes(content),
+        "size": len(content),
+    }
+
+
+def repository_authority(repo: Path) -> dict[str, Any]:
+    guard = workspace_guard(repo)
+    identity = {
+        "head_attachment": current_head_attachment(repo),
+        "head_sha": resolve_commit(repo, "HEAD"),
+        "refs": repository_refs(repo),
+        "index": index_identity(repo),
+        "workspace_guard": guard,
+    }
+    return {"identity": identity, "authority_hash": canonical_hash(identity)}
+
+
 def diff_guard_paths(before: dict[str, Any], after: dict[str, Any]) -> set[str]:
     before_states = before["identity"]["path_states"]
     after_states = after["identity"]["path_states"]
     paths = set(before_states) | set(after_states)
     return {path for path in paths if before_states.get(path, {"type": "clean"}) != after_states.get(path, {"type": "clean"})}
+
+
+def repository_control_mutations(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[str]:
+    before_identity = before["identity"]
+    after_identity = after["identity"]
+    labels: list[str] = []
+    if before_identity["head_sha"] != after_identity["head_sha"]:
+        labels.append("HEAD")
+    if before_identity["head_attachment"] != after_identity["head_attachment"]:
+        labels.append("HEAD attachment")
+    if before_identity["refs"] != after_identity["refs"]:
+        labels.append("refs namespace")
+    if before_identity["index"] != after_identity["index"]:
+        labels.append("Git index")
+    return labels
 
 
 def ensure_expected_workspace(repo: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -1872,43 +1949,58 @@ def create_checkpoint(repo: Path, checkpoint_dir: Path, extra_paths: Iterable[st
     if checkpoint_dir.exists():
         raise ReviewError(f"Checkpoint already exists: {checkpoint_dir}")
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    guard = workspace_guard(repo)
-    paths = set(guard["identity"]["path_states"])
-    paths.update(normalize_repo_path(path) for path in extra_paths)
-    path_states: dict[str, Any] = {}
-    for path in sorted(paths):
-        info = path_state(repo_path(repo, path))
-        path_states[path] = info
-        snapshot_copy_path(repo, checkpoint_dir, path, info)
+    try:
+        authority = repository_authority(repo)
+        authority_identity = authority["identity"]
+        guard = authority_identity["workspace_guard"]
+        paths = set(guard["identity"]["path_states"])
+        paths.update(normalize_repo_path(path) for path in extra_paths)
+        path_states: dict[str, Any] = {}
+        for path in sorted(paths):
+            info = path_state(repo_path(repo, path))
+            path_states[path] = info
+            snapshot_copy_path(repo, checkpoint_dir, path, info)
 
-    index_raw = git_text(repo, "rev-parse", "--git-path", "index")
-    index_path = Path(index_raw)
-    if not index_path.is_absolute():
-        index_path = repo / index_path
-    index_backup = checkpoint_dir / "index.backup"
-    if index_path.exists():
-        shutil.copyfile(index_path, index_backup)
-        index_present = True
-        index_sha256 = sha256_file(index_backup)
-    else:
-        index_present = False
-        index_sha256 = None
+        index = authority_identity["index"]
+        index_path = Path(index["path"])
+        index_backup = checkpoint_dir / "index.backup"
+        if index["present"]:
+            shutil.copyfile(index_path, index_backup)
+            index_backup_sha256 = sha256_file(index_backup)
+        else:
+            index_backup_sha256 = None
 
-    metadata = {
-        "created_at": utc_now(),
-        "head_sha": guard["identity"]["head_sha"],
-        "branch": guard["identity"]["branch"],
-        "head_attachment": current_head_attachment(repo),
-        "local_head_refs": local_head_refs(repo),
-        "workspace_guard": guard,
-        "path_states": path_states,
-        "index_path": str(index_path),
-        "index_present": index_present,
-        "index_sha256": index_sha256,
-    }
-    metadata["checkpoint_hash"] = canonical_hash({key: value for key, value in metadata.items() if key != "created_at"})
-    atomic_write_json(checkpoint_dir / "checkpoint.json", metadata)
-    return metadata
+        if repository_authority(repo) != authority:
+            raise ReviewError("Repository authority changed while the checkpoint was captured")
+
+        refs = authority_identity["refs"]
+        metadata = {
+            "schema_version": CHECKPOINT_SCHEMA_V4,
+            "created_at": utc_now(),
+            "head_sha": authority_identity["head_sha"],
+            "branch": guard["identity"]["branch"],
+            "head_attachment": authority_identity["head_attachment"],
+            "refs": refs,
+            "local_head_refs": {
+                ref: object_id
+                for ref, object_id in refs.items()
+                if ref.startswith("refs/heads/")
+            },
+            "repository_authority": authority,
+            "workspace_guard": guard,
+            "path_states": path_states,
+            "index_path": index["path"],
+            "index_present": index["present"],
+            "index_sha256": index_backup_sha256,
+        }
+        metadata["checkpoint_hash"] = canonical_hash(
+            {key: value for key, value in metadata.items() if key != "created_at"}
+        )
+        atomic_write_json(checkpoint_dir / "checkpoint.json", metadata)
+        return metadata
+    except BaseException:
+        shutil.rmtree(checkpoint_dir, ignore_errors=True)
+        raise
 
 
 def remove_path(path: Path) -> None:
@@ -1953,6 +2045,74 @@ def path_exists_in_head(repo: Path, path: str) -> bool:
     return result.returncode == 0
 
 
+def validate_ref_map(value: Any, context: str) -> dict[str, str]:
+    raw_refs = require_object(value, context)
+    refs: dict[str, str] = {}
+    for raw_ref, raw_object_id in raw_refs.items():
+        ref = require_string(raw_ref, f"{context} ref")
+        object_id = require_string(raw_object_id, f"{context}.{ref}")
+        if (
+            not ref.startswith("refs/")
+            or ref == "refs/"
+            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
+            or ref in refs
+        ):
+            raise ReviewError(f"{context} contains invalid ref data")
+        refs[ref] = object_id
+    return dict(sorted(refs.items()))
+
+
+def validate_repository_authority(value: Any, context: str) -> dict[str, Any]:
+    authority = require_object(value, context)
+    require_exact_keys(authority, {"identity", "authority_hash"}, context)
+    identity = require_object(authority.get("identity"), f"{context}.identity")
+    require_exact_keys(
+        identity,
+        {"head_attachment", "head_sha", "refs", "index", "workspace_guard"},
+        f"{context}.identity",
+    )
+    authority_hash = require_sha256(
+        authority.get("authority_hash"), f"{context}.authority_hash"
+    )
+    if authority_hash != canonical_hash(identity):
+        raise ReviewError(f"{context} failed its embedded hash check")
+    attachment = identity.get("head_attachment")
+    if attachment is not None:
+        attachment = require_string(attachment, f"{context}.identity.head_attachment")
+        if not attachment.startswith("refs/heads/") or attachment == "refs/heads/":
+            raise ReviewError(f"{context} has an invalid HEAD attachment")
+    head_sha = require_string(identity.get("head_sha"), f"{context}.identity.head_sha")
+    if re.fullmatch(r"[0-9a-f]{40,64}", head_sha) is None:
+        raise ReviewError(f"{context}.identity.head_sha is not an object ID")
+    refs = validate_ref_map(identity.get("refs"), f"{context}.identity.refs")
+    if attachment is not None and refs.get(attachment) != head_sha:
+        raise ReviewError(f"{context} attached HEAD does not match its saved ref")
+    index = require_object(identity.get("index"), f"{context}.identity.index")
+    require_exact_keys(index, {"path", "present", "sha256", "size"}, f"{context}.identity.index")
+    require_string(index.get("path"), f"{context}.identity.index.path")
+    present = require_bool(index.get("present"), f"{context}.identity.index.present")
+    if present:
+        require_sha256(index.get("sha256"), f"{context}.identity.index.sha256")
+        require_int(index.get("size"), f"{context}.identity.index.size", minimum=0)
+    elif index.get("sha256") is not None or index.get("size") is not None:
+        raise ReviewError(f"{context}.identity.index has content metadata while absent")
+    guard = require_object(
+        identity.get("workspace_guard"), f"{context}.identity.workspace_guard"
+    )
+    guard_identity = require_object(
+        guard.get("identity"), f"{context}.identity.workspace_guard.identity"
+    )
+    if guard.get("guard_hash") != canonical_hash(guard_identity):
+        raise ReviewError(f"{context} workspace guard failed its embedded hash check")
+    if (
+        guard_identity.get("head_sha") != head_sha
+        or guard_identity.get("branch")
+        != (attachment.removeprefix("refs/heads/") if attachment else "DETACHED")
+    ):
+        raise ReviewError(f"{context} workspace guard has contradictory HEAD identity")
+    return authority
+
+
 def verify_checkpoint_integrity(
     repo: Path,
     checkpoint_dir: Path,
@@ -1980,6 +2140,21 @@ def verify_checkpoint_integrity(
     checkpoint_branch = require_string(metadata.get("branch"), "checkpoint.branch")
     if guard_identity.get("head_sha") != checkpoint_head or guard_identity.get("branch") != checkpoint_branch:
         raise ReviewError("Checkpoint top-level Git identity does not match its workspace guard")
+    if metadata.get("schema_version") is not None:
+        if metadata.get("schema_version") != CHECKPOINT_SCHEMA_V4:
+            raise ReviewError("Checkpoint has an unsupported schema_version")
+        authority = validate_repository_authority(
+            metadata.get("repository_authority"), "checkpoint.repository_authority"
+        )
+        authority_identity = authority["identity"]
+        refs = validate_ref_map(metadata.get("refs"), "checkpoint.refs")
+        if (
+            authority_identity["head_sha"] != checkpoint_head
+            or authority_identity["head_attachment"] != metadata.get("head_attachment")
+            or authority_identity["refs"] != refs
+            or authority_identity["workspace_guard"] != guard
+        ):
+            raise ReviewError("Checkpoint repository authority contradicts top-level metadata")
     if require_current_ref and (
         resolve_commit(repo, "HEAD") != checkpoint_head or current_branch(repo) != checkpoint_branch
     ):
@@ -1993,6 +2168,13 @@ def verify_checkpoint_integrity(
     recorded_index_path = Path(require_string(metadata.get("index_path"), "checkpoint.index_path")).resolve(strict=False)
     if current_index_path != recorded_index_path:
         raise ReviewError("Checkpoint index path does not match the repository's current Git index")
+    if metadata.get("schema_version") == CHECKPOINT_SCHEMA_V4:
+        recorded_index = metadata["repository_authority"]["identity"]["index"]
+        if (
+            recorded_index["path"] != str(recorded_index_path)
+            or recorded_index["present"] != metadata.get("index_present")
+        ):
+            raise ReviewError("Checkpoint index authority contradicts top-level metadata")
 
     raw_path_states = require_object(metadata.get("path_states"), "checkpoint.path_states")
     path_states: dict[str, Any] = {}
@@ -2034,7 +2216,7 @@ def verify_checkpoint_integrity(
     return metadata, path_states, current_index_path
 
 
-def restore_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
+def restore_legacy_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
     metadata, path_states, current_index_path = verify_checkpoint_integrity(
         repo,
         checkpoint_dir,
@@ -2077,122 +2259,288 @@ def restore_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
     return current
 
 
-def verify_refresh_checkpoint(
+def verify_v4_checkpoint(
     repo: Path, checkpoint_dir: Path
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     metadata, path_states, index_path = verify_checkpoint_integrity(
         repo, checkpoint_dir, require_current_ref=False
     )
-    attachment = metadata.get("head_attachment")
-    if attachment is not None:
-        attachment = require_string(attachment, "checkpoint.head_attachment")
-        if not attachment.startswith("refs/heads/") or attachment == "refs/heads/":
-            raise ReviewError("Checkpoint HEAD attachment is not a local branch ref")
-    raw_refs = require_object(metadata.get("local_head_refs"), "checkpoint.local_head_refs")
-    refs: dict[str, str] = {}
-    for raw_ref, raw_object_id in raw_refs.items():
-        ref = require_string(raw_ref, "checkpoint local ref")
-        object_id = require_string(
-            raw_object_id, f"checkpoint.local_head_refs.{ref}"
-        )
-        if (
-            not ref.startswith("refs/heads/")
-            or ref == "refs/heads/"
-            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
-            or ref in refs
-        ):
-            raise ReviewError("Checkpoint contains invalid local branch-ref data")
-        refs[ref] = object_id
-    if attachment is not None and refs.get(attachment) != metadata["head_sha"]:
-        raise ReviewError("Checkpoint attached HEAD does not match its saved branch tip")
-    metadata["head_attachment"] = attachment
-    metadata["local_head_refs"] = dict(sorted(refs.items()))
+    if metadata.get("schema_version") != CHECKPOINT_SCHEMA_V4:
+        raise ReviewError("Checkpoint predates v4 repository-authority recovery")
     return metadata, path_states, index_path
 
 
-def restore_refresh_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
-    metadata, path_states, index_path = verify_refresh_checkpoint(repo, checkpoint_dir)
-    observed_head = resolve_commit(repo, "HEAD")
-    observed_attachment = current_head_attachment(repo)
-    observed_refs = local_head_refs(repo)
-    if (
-        resolve_commit(repo, "HEAD") != observed_head
-        or current_head_attachment(repo) != observed_attachment
-        or local_head_refs(repo) != observed_refs
-    ):
-        raise ReviewError("Repository refs changed concurrently before refresh recovery")
+def write_recovery_evidence(
+    checkpoint_dir: Path,
+    filename: str,
+    *,
+    checkpoint_authority: dict[str, Any],
+    expected_post: dict[str, Any],
+    observed_current: dict[str, Any],
+    reason: str,
+) -> None:
+    atomic_write_json(
+        checkpoint_dir / filename,
+        {
+            "schema_version": "material-review/recovery-evidence/v1",
+            "reason": reason,
+            "checkpoint_authority": checkpoint_authority,
+            "expected_post": expected_post,
+            "observed_current": observed_current,
+            "checked_at": utc_now(),
+        },
+    )
 
-    saved_refs = metadata["local_head_refs"]
-    transaction: list[str] = ["start"]
-    for ref in sorted(set(saved_refs) | set(observed_refs)):
-        saved = saved_refs.get(ref)
-        observed = observed_refs.get(ref)
-        if saved == observed:
-            continue
-        if saved is None:
-            transaction.append(f"delete {ref} {observed}")
-        elif observed is None:
-            transaction.append(f"create {ref} {saved}")
-        else:
-            transaction.append(f"update {ref} {saved} {observed}")
-    if len(transaction) > 1:
-        transaction.extend(["prepare", "commit"])
-        run_process(
-            ["git", "update-ref", "--stdin"],
-            cwd=repo,
-            input_bytes=("\n".join(transaction) + "\n").encode("utf-8"),
+
+def observe_repository_after_recovery_failure(
+    repo: Path, primary_error: BaseException
+) -> dict[str, Any]:
+    """Best-effort authority evidence that cannot mask a recovery failure."""
+    try:
+        return repository_authority(repo)
+    except BaseException as observation_error:
+        observed: dict[str, Any] = {
+            "observation_incomplete": True,
+            "observation_error": (
+                f"{type(observation_error).__name__}: {observation_error}"
+            ),
+            "primary_error": f"{type(primary_error).__name__}: {primary_error}",
+        }
+        probes = (
+            ("head_attachment", current_head_attachment),
+            ("refs", repository_refs),
+            ("index", index_identity),
+        )
+        for field, probe in probes:
+            try:
+                observed[field] = probe(repo)
+            except BaseException as probe_error:
+                observed[f"{field}_error"] = (
+                    f"{type(probe_error).__name__}: {probe_error}"
+                )
+        try:
+            paths = sorted(workspace_status_paths(repo))
+            observed["workspace_paths"] = paths
+            observed["workspace_path_states"] = {
+                path: path_state(repo_path(repo, path)) for path in paths
+            }
+        except BaseException as probe_error:
+            observed["workspace_error"] = (
+                f"{type(probe_error).__name__}: {probe_error}"
+            )
+        return observed
+
+
+def manual_recovery_observation(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    allowed_paths: Iterable[str],
+    context: str,
+) -> dict[str, Any]:
+    """Bind manual recovery only to repository state the plan authorized."""
+    metadata = require_object(
+        load_json(checkpoint_dir / "checkpoint.json"), "checkpoint"
+    )
+    if metadata.get("schema_version") != CHECKPOINT_SCHEMA_V4:
+        return repository_authority(repo)
+
+    metadata, _, _ = verify_v4_checkpoint(repo, checkpoint_dir)
+    checkpoint_authority = validate_repository_authority(
+        metadata.get("repository_authority"), "checkpoint.repository_authority"
+    )
+    current = repository_authority(repo)
+    checkpoint_guard = checkpoint_authority["identity"]["workspace_guard"]
+    current_guard = current["identity"]["workspace_guard"]
+    normalized_allowed = {
+        normalize_repo_path(path) for path in allowed_paths
+    }
+    changed_paths = diff_guard_paths(checkpoint_guard, current_guard)
+    outside_paths = changed_paths - normalized_allowed
+    control_mutations = repository_control_mutations(checkpoint_authority, current)
+    if not outside_paths and not control_mutations:
+        return current
+
+    details: list[str] = []
+    if control_mutations:
+        details.append("repository controls: " + ", ".join(control_mutations))
+    if outside_paths:
+        details.append("paths: " + ", ".join(sorted(outside_paths)))
+    expected_boundary = {
+        "schema_version": "material-review/manual-recovery-boundary/v1",
+        "allowed_paths": sorted(normalized_allowed),
+        "checkpoint_repository_controls": {
+            key: checkpoint_authority["identity"][key]
+            for key in ("head_attachment", "head_sha", "refs", "index")
+        },
+    }
+    reason = (
+        f"{context} includes changes not authorized for automatic recovery ("
+        + "; ".join(details)
+        + ")"
+    )
+    write_recovery_evidence(
+        checkpoint_dir,
+        "recovery-conflict.json",
+        checkpoint_authority=checkpoint_authority,
+        expected_post=expected_boundary,
+        observed_current=current,
+        reason=reason,
+    )
+    raise ReviewError(reason + "; repository state was preserved for human reconciliation")
+
+
+def restore_checkpoint_v4(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    expected_post: dict[str, Any],
+) -> dict[str, Any]:
+    metadata, path_states, index_path = verify_v4_checkpoint(repo, checkpoint_dir)
+    checkpoint_authority = validate_repository_authority(
+        metadata["repository_authority"], "checkpoint.repository_authority"
+    )
+    expected_post = validate_repository_authority(
+        expected_post, "recovery expected_post"
+    )
+    observed_current = repository_authority(repo)
+    if observed_current != expected_post:
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-conflict.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=observed_current,
+            reason="Repository authority changed after the recovery observation",
+        )
+        raise ReviewError(
+            "Repository authority changed after the recovery observation; no recovery write was attempted"
         )
 
-    saved_attachment = metadata["head_attachment"]
-    if saved_attachment is None:
-        current_after_refs = resolve_commit(repo, "HEAD")
-        run_process(
-            [
-                "git",
-                "update-ref",
-                "--no-deref",
-                "HEAD",
-                metadata["head_sha"],
-                current_after_refs,
-            ],
-            cwd=repo,
-        )
-    elif current_head_attachment(repo) != saved_attachment:
-        run_process(["git", "symbolic-ref", "HEAD", saved_attachment], cwd=repo)
-
-    current_paths = workspace_status_paths(repo)
-    snap_paths = set(path_states)
-    for path in sorted(current_paths - snap_paths):
-        target = repo_path(repo, path)
-        if path_exists_in_head(repo, path):
+    saved_identity = checkpoint_authority["identity"]
+    observed_identity = expected_post["identity"]
+    saved_attachment = saved_identity["head_attachment"]
+    observed_attachment = observed_identity["head_attachment"]
+    try:
+        if saved_attachment is None:
             run_process(
-                ["git", "restore", "--source=HEAD", "--worktree", "--", path],
+                [
+                    "git",
+                    "update-ref",
+                    "--no-deref",
+                    "HEAD",
+                    saved_identity["head_sha"],
+                    observed_identity["head_sha"],
+                ],
                 cwd=repo,
             )
-        else:
-            remove_path(target)
-    if metadata["index_present"]:
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_index = index_path.with_name(
-            f".{index_path.name}.material-review-refresh.tmp"
-        )
-        shutil.copyfile(checkpoint_dir / "index.backup", temporary_index)
-        os.replace(temporary_index, index_path)
-    else:
-        index_path.unlink(missing_ok=True)
-    for path, info in path_states.items():
-        restore_one_snapshot_path(repo, checkpoint_dir, path, info)
+        elif observed_attachment != saved_attachment:
+            run_process(["git", "symbolic-ref", "HEAD", saved_attachment], cwd=repo)
 
-    current = workspace_guard(repo)
-    if (
-        current_head_attachment(repo) != saved_attachment
-        or local_head_refs(repo) != saved_refs
-        or current["guard_hash"] != metadata["workspace_guard"]["guard_hash"]
-    ):
-        raise ReviewError(
-            "Refresh recovery did not reproduce the checkpoint; human recovery is required"
+        saved_refs = saved_identity["refs"]
+        observed_refs = observed_identity["refs"]
+        transaction: list[str] = ["start"]
+        for ref in sorted(set(saved_refs) | set(observed_refs)):
+            saved = saved_refs.get(ref)
+            observed = observed_refs.get(ref)
+            if saved == observed:
+                continue
+            if saved is None:
+                transaction.append(f"delete {ref} {observed}")
+            elif observed is None:
+                transaction.append(f"create {ref} {saved}")
+            else:
+                transaction.append(f"update {ref} {saved} {observed}")
+        if len(transaction) > 1:
+            transaction.extend(["prepare", "commit"])
+            run_process(
+                ["git", "update-ref", "--stdin"],
+                cwd=repo,
+                input_bytes=("\n".join(transaction) + "\n").encode("utf-8"),
+            )
+
+        current_paths = workspace_status_paths(repo)
+        snap_paths = set(path_states)
+        for path in sorted(current_paths - snap_paths):
+            target = repo_path(repo, path)
+            if path_exists_in_head(repo, path):
+                run_process(
+                    ["git", "restore", "--source=HEAD", "--worktree", "--", path],
+                    cwd=repo,
+                )
+            else:
+                remove_path(target)
+        if metadata["index_present"]:
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_index = index_path.with_name(
+                f".{index_path.name}.material-review-v4.tmp"
+            )
+            shutil.copyfile(checkpoint_dir / "index.backup", temporary_index)
+            os.replace(temporary_index, index_path)
+        else:
+            index_path.unlink(missing_ok=True)
+        for path, info in path_states.items():
+            restore_one_snapshot_path(repo, checkpoint_dir, path, info)
+    except BaseException as exc:
+        current_after_failure = observe_repository_after_recovery_failure(repo, exc)
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-failure.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=current_after_failure,
+            reason=f"Recovery write failed: {exc}",
         )
-    return current
+        raise ReviewError(
+            f"Checkpoint recovery was incomplete; human recovery is required: {exc}"
+        ) from exc
+
+    restored = repository_authority(repo)
+    if restored != checkpoint_authority:
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-mismatch.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=restored,
+            reason="Recovery did not reproduce the checkpoint authority",
+        )
+        raise ReviewError(
+            "Checkpoint recovery did not reproduce the saved repository authority; human recovery is required"
+        )
+    return restored
+
+
+def restore_checkpoint(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    expected_post: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = require_object(
+        load_json(checkpoint_dir / "checkpoint.json"), "checkpoint"
+    )
+    if metadata.get("schema_version") == CHECKPOINT_SCHEMA_V4:
+        if expected_post is None:
+            raise ReviewError(
+                "v4 checkpoint recovery requires a caller-bound expected post-command observation"
+            )
+        return restore_checkpoint_v4(
+            repo, checkpoint_dir, expected_post=expected_post
+        )
+    if metadata.get("schema_version") is not None:
+        raise ReviewError("Checkpoint has an unsupported schema_version")
+    return restore_legacy_checkpoint(repo, checkpoint_dir)
+
+
+def restore_refresh_checkpoint(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    expected_post: dict[str, Any],
+) -> dict[str, Any]:
+    """Compatibility alias for the single v4 recovery engine."""
+    return restore_checkpoint(repo, checkpoint_dir, expected_post=expected_post)
 
 
 def verify_frozen_source_bytes(
@@ -2210,35 +2558,64 @@ def verify_frozen_source_bytes(
     return data
 
 
-def read_snapshot_source(run_dir: Path, scope_identity: dict[str, Any], side: str, path: str, repo: Path) -> bytes | None:
-    for entry in scope_identity["files"]:
-        candidates = [entry["path"]]
-        if entry.get("old_path"):
-            candidates.append(entry["old_path"])
-        if path not in candidates:
-            continue
-        state_key = f"{side}_state"
-        state_info = entry[state_key]
-        snapshot_path = state_info.get("snapshot_path")
-        if snapshot_path:
-            data = (run_dir / snapshot_path).read_bytes()
-            return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        if side == "baseline":
-            source_path = entry.get("old_path") if entry.get("old_path") and path == entry.get("old_path") else path
-            data = git_object_bytes(repo, scope_identity["baseline_sha"], source_path)
-            return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        if scope_identity["comparison_kind"] == "commit":
-            data = git_object_bytes(repo, scope_identity["comparison_sha"], path)
-            return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        target = repo_path(repo, path)
+def snapshot_entry_for_side(
+    scope_identity: dict[str, Any], side: str, path: str
+) -> dict[str, Any] | None:
+    entries = scope_identity["files"]
+    if side == "comparison":
+        matches = [entry for entry in entries if entry["path"] == path]
+    elif side == "baseline":
+        renamed_or_copied = [
+            entry for entry in entries if entry.get("old_path") == path
+        ]
+        matches = renamed_or_copied or [
+            entry
+            for entry in entries
+            if entry.get("old_path") is None and entry["path"] == path
+        ]
+    else:
+        raise ReviewError(f"Unsupported frozen source side: {side}")
+    if not matches:
+        return None
+    first_state = matches[0][f"{side}_state"]
+    if any(entry[f"{side}_state"] != first_state for entry in matches[1:]):
+        raise ReviewError(f"Frozen scope has contradictory {side} identity for path: {path}")
+    return matches[0]
+
+
+def read_snapshot_source(
+    run_dir: Path,
+    scope_identity: dict[str, Any],
+    side: str,
+    path: str,
+    repo: Path,
+) -> tuple[str, bytes | None]:
+    entry = snapshot_entry_for_side(scope_identity, side, path)
+    if entry is None:
+        return SNAPSHOT_NO_MATCH, None
+    state_info = entry[f"{side}_state"]
+    if state_info.get("type") == "missing":
+        verify_frozen_source_bytes(None, state_info, label=f"{side}:{path}")
+        return SNAPSHOT_MATCHED_MISSING, None
+    snapshot_path = state_info.get("snapshot_path")
+    if snapshot_path:
+        data = (run_dir / snapshot_path).read_bytes()
+    elif side == "baseline":
+        source_path = entry.get("old_path") or entry["path"]
+        data = git_object_bytes(repo, scope_identity["baseline_sha"], source_path)
+    elif scope_identity["comparison_kind"] == "commit":
+        data = git_object_bytes(repo, scope_identity["comparison_sha"], entry["path"])
+    else:
+        target = repo_path(repo, entry["path"])
         if target.is_file() and not target.is_symlink():
             data = target.read_bytes()
         elif target.is_symlink():
             data = os.fsencode(os.readlink(target))
         else:
             data = None
-        return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-    return None
+    verified = verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
+    assert verified is not None
+    return SNAPSHOT_MATCHED_BYTES, verified
 
 
 def read_coverage_context_source(
@@ -2272,8 +2649,14 @@ def verify_evidence_quote(
             raise ReviewError(f"Evidence quote for {file}:{line_start} was not found in the frozen diff")
         return
 
-    data = read_snapshot_source(run_dir, scope_identity, side, file, repo)
-    if data is None and side == "comparison" and coverage_context is not None:
+    snapshot_outcome, data = read_snapshot_source(
+        run_dir, scope_identity, side, file, repo
+    )
+    if (
+        snapshot_outcome == SNAPSHOT_NO_MATCH
+        and side == "comparison"
+        and coverage_context is not None
+    ):
         data = read_coverage_context_source(run_dir, coverage_context, file)
     if data is None:
         raise ReviewError(f"Evidence source is missing for {side}:{file}")
@@ -2682,6 +3065,10 @@ def validate_candidate_set(
         )
         if obligation is not None:
             normalized_set["obligation_id"] = obligation["obligation_id"]
+        if assignment_kind == "specialist":
+            assert assignment is not None
+            for field in ("unit_ids", "primary_paths", "context_paths"):
+                normalized_set[field] = assignment[field]
     return normalized_set, rejections
 
 
@@ -2706,6 +3093,10 @@ def required_paths_by_assignment(plan: dict[str, Any]) -> dict[str, set[str]]:
         elif assignment["assignment_kind"] == "obligation":
             required[assignment["assignment_id"]] = set(
                 obligations[assignment["obligation_id"]]["evidence_paths"]
+            )
+        elif assignment["assignment_kind"] == "specialist":
+            required[assignment["assignment_id"]] = set(
+                assignment["primary_paths"]
             )
         else:
             required[assignment["assignment_id"]] = set(
@@ -4839,17 +5230,14 @@ def command_run_test(args: argparse.Namespace) -> int:
         log_relative=Path("tests") / args.finding / args.test / f"run-{run_number}.log",
     )
 
-    after_test = workspace_guard(repo)
-    before_test = test_checkpoint["workspace_guard"]
+    after_authority = repository_authority(repo)
+    after_test = after_authority["identity"]["workspace_guard"]
+    before_authority = test_checkpoint["repository_authority"]
+    before_test = before_authority["identity"]["workspace_guard"]
     changed_by_test = diff_guard_paths(before_test, after_test)
-    control_mutations: list[str] = []
-    for key, label in (
-        ("head_sha", "HEAD"),
-        ("branch", "branch"),
-        ("staged_patch_sha256", "Git index"),
-    ):
-        if after_test["identity"][key] != before_test["identity"][key]:
-            control_mutations.append(label)
+    control_mutations = repository_control_mutations(
+        before_authority, after_authority
+    )
 
     result["changed_paths_by_test"] = sorted(changed_by_test)
     result["control_mutations_by_test"] = control_mutations
@@ -4857,9 +5245,13 @@ def command_run_test(args: argparse.Namespace) -> int:
     if changed_by_test or control_mutations:
         # A test is evidence, not an implicit edit step. Restore the exact
         # pre-test state even when the mutation stayed within approved paths.
-        restored = restore_checkpoint(repo, test_checkpoint_dir)
+        restored_authority = restore_checkpoint(
+            repo,
+            test_checkpoint_dir,
+            expected_post=after_authority,
+        )
         result["restored_after_mutation"] = True
-        after_test = restored
+        after_test = restored_authority["identity"]["workspace_guard"]
 
     current, changed_paths, outside_after = active_boundary_audit(repo, state)
     result["workspace_guard_hash"] = current["guard_hash"]
@@ -5016,7 +5408,16 @@ def command_rollback_finding(args: argparse.Namespace) -> int:
         raise ReviewError(f"Active finding is {active['finding_id']}, not {args.finding}")
     reason = require_string(args.reason, "--reason")
     checkpoint_dir = run_dir / active["checkpoint"]
-    restored_guard = restore_checkpoint(repo, checkpoint_dir)
+    expected_post = manual_recovery_observation(
+        repo,
+        checkpoint_dir,
+        allowed_paths=active["allowed_paths"],
+        context="The active finding attempt",
+    )
+    restored_authority = restore_checkpoint(
+        repo, checkpoint_dir, expected_post=expected_post
+    )
+    restored_guard = restored_authority["identity"]["workspace_guard"]
     status_record = state["finding_status"][args.finding]
     outcome = {
         "attempt": active["attempt"],
@@ -5059,7 +5460,21 @@ def command_abort_fixes(args: argparse.Namespace) -> int:
     pre_fix = state.get("pre_fix_checkpoint")
     if not pre_fix:
         raise ReviewError("Pre-fix checkpoint is missing")
-    restored = restore_checkpoint(repo, run_dir / pre_fix)
+    plan = load_verified_plan(run_dir, state)
+    allowed_paths = {
+        path for item in plan["items"] for path in item["allowed_paths"]
+    }
+    checkpoint_dir = run_dir / pre_fix
+    expected_post = manual_recovery_observation(
+        repo,
+        checkpoint_dir,
+        allowed_paths=allowed_paths,
+        context="The repair layer",
+    )
+    restored_authority = restore_checkpoint(
+        repo, checkpoint_dir, expected_post=expected_post
+    )
+    restored = restored_authority["identity"]["workspace_guard"]
     state["phase"] = PHASE_ABORTED
     state["active_finding"] = None
     state["expected_workspace_guard_hash"] = restored["guard_hash"]
@@ -5121,7 +5536,7 @@ def command_run_global_test(args: argparse.Namespace) -> int:
     prior_runs = state["global_test_results"].get(args.test, [])
     run_number = len(prior_runs) + 1
     checkpoint_dir = run_dir / "checkpoints" / "global-tests" / args.test / f"run-{run_number}"
-    create_checkpoint(repo, checkpoint_dir, {path for item in plan["items"] for path in item["allowed_paths"]})
+    checkpoint = create_checkpoint(repo, checkpoint_dir, {path for item in plan["items"] for path in item["allowed_paths"]})
     result = execute_test_command(
         repo=repo,
         run_dir=run_dir,
@@ -5130,23 +5545,25 @@ def command_run_global_test(args: argparse.Namespace) -> int:
         timeout_seconds=test["timeout_seconds"],
         log_relative=Path("tests") / "global" / args.test / f"run-{run_number}.log",
     )
-    after = workspace_guard(repo)
-    changed_by_test = diff_guard_paths(current, after)
-    control_mutations_by_test: list[str] = []
-    for field, label in (
-        ("head_sha", "HEAD"),
-        ("branch", "branch"),
-        ("staged_patch_sha256", "Git index"),
-    ):
-        if after["identity"][field] != current["identity"][field]:
-            control_mutations_by_test.append(label)
+    after_authority = repository_authority(repo)
+    after = after_authority["identity"]["workspace_guard"]
+    before_authority = checkpoint["repository_authority"]
+    before_guard = before_authority["identity"]["workspace_guard"]
+    changed_by_test = diff_guard_paths(before_guard, after)
+    control_mutations_by_test = repository_control_mutations(
+        before_authority, after_authority
+    )
     result["workspace_guard_hash"] = after["guard_hash"]
     result["changed_paths_by_test"] = sorted(changed_by_test)
     result["control_mutations_by_test"] = control_mutations_by_test
     if changed_by_test or control_mutations_by_test:
-        restore_checkpoint(repo, checkpoint_dir)
+        restored_authority = restore_checkpoint(
+            repo,
+            checkpoint_dir,
+            expected_post=after_authority,
+        )
         result["restored_after_mutation"] = True
-        result["workspace_guard_hash"] = current["guard_hash"]
+        result["workspace_guard_hash"] = restored_authority["identity"]["workspace_guard"]["guard_hash"]
     else:
         result["restored_after_mutation"] = False
     state["global_test_results"].setdefault(args.test, []).append(result)
@@ -5268,23 +5685,14 @@ def command_refresh_finding_test(args: argparse.Namespace) -> int:
         ),
     )
 
-    after_test = workspace_guard(repo)
-    before_test = checkpoint["workspace_guard"]
+    after_authority = repository_authority(repo)
+    after_test = after_authority["identity"]["workspace_guard"]
+    before_authority = checkpoint["repository_authority"]
+    before_test = before_authority["identity"]["workspace_guard"]
     changed_by_test = diff_guard_paths(before_test, after_test)
-    control_mutations: list[str] = []
-    for field, label in (
-        ("head_sha", "HEAD"),
-        ("branch", "branch"),
-        ("staged_patch_sha256", "Git index"),
-    ):
-        if after_test["identity"][field] != before_test["identity"][field]:
-            control_mutations.append(label)
-    after_attachment = current_head_attachment(repo)
-    after_local_refs = local_head_refs(repo)
-    if after_attachment != checkpoint["head_attachment"]:
-        control_mutations.append("HEAD attachment")
-    if after_local_refs != checkpoint["local_head_refs"]:
-        control_mutations.append("local branch refs")
+    control_mutations = repository_control_mutations(
+        before_authority, after_authority
+    )
 
     result["changed_paths_by_test"] = sorted(changed_by_test)
     result["control_mutations_by_test"] = list(dict.fromkeys(control_mutations))
@@ -5296,7 +5704,11 @@ def command_refresh_finding_test(args: argparse.Namespace) -> int:
     if changed_by_test or control_mutations:
         result["recovery_attempted"] = True
         try:
-            restore_refresh_checkpoint(repo, checkpoint_dir)
+            restore_checkpoint(
+                repo,
+                checkpoint_dir,
+                expected_post=after_authority,
+            )
             result["restored_after_mutation"] = True
             result["recovery_completed"] = True
         except ReviewError as exc:

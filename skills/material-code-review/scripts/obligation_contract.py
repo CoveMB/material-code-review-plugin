@@ -13,8 +13,8 @@ import re
 from typing import Any
 
 
-COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v2"
-CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v3"
+COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v3"
+CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v4"
 WORKFLOW_PROFILE = "material_review"
 CANDIDATE_LOCAL_ID_MAX_LENGTH = 128
 
@@ -29,9 +29,26 @@ CONTROLLED_RISK_CODES = frozenset(
     }
 )
 CORE_LENS_IDS = frozenset({"correctness", "standards_alignment", "test_adequacy"})
+SPECIALIST_LENS_IDS = frozenset(
+    {
+        "security_privacy",
+        "reliability",
+        "api_contract",
+        "migration_deployment",
+        "concurrency",
+        "performance",
+        "documentation",
+        "architecture_simplification",
+    }
+)
 CHECK_OUTCOMES = frozenset({"pass", "finding_emitted", "blocked"})
-ASSIGNMENT_KINDS = frozenset({"core", "obligation", "supplemental"})
+ASSIGNMENT_KINDS = frozenset({"core", "obligation", "supplemental", "specialist"})
 REVIEW_MODES = frozenset({"subagent", "controller", "external"})
+DEPTHS = frozenset({"auto", "full"})
+SPECIALIST_DECISIONS = frozenset({"selected", "rejected"})
+SPECIALIST_SELECTION_BASES = frozenset(
+    {"behavior_evidence", "ambiguous", "unknown", "high_risk_mandate", "full_depth"}
+)
 
 RISK_REQUIREMENTS = {
     "verification_mechanism_semantics": {
@@ -85,7 +102,7 @@ CORE_ASSIGNMENT_LENSES = {
     "core-tests": "test_adequacy",
 }
 
-# Keep this language byte-for-byte aligned with both v2/v3 JSON Schemas.
+# Keep this language byte-for-byte aligned with the current v3/v4 JSON Schemas.
 REPOSITORY_RELATIVE_GIT_PATH_PATTERN = (
     r"^(?![A-Za-z]:)(?!/)(?![^\u0000]*\\)(?![^\u0000]*//)"
     r"(?![^\u0000]*/$)(?!\.git(?:/|$))(?!\.{1,2}(?:/|$))"
@@ -237,6 +254,7 @@ def _normalize_unit(
             "risk_codes",
             "selected_risk_rationale",
             "rejected_risk_rationale",
+            "specialist_decisions",
         },
         context,
     )
@@ -276,6 +294,52 @@ def _normalize_unit(
         raise ObligationContractError(
             f"{context} must contain exhaustive risk decisions: selected rationale must equal risk_codes and rejected rationale must cover every other controlled risk"
         )
+    specialist_decisions: list[dict[str, Any]] = []
+    specialist_lenses: set[str] = set()
+    for decision_index, decision_raw in enumerate(
+        _array(unit["specialist_decisions"], f"{context}.specialist_decisions")
+    ):
+        decision_context = f"{context}.specialist_decisions[{decision_index}]"
+        decision = _object(decision_raw, decision_context)
+        _exact_keys(decision, {"lens_id", "decision", "basis", "evidence"}, decision_context)
+        lens_id = _string(decision["lens_id"], f"{decision_context}.lens_id")
+        if lens_id not in SPECIALIST_LENS_IDS:
+            raise ObligationContractError(
+                f"{decision_context}.lens_id must be one of {sorted(SPECIALIST_LENS_IDS)}"
+            )
+        if lens_id in specialist_lenses:
+            raise ObligationContractError(
+                f"{context}.specialist_decisions contains duplicate lens {lens_id}"
+            )
+        specialist_lenses.add(lens_id)
+        decision_value = _string(decision["decision"], f"{decision_context}.decision")
+        if decision_value not in SPECIALIST_DECISIONS:
+            raise ObligationContractError(
+                f"{decision_context}.decision must be selected or rejected"
+            )
+        basis = _string(decision["basis"], f"{decision_context}.basis")
+        if basis not in SPECIALIST_SELECTION_BASES:
+            raise ObligationContractError(
+                f"{decision_context}.basis must be one of {sorted(SPECIALIST_SELECTION_BASES)}"
+            )
+        if decision_value == "rejected" and basis != "behavior_evidence":
+            raise ObligationContractError(
+                f"{decision_context} ambiguous, unknown, mandated, or full-depth evidence must select the lens"
+            )
+        specialist_decisions.append(
+            {
+                "lens_id": lens_id,
+                "decision": decision_value,
+                "basis": basis,
+                "evidence": _unique_strings(
+                    decision["evidence"], f"{decision_context}.evidence", allow_empty=False
+                ),
+            }
+        )
+    if specialist_lenses != SPECIALIST_LENS_IDS:
+        raise ObligationContractError(
+            f"{context}.specialist_decisions must classify exactly {sorted(SPECIALIST_LENS_IDS)}"
+        )
     return {
         "unit_id": unit_id,
         "purpose": _string(unit["purpose"], f"{context}.purpose"),
@@ -284,6 +348,9 @@ def _normalize_unit(
         "risk_codes": sorted(risk_codes),
         "selected_risk_rationale": selected,
         "rejected_risk_rationale": rejected,
+        "specialist_decisions": sorted(
+            specialist_decisions, key=lambda item: item["lens_id"]
+        ),
     }
 
 
@@ -410,6 +477,8 @@ def _normalize_assignment(
         expected_keys.update({"obligation_id", "unit_id", "risk_code"})
     elif assignment_kind == "supplemental":
         expected_keys.update({"unit_id", "risk_code"})
+    elif assignment_kind == "specialist":
+        expected_keys.update({"unit_ids", "primary_paths", "context_paths"})
     _exact_keys(assignment, expected_keys, context)
     normalized: dict[str, Any] = {
         "assignment_id": _identifier(assignment["assignment_id"], f"{context}.assignment_id"),
@@ -422,6 +491,50 @@ def _normalize_assignment(
             raise ObligationContractError(
                 f"{context} is not one of the mandatory core assignments with its exact lens"
             )
+        return normalized
+
+    if assignment_kind == "specialist":
+        if normalized["lens_id"] not in SPECIALIST_LENS_IDS:
+            raise ObligationContractError(
+                f"{context}.lens_id must be one of {sorted(SPECIALIST_LENS_IDS)}"
+            )
+        unit_ids = [
+            _identifier(item, f"{context}.unit_ids[{unit_index}]")
+            for unit_index, item in enumerate(_array(assignment["unit_ids"], f"{context}.unit_ids"))
+        ]
+        if not unit_ids or len(set(unit_ids)) != len(unit_ids):
+            raise ObligationContractError(f"{context}.unit_ids must contain unique selected units")
+        unknown_units = sorted(set(unit_ids) - set(units_by_id))
+        if unknown_units:
+            raise ObligationContractError(
+                f"{context}.unit_ids contains unknown units: {', '.join(unknown_units)}"
+            )
+        primary_paths = _path_array(
+            assignment["primary_paths"], f"{context}.primary_paths", allow_empty=False
+        )
+        context_paths = _path_array(assignment["context_paths"], f"{context}.context_paths")
+        expected_primary = {
+            path for unit_id in unit_ids for path in units_by_id[unit_id]["primary_paths"]
+        }
+        available_context = {
+            path for unit_id in unit_ids for path in units_by_id[unit_id]["context_paths"]
+        }
+        if set(primary_paths) != expected_primary:
+            raise ObligationContractError(
+                f"{context}.primary_paths must equal the exact union of selected unit primary paths"
+            )
+        outside_context = sorted(set(context_paths) - available_context)
+        if outside_context:
+            raise ObligationContractError(
+                f"{context}.context_paths are outside selected units: {', '.join(outside_context)}"
+            )
+        normalized.update(
+            {
+                "unit_ids": sorted(unit_ids),
+                "primary_paths": primary_paths,
+                "context_paths": context_paths,
+            }
+        )
         return normalized
 
     unit_id = _identifier(assignment["unit_id"], f"{context}.unit_id")
@@ -466,6 +579,7 @@ def validate_coverage_contract(
             "schema_version",
             "scope_hash",
             "workflow_profile",
+            "depth",
             "change_units",
             "review_obligations",
             "assignments",
@@ -476,6 +590,9 @@ def validate_coverage_contract(
         raise ObligationContractError("coverage plan has an unsupported schema_version")
     if plan["workflow_profile"] != WORKFLOW_PROFILE:
         raise ObligationContractError("coverage plan workflow_profile must be material_review")
+    depth = _string(plan["depth"], "coverage plan.depth")
+    if depth not in DEPTHS:
+        raise ObligationContractError(f"coverage plan.depth must be one of {sorted(DEPTHS)}")
     normalized_changed = {canonical_git_path(path, "changed path") for path in changed_paths}
     normalized_allowed_context = {
         canonical_git_path(path, "allowed context path") for path in allowed_context_paths
@@ -559,11 +676,49 @@ def validate_coverage_contract(
         raise ObligationContractError(
             "coverage plan must contain exactly one assignment for every required supporting lens"
         )
+    selected_units_by_lens = {
+        lens_id: [
+            unit["unit_id"]
+            for unit in units
+            if any(
+                decision["lens_id"] == lens_id and decision["decision"] == "selected"
+                for decision in unit["specialist_decisions"]
+            )
+        ]
+        for lens_id in SPECIALIST_LENS_IDS
+    }
+    if depth == "full":
+        rejected = [
+            f"{unit['unit_id']}:{decision['lens_id']}"
+            for unit in units
+            for decision in unit["specialist_decisions"]
+            if decision["decision"] != "selected" or decision["basis"] != "full_depth"
+        ]
+        if rejected:
+            raise ObligationContractError(
+                "full depth must select every specialist lens for every change unit with full_depth basis"
+            )
+    specialists = [
+        item for item in assignments if item["assignment_kind"] == "specialist"
+    ]
+    specialist_lenses = [item["lens_id"] for item in specialists]
+    expected_lenses = {lens_id for lens_id, unit_ids in selected_units_by_lens.items() if unit_ids}
+    if set(specialist_lenses) != expected_lenses or len(specialist_lenses) != len(expected_lenses):
+        raise ObligationContractError(
+            "coverage plan requires exactly one specialist assignment for every selected lens"
+        )
+    for specialist in specialists:
+        expected_units = sorted(selected_units_by_lens[specialist["lens_id"]])
+        if specialist["unit_ids"] != expected_units:
+            raise ObligationContractError(
+                f"specialist assignment {specialist['assignment_id']} must cover the exact selected units for {specialist['lens_id']}"
+            )
     assignments = sorted(assignments, key=lambda item: item["assignment_id"])
     return {
         "schema_version": COVERAGE_PLAN_SCHEMA,
         "scope_hash": _sha256(plan["scope_hash"], "coverage plan.scope_hash"),
         "workflow_profile": WORKFLOW_PROFILE,
+        "depth": depth,
         "change_units": units,
         "review_obligations": obligations,
         "assignments": assignments,
@@ -696,17 +851,21 @@ def validate_assignment_result(
     }
     if assignment_kind == "obligation":
         expected_keys.add("obligation_id")
+    elif assignment_kind == "specialist":
+        expected_keys.update({"unit_ids", "primary_paths", "context_paths"})
     _exact_keys(result, expected_keys, "assignment result")
     if result["schema_version"] != CANDIDATE_SET_SCHEMA:
         raise ObligationContractError("assignment result has an unsupported schema_version")
-    identity_fields = (
+    identity_fields = [
         "assignment_id",
         "assignment_kind",
         "lens_id",
         "reviewer_id",
         "independence_group",
         "review_mode",
-    )
+    ]
+    if assignment_kind == "specialist":
+        identity_fields.extend(["unit_ids", "primary_paths", "context_paths"])
     for field in identity_fields:
         if result[field] != assignment[field]:
             raise ObligationContractError(
@@ -725,7 +884,7 @@ def validate_assignment_result(
         check_results = _array(result["check_results"], "assignment result.check_results")
         if check_results:
             raise ObligationContractError(
-                "core and supplemental assignment check_results must be empty"
+                "core, supplemental, and specialist assignment check_results must be empty"
             )
         check_results = []
     normalized = {
@@ -741,11 +900,19 @@ def validate_assignment_result(
     }
     if assignment_kind == "obligation":
         normalized["obligation_id"] = result["obligation_id"]
+    coverage = _normalize_coverage(result["coverage"])
+    if assignment_kind == "specialist":
+        missing_paths = sorted(set(assignment["primary_paths"]) - set(coverage["files_reviewed"]))
+        if missing_paths:
+            raise ObligationContractError(
+                "specialist assignment result must review every assigned primary path: "
+                + ", ".join(missing_paths)
+            )
     normalized.update(
         {
             "check_results": check_results,
             "findings": findings,
-            "coverage": _normalize_coverage(result["coverage"]),
+            "coverage": coverage,
         }
     )
     return normalized

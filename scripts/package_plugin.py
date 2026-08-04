@@ -15,7 +15,27 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
-VERSION = "1.4.1"
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+SHARED_SCRIPT_DIRECTORY = (
+    SCRIPT_DIRECTORY.parent / "skills/material-code-review/scripts"
+)
+if str(SHARED_SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SHARED_SCRIPT_DIRECTORY))
+
+from package_layout_contract import (  # noqa: E402
+    normalize_package_path,
+    schema_version_is_supported,
+)
+from package_publication import (  # noqa: E402
+    PublicationRecoveryError,
+    allocate_owned_path as allocate_shared_owned_path,
+    cleanup_owned_paths,
+    publish_staged_outputs as publish_shared_staged_outputs,
+)
+
+VERSION = "1.5.0"
 FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)
 EXCLUDED_PARTS = {
     ".git",
@@ -96,20 +116,7 @@ def iter_standalone_files(root: Path) -> Iterable[tuple[Path, str]]:
 
 
 def normalize_manifest_path(value: object, label: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"unsafe manifest {label}: {value!r}")
-    if "\\" in value:
-        raise ValueError(f"unsafe manifest {label}: {value}")
-    path = PurePosixPath(value)
-    normalized = path.as_posix()
-    if (
-        path.is_absolute()
-        or ".." in path.parts
-        or normalized in {"", "."}
-        or normalized != value
-    ):
-        raise ValueError(f"unsafe manifest {label}: {value}")
-    return normalized
+    return normalize_package_path(value, f"manifest {label}")
 
 
 def load_layout_manifest(root: Path) -> dict[str, dict[str, object]]:
@@ -120,12 +127,49 @@ def load_layout_manifest(root: Path) -> dict[str, dict[str, object]]:
         raise ValueError(f"layout manifest is missing: {LAYOUT_MANIFEST_SOURCE.as_posix()}") from exc
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"layout manifest is invalid: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+    if not isinstance(manifest, dict) or not schema_version_is_supported(
+        manifest.get("schema_version")
+    ):
         raise ValueError("layout manifest schema_version must be 1")
     layouts = manifest.get("layouts")
     if not isinstance(layouts, dict) or set(layouts) != set(LAYOUT_NAMES):
         raise ValueError("layout manifest must define full-plugin and standalone")
-    return layouts
+    normalized_layouts: dict[str, dict[str, object]] = {}
+    for layout_name in LAYOUT_NAMES:
+        layout = layouts[layout_name]
+        if not isinstance(layout, dict):
+            raise ValueError(f"layout {layout_name} must be an object")
+        canonical_skill = normalize_manifest_path(
+            layout.get("canonical_skill"),
+            f"canonical skill for {layout_name}",
+        )
+        mappings = layout.get("required_mappings")
+        if not isinstance(mappings, list) or not mappings:
+            raise ValueError(
+                f"layout {layout_name} required_mappings must be a non-empty array"
+            )
+        normalized_mappings: list[dict[str, str]] = []
+        for index, mapping in enumerate(mappings):
+            if not isinstance(mapping, dict) or set(mapping) != {
+                "source",
+                "destination",
+            }:
+                raise ValueError(
+                    f"layout {layout_name} mapping {index} must contain source and destination"
+                )
+            normalized_mappings.append(
+                {
+                    "source": normalize_manifest_path(mapping["source"], "source"),
+                    "destination": normalize_manifest_path(
+                        mapping["destination"], "destination"
+                    ),
+                }
+            )
+        normalized_layouts[layout_name] = {
+            "canonical_skill": canonical_skill,
+            "required_mappings": normalized_mappings,
+        }
+    return normalized_layouts
 
 
 def validate_layout_mappings(
@@ -219,8 +263,13 @@ def build_archive(output: Path, entries: Iterable[tuple[Path, str]], comment: st
     with zipfile.ZipFile(output, "w", allowZip64=True) as zf:
         zf.comment = comment.encode("utf-8")
         for source, archive_name in entries:
-            normalized = archive_name.replace("\\", "/").lstrip("/")
-            if not normalized or normalized in seen or ".." in Path(normalized).parts:
+            try:
+                normalized = normalize_package_path(archive_name, "archive entry")
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unsafe or duplicate archive entry: {archive_name}"
+                ) from exc
+            if normalized in seen:
                 raise ValueError(f"Unsafe or duplicate archive entry: {archive_name}")
             seen.add(normalized)
             write_entry(zf, source, normalized)
@@ -267,43 +316,11 @@ def validate_publication_destinations(
 
 
 def allocate_owned_path(destination: Path, purpose: str) -> Path:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_path = tempfile.mkstemp(
-        prefix=f".{destination.name}.material-review-{purpose}-",
-        dir=destination.parent,
-    )
-    os.close(descriptor)
-    return Path(raw_path)
+    return allocate_shared_owned_path(destination, purpose, "material-review")
 
 
 def publish_staged_outputs(staged_outputs: list[tuple[Path, Path]]) -> None:
-    backups: dict[Path, Path] = {}
-    published: list[Path] = []
-    try:
-        for destination, _ in staged_outputs:
-            if destination.exists():
-                backup = allocate_owned_path(destination, "backup")
-                backup.unlink()
-                os.replace(destination, backup)
-                backups[destination] = backup
-        for destination, staged in staged_outputs:
-            os.replace(staged, destination)
-            published.append(destination)
-    except OSError:
-        for destination in reversed(published):
-            if destination.is_file() and not destination.is_symlink():
-                destination.unlink()
-        for destination, backup in reversed(list(backups.items())):
-            if backup.exists():
-                os.replace(backup, destination)
-        raise
-    finally:
-        for _, staged in staged_outputs:
-            if staged.is_file() and not staged.is_symlink():
-                staged.unlink()
-        for backup in backups.values():
-            if backup.is_file() and not backup.is_symlink():
-                backup.unlink()
+    publish_shared_staged_outputs(staged_outputs, owner_label="material-review")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -418,9 +435,7 @@ def main(argv: list[str] | None = None) -> int:
             staged_outputs.append((standalone_checksum, standalone_checksum_stage))
         publish_staged_outputs(staged_outputs)
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
-        for _, staged in staged_outputs:
-            if staged.is_file() and not staged.is_symlink():
-                staged.unlink()
+        cleanup_owned_paths([staged for _, staged in staged_outputs])
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
 

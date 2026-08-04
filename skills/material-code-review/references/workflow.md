@@ -19,16 +19,18 @@ validate plan
 Gate B
 ```
 
-New material-review runs use `material-review/state/v3`, `coverage-plan/v2`, `candidate-set/v3`, and `candidates-normalized/v3`. Material-review `state/v1` and `state/v2` runs are not migrated into discovery. They retain only their established inspection, restoration, and marker-bound final-repair completion commands; other forward commands require a new run. The shared controller separately recognizes explicitly profiled material-code-simplification `state/v1` as forward-capable with its established candidate and ledger contracts.
+New material-review runs use `material-review/state/v4`, `coverage-plan/v3`, `candidate-set/v4`, and `candidates-normalized/v4`. Material-review `state/v1`, `state/v2`, and `state/v3` runs are not migrated or backfilled into discovery. They retain only bounded inspection and checkpointed restoration commands; forward commands require a new run. The shared controller separately recognizes explicitly profiled material-code-simplification `state/v1` as forward-capable with its established candidate and ledger contracts.
 
-Material-review normalized reviewer sets retain assignment identity, lens, obligation identity when applicable, and resolved check results. Local finding IDs in `finding_emitted` results become canonical candidate IDs only after deterministic candidate ordering. Temporary filenames and input order never become authority.
+Material-review normalized reviewer sets retain assignment identity, lens, obligation identity when applicable, specialist unit and path provenance when applicable, and resolved check results. Local finding IDs in `finding_emitted` results become canonical candidate IDs only after deterministic candidate ordering. Temporary filenames and input order never become authority.
+
+Current checkpoints use `material-review/checkpoint/v4`. They bind HEAD attachment and commit, the complete refs namespace, semantic index content, workspace guard, and exact path snapshots. Rollback, abort, finding-test cleanup, global-test cleanup, and final refresh all use one recovery engine with a caller-bound expected post-command observation. Manual rollback and abort bind only approved-path repair deltas; ref, HEAD, index, or unrelated-path drift is preserved for human reconciliation. The engine compares complete authority before its first repository write, uses expected-old ref updates, and verifies the complete restored authority. A conflict or incomplete restore writes structured recovery evidence and stops for human recovery. Historical checkpoints remain isolated on bounded legacy restoration.
 
 | State | Command | Result |
 |---|---|---|
 | new | `init` | `CONTEXT_FROZEN` and immutable source/diff bundle |
 | context | `check-scope` | confirms current identity still matches |
 | context | `record-coverage --input ...` | validates the exact change-unit partition, exhaustive risk decisions, obligations, assignments, and frozen context; an identical plan/context is idempotent |
-| context with verified coverage | `ingest-candidates --input ...` | accepts exactly one complete assignment-matched candidate-set/v3 wave and writes candidates-normalized/v3; findings may be empty but required checks and paths may not |
+| context with verified coverage | `ingest-candidates --input ...` | accepts exactly one complete assignment-matched candidate-set/v4 wave and writes candidates-normalized/v4; findings may be empty but required checks and paths may not |
 | candidates | `ingest-candidates --input ...` | exact canonical retry is no-write; a different complete wave requires a new run; invalid input updates only the non-authoritative failure diagnostic |
 | candidates | provisional grouping + repair audit | partitions every candidate once and binds every provisionally kept direction to scope, candidate IDs, and direction hash |
 | audited provisional groups | `compile-ledger --input ...` | validates adjudication/v4 plus exact candidate-derived source lenses and writes ledger/v4 |
@@ -39,13 +41,13 @@ Material-review normalized reviewer sets retain assignment identity, lens, oblig
 | fixing | `start-finding --finding F###` | creates per-finding checkpoint |
 | fixing | `run-test --finding F### --test ID` | executes exact approved test and audits mutation |
 | fixing | `finish-finding ...` | retains a passing in-boundary repair |
-| fixing | `rollback-finding ...` | restores the finding checkpoint |
+| fixing | `rollback-finding ...` | restores the finding checkpoint when only approved paths differ; otherwise preserves drift and stops |
 | fixing | `run-global-test --test ID` | records exact approved plan-level validation |
 | fixing, all findings fixed | `refresh-finding-test --finding F### --test ID` | refreshes exact approved evidence at the final shared tree without consuming an attempt |
 | fixing | `prepare-verification` | verifies fix completion and creates the fix-only bundle |
 | verifying | `record-verification --input ...` | records pass, bounded repair requirement, or block |
 | repair required | `begin-repair` | reopens only causal in-plan finding IDs within budget |
-| mutation phases | `abort-fixes --reason ...` | restores frozen pre-fix state and aborts repair layer |
+| mutation phases | `abort-fixes --reason ...` | restores frozen pre-fix state when only plan-approved paths differ; otherwise preserves drift and stops |
 | any | `status` | renders current state and artifact paths |
 
 ## Input order and authority

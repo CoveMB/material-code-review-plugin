@@ -1,7 +1,7 @@
 {
   "name": "material-code-review-marketplace",
   "description": "Evidence-gated material review of concrete Git change scopes for AI coding agents.",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "owner": {
     "name": "Cove"
   },

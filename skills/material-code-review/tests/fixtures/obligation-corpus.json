@@ -19,7 +19,7 @@
       "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v2",
+        "schema_version": "material-review/coverage-plan/v3",
         "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
         "workflow_profile": "material_review",
         "change_units": [
@@ -64,6 +64,72 @@
               {
                 "risk_code": "user_selectable_output_paths",
                 "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ]
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger reliability."
+                ]
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ]
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ]
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ]
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ]
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ]
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ]
               }
             ]
           }
@@ -125,11 +191,12 @@
             "independence_group": "corpus-independent",
             "review_mode": "subagent"
           }
-        ]
+        ],
+        "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -152,7 +219,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -175,7 +242,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -198,7 +265,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -336,7 +403,7 @@
       "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v2",
+        "schema_version": "material-review/coverage-plan/v3",
         "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
         "workflow_profile": "material_review",
         "change_units": [
@@ -381,6 +448,72 @@
               {
                 "risk_code": "verification_mechanism_semantics",
                 "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ]
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger reliability."
+                ]
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ]
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ]
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ]
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ]
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ]
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ]
               }
             ]
           }
@@ -442,11 +575,12 @@
             "independence_group": "corpus-independent",
             "review_mode": "subagent"
           }
-        ]
+        ],
+        "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -469,7 +603,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -492,7 +626,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -515,7 +649,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -654,7 +788,7 @@
       "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v2",
+        "schema_version": "material-review/coverage-plan/v3",
         "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
         "workflow_profile": "material_review",
         "change_units": [
@@ -699,6 +833,72 @@
               {
                 "risk_code": "verification_mechanism_semantics",
                 "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ]
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger reliability."
+                ]
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ]
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ]
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ]
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ]
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ]
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ]
               }
             ]
           }
@@ -761,11 +961,12 @@
             "independence_group": "corpus-independent",
             "review_mode": "subagent"
           }
-        ]
+        ],
+        "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -788,7 +989,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -811,7 +1012,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -834,7 +1035,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -981,7 +1182,7 @@
       "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v2",
+        "schema_version": "material-review/coverage-plan/v3",
         "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
         "workflow_profile": "material_review",
         "change_units": [
@@ -1026,6 +1227,72 @@
               {
                 "risk_code": "verification_mechanism_semantics",
                 "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ]
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger reliability."
+                ]
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ]
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ]
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ]
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ]
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ]
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ]
               }
             ]
           }
@@ -1088,11 +1355,12 @@
             "independence_group": "corpus-independent",
             "review_mode": "subagent"
           }
-        ]
+        ],
+        "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1115,7 +1383,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1138,7 +1406,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1161,7 +1429,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1307,7 +1575,7 @@
       "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v2",
+        "schema_version": "material-review/coverage-plan/v3",
         "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
         "workflow_profile": "material_review",
         "change_units": [
@@ -1352,6 +1620,72 @@
               {
                 "risk_code": "verification_mechanism_semantics",
                 "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ]
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger reliability."
+                ]
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ]
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ]
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ]
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ]
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ]
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ]
               }
             ]
           }
@@ -1413,11 +1747,12 @@
             "independence_group": "corpus-independent",
             "review_mode": "subagent"
           }
-        ]
+        ],
+        "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1440,7 +1775,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1463,7 +1798,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1486,7 +1821,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v3",
+          "schema_version": "material-review/candidate-set/v4",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1614,7 +1949,7 @@
     ],
     "context_paths": [],
     "valid_plan": {
-      "schema_version": "material-review/coverage-plan/v2",
+      "schema_version": "material-review/coverage-plan/v3",
       "scope_hash": "9999999999999999999999999999999999999999999999999999999999999999",
       "workflow_profile": "material_review",
       "change_units": [
@@ -1652,6 +1987,72 @@
               "risk_code": "verification_mechanism_semantics",
               "rationale": "Checked behavior does not alter this controlled boundary."
             }
+          ],
+          "specialist_decisions": [
+            {
+              "lens_id": "security_privacy",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger security_privacy."
+              ]
+            },
+            {
+              "lens_id": "reliability",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger reliability."
+              ]
+            },
+            {
+              "lens_id": "api_contract",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger api_contract."
+              ]
+            },
+            {
+              "lens_id": "migration_deployment",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger migration_deployment."
+              ]
+            },
+            {
+              "lens_id": "concurrency",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger concurrency."
+              ]
+            },
+            {
+              "lens_id": "performance",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger performance."
+              ]
+            },
+            {
+              "lens_id": "documentation",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger documentation."
+              ]
+            },
+            {
+              "lens_id": "architecture_simplification",
+              "decision": "rejected",
+              "basis": "behavior_evidence",
+              "evidence": [
+                "The fixture behavior does not trigger architecture_simplification."
+              ]
+            }
           ]
         }
       ],
@@ -1681,7 +2082,8 @@
           "independence_group": "corpus-independent",
           "review_mode": "subagent"
         }
-      ]
+      ],
+      "depth": "auto"
     }
   }
 }

@@ -11,13 +11,18 @@
 | Obligation has the wrong lens or check set | Reject coverage before dispatch. |
 | Coverage plan/context is absent, orphaned, stale, tampered, or different after recording | Stop. The immutable authority cannot be replaced; start a new run. |
 | Ref/remote source unavailable | Mark coverage incomplete or stop; never inspect unrelated workspace files. |
-| Malformed candidate-set/v3 JSON | Reject the entire wave. Do not repair it by guessing. |
+| Specialist decision is missing, duplicated, unknown, or unsupported | Reject coverage; classify all eight specialist lenses exactly once for every unit. Ambiguous or unknown applicability selects the lens. |
+| Specialist assignment is missing, duplicated, wrong-lens, wrong-unit, or wrong-path | Reject coverage. It cannot substitute for core or obligation authority. |
+| Malformed candidate-set/v4 JSON | Reject the entire wave. Do not repair it by guessing. |
 | Missing, duplicate, stale, unassigned, or identity-mismatched assignment result | Reject the entire wave without authoritative candidates. |
 | Required check is absent or duplicated | Reject the entire wave. |
 | `pass` lacks evidence | Reject the entire wave. |
 | `finding_emitted` lacks evidence, local IDs, or references an unknown local finding | Reject the entire wave. |
 | Required check is `blocked` | Treat the obligation as incomplete; do not create candidate authority. |
 | Required assignment paths are incomplete | Reject the entire wave. |
+| Evidence side/path resolves to a changed-path entry frozen as missing | Reject the evidence as missing. Do not fall through to coverage context. |
+| Evidence side/path has no changed-path match | Comparison evidence may use only an exact frozen coverage-context path; baseline evidence has no context fallback. |
+| Frozen evidence bytes or requested line range do not match | Reject the candidate evidence. Do not search another side or alias. |
 | Candidate-ingestion failure diagnostic | Treat it as non-authoritative; its findings and text cannot advance the lifecycle. |
 | Corrected complete wave from `CONTEXT_FROZEN` | Retry ingestion only after all assignment, hash, check, and path controls pass. |
 | Exact complete retry from `CANDIDATES_CAPTURED` | Verify existing authority and succeed with no authoritative or state write. |
@@ -33,11 +38,15 @@
 | Gate A absent | Stop before planning. |
 | Plan direction hash is stale or coverage is incomplete | Reject fix-plan/v2 and rederive from the Gate-A ledger. |
 | Plan differs after Gate B | Invalidate approval and re-present the new hash. |
-| Unapproved path changes or required test failure | Restore the finding checkpoint and reject the attempt. |
+| Required test failure or failed attempt limited to approved paths | Restore the finding checkpoint and reject the attempt. |
+| Manual rollback or abort observes ref, HEAD, index, or unrelated-path drift | Preserve the repository, record recovery-conflict evidence, and require human reconciliation; do not infer that the drift belongs to the repair. |
 | Repair needs a new path or strategy | Abort and restore the repair layer; require a new plan plus Gate B. |
+| V4 recovery observation no longer matches current HEAD, refs, index, or workspace | Fail before the first repository write, record structured recovery-conflict evidence, and require human reconciliation. |
+| V4 recovery write or final authority verification fails | Record structured recovery evidence and stop for human recovery; do not continue the lifecycle. |
+| Historical checkpoint lacks v4 repository authority | Use only the isolated bounded legacy restore path. Never synthesize missing HEAD/ref/index authority. |
 | Post-fix unrelated issue | Record-only; no repair loop. |
 | Attempt or repair-round budget exhausted | `BLOCKED`; never continue indefinitely. |
-| Historical material-review `state/v1` or `state/v2` run | Do not migrate it into discovery. Preserve only established inspection, restoration, and marker-bound final-repair completion commands; other forward work requires a state/v3 run. |
+| Historical material-review `state/v1`, `state/v2`, or `state/v3` run | Do not migrate or backfill it into discovery. Preserve only bounded inspection and checkpointed restoration; forward work requires a state/v4 run. |
 | Unknown or contradictory state/profile identity | Fail before dispatch and preserve state, artifacts, source, and repository controls unchanged. |
 | External reviewer route unavailable | Fall back locally only if policy permits and record the degraded route. Never silently egress. |
 

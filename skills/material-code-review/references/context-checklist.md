@@ -34,6 +34,22 @@ A positive rationale names concrete `evidence_paths` within the unit's primary a
 
 Every positive `(unit_id, risk_code)` pair creates exactly one `review_obligation` with the controlled lens and checks. It also creates exactly one obligation assignment. Add the three mandatory core assignments in every plan. Add only the controlled supporting assignments required by a selected risk. Ordinary low-risk plans have three core assignments and no obligations.
 
+## Exhaustive specialist decisions
+
+For every unit, `specialist_decisions` classifies exactly these eight lenses as `selected` or `rejected`: `security_privacy`, `reliability`, `api_contract`, `migration_deployment`, `concurrency`, `performance`, `documentation`, and `architecture_simplification`.
+
+Under `depth:auto`, select a lens when behavior evidence makes it applicable. Ambiguous or unknown evidence selects the lens; reject only with concrete behavior-based non-trigger evidence. Under `depth:full`, select all eight lenses for every unit with `full_depth` basis.
+
+Create exactly one specialist assignment per selected lens. Bind it to the exact selected `unit_ids`, the exact union of those units' `primary_paths`, and only bounded `context_paths` from those units. Specialist selection is independent of the six controlled risks: it cannot add, replace, or satisfy a core assignment, review obligation, or obligation-derived supplemental assignment.
+
 ## Dispatch bundle
 
-Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, its required paths, and any exact `obligation_id` plus `required_checks`. Supply `schemas/candidate-set-v3.schema.json`. Do not include another assignment's candidate output.
+Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, and its required paths. Include any exact `obligation_id` plus `required_checks`, or for a specialist the exact `unit_ids`, `primary_paths`, and `context_paths`. Supply `schemas/candidate-set-v4.schema.json`. Do not include another assignment's candidate output.
+
+## Evidence-side identity
+
+- Baseline evidence for a rename or copy addresses the exact `old_path`.
+- Comparison evidence addresses only the exact current changed `path`; an old name recreated as a separate changed path is distinct authority.
+- A matched comparison path whose frozen state is missing remains missing. Do not substitute a same-named coverage-context source.
+- Use unchanged bounded coverage context only when the requested comparison path has no changed-path match.
+- Verify the frozen byte hash and exact requested line range before accepting the quote.

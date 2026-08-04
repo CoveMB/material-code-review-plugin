@@ -92,10 +92,10 @@ class DiscoveryContractTests(unittest.TestCase):
     def test_discovery_contract_requires_change_units_and_obligations(self) -> None:
         text = self.read("SKILL.md")
         for marker in (
-            "material-review/state/v3",
-            "material-review/coverage-plan/v2",
-            "material-review/candidate-set/v3",
-            "material-review/candidates-normalized/v3",
+            "material-review/state/v4",
+            "material-review/coverage-plan/v3",
+            "material-review/candidate-set/v4",
+            "material-review/candidates-normalized/v4",
             "change_units",
             "review_obligations",
             "assignment_id",
@@ -157,10 +157,10 @@ class DiscoveryContractTests(unittest.TestCase):
         self.assertIn("Filenames are discovery hints only", guidance)
         self.assertIn("does not prove reviewer cognition", guidance)
 
-    def test_reviewer_template_requires_assignment_matched_v3_output(self) -> None:
+    def test_reviewer_template_requires_assignment_matched_v4_output(self) -> None:
         reviewer = self.read("references/reviewer-template.md")
         for marker in (
-            "candidate-set-v3.schema.json",
+            "candidate-set-v4.schema.json",
             "coverage_context_hash",
             "assignment_id",
             "assignment_kind",
@@ -172,6 +172,43 @@ class DiscoveryContractTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, reviewer)
+
+    def test_specialist_selection_is_exhaustive_and_assignment_bound(self) -> None:
+        skill = self.read("SKILL.md")
+        context = self.read("references/context-checklist.md")
+        reviewer = self.read("references/reviewer-template.md")
+        workflow = self.read("references/workflow.md")
+        roster = (
+            "security_privacy",
+            "reliability",
+            "api_contract",
+            "migration_deployment",
+            "concurrency",
+            "performance",
+            "documentation",
+            "architecture_simplification",
+        )
+        for lens_id in roster:
+            with self.subTest(lens=lens_id):
+                self.assertIn(f"`{lens_id}`", context)
+        for marker in (
+            "specialist_decisions",
+            "selected",
+            "rejected",
+            "Ambiguous or unknown evidence selects the lens",
+            "depth:full",
+        ):
+            self.assertIn(marker, context)
+        for marker in (
+            "unit_ids",
+            "primary_paths",
+            "context_paths",
+            "Specialist assignments",
+            "empty `check_results`",
+        ):
+            self.assertIn(marker, reviewer)
+        self.assertIn("Specialists cannot satisfy core assignments or controlled obligations", skill)
+        self.assertIn("specialist unit and path provenance", workflow)
 
     def test_workflow_discovery_order_requires_scope_check(self) -> None:
         workflow = self.read("references/workflow.md")

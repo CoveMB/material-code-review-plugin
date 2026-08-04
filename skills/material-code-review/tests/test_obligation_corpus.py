@@ -207,9 +207,9 @@ class ObligationCorpusTest(unittest.TestCase):
                 )
                 self.assertTrue(case["expected_defect"])
 
-    def test_positive_corpus_uses_complete_v3_candidate_contract(self) -> None:
+    def test_positive_corpus_uses_complete_v4_candidate_contract(self) -> None:
         schema = json.loads(
-            (SKILL_ROOT / "schemas" / "candidate-set-v3.schema.json").read_text(
+            (SKILL_ROOT / "schemas" / "candidate-set-v4.schema.json").read_text(
                 encoding="utf-8"
             )
         )

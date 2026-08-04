@@ -132,6 +132,10 @@
           "source": "scripts/package_plugin.py"
         },
         {
+          "destination": "scripts/package_publication.py",
+          "source": "scripts/package_publication.py"
+        },
+        {
           "destination": "scripts/package_simplification_skill.py",
           "source": "scripts/package_simplification_skill.py"
         },
@@ -240,12 +244,20 @@
           "source": "skills/material-code-review/schemas/candidate-set-v3.schema.json"
         },
         {
+          "destination": "skills/material-code-review/schemas/candidate-set-v4.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v4.schema.json"
+        },
+        {
           "destination": "skills/material-code-review/schemas/candidate-set.schema.json",
           "source": "skills/material-code-review/schemas/candidate-set.schema.json"
         },
         {
           "destination": "skills/material-code-review/schemas/coverage-plan-v2.schema.json",
           "source": "skills/material-code-review/schemas/coverage-plan-v2.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/coverage-plan-v3.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan-v3.schema.json"
         },
         {
           "destination": "skills/material-code-review/schemas/coverage-plan.schema.json",
@@ -262,6 +274,10 @@
         {
           "destination": "skills/material-code-review/scripts/obligation_contract.py",
           "source": "skills/material-code-review/scripts/obligation_contract.py"
+        },
+        {
+          "destination": "skills/material-code-review/scripts/package_layout_contract.py",
+          "source": "skills/material-code-review/scripts/package_layout_contract.py"
         },
         {
           "destination": "skills/material-code-review/scripts/reviewctl.py",
@@ -286,6 +302,10 @@
         {
           "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_3_compat.py",
           "source": "skills/material-code-review/tests/fixtures/reviewctl_1_3_compat.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_4_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_4_compat.py"
         },
         {
           "destination": "skills/material-code-review/tests/test_discovery_contract.py",
@@ -497,12 +517,20 @@
           "source": "skills/material-code-review/schemas/candidate-set-v3.schema.json"
         },
         {
+          "destination": "schemas/candidate-set-v4.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v4.schema.json"
+        },
+        {
           "destination": "schemas/candidate-set.schema.json",
           "source": "skills/material-code-review/schemas/candidate-set.schema.json"
         },
         {
           "destination": "schemas/coverage-plan-v2.schema.json",
           "source": "skills/material-code-review/schemas/coverage-plan-v2.schema.json"
+        },
+        {
+          "destination": "schemas/coverage-plan-v3.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan-v3.schema.json"
         },
         {
           "destination": "schemas/coverage-plan.schema.json",
@@ -519,6 +547,10 @@
         {
           "destination": "scripts/obligation_contract.py",
           "source": "skills/material-code-review/scripts/obligation_contract.py"
+        },
+        {
+          "destination": "scripts/package_layout_contract.py",
+          "source": "skills/material-code-review/scripts/package_layout_contract.py"
         },
         {
           "destination": "scripts/reviewctl.py",
@@ -543,6 +575,10 @@
         {
           "destination": "tests/fixtures/reviewctl_1_3_compat.py",
           "source": "skills/material-code-review/tests/fixtures/reviewctl_1_3_compat.py"
+        },
+        {
+          "destination": "tests/fixtures/reviewctl_1_4_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_4_compat.py"
         },
         {
           "destination": "tests/test_discovery_contract.py",

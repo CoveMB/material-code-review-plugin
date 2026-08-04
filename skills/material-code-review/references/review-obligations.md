@@ -4,6 +4,8 @@ Use this guide to classify each change unit against every controlled risk before
 
 Every positive `(unit_id, risk_code)` pair creates exactly one `review_obligation` and exactly one obligation assignment. The obligation's required lens and checks are fixed below. Negative decisions create no obligation. A low-risk plan therefore contains only the three core assignments.
 
+The separate specialist roster is exactly `security_privacy`, `reliability`, `api_contract`, `migration_deployment`, `concurrency`, `performance`, `documentation`, and `architecture_simplification`. Every change unit classifies every specialist as selected or rejected. Under `depth:auto`, behavior evidence selects applicable lenses and ambiguous or unknown applicability selects rather than rejects. Under `depth:full`, every lens is selected for every unit. Each selected lens receives one specialist assignment over the exact selected units and primary-path union. Specialist assignments have no `obligation_id` or required checks and cannot satisfy a controlled obligation.
+
 For every required check, return one outcome:
 
 - `pass`: concrete observed evidence and no finding IDs;

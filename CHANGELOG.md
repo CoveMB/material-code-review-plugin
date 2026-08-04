@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0 — 2026-08-03
+
+- Added state/v4, coverage-plan/v3, candidate-set/v4, and candidates-normalized/v4 with exhaustive selected-or-rejected classification and assignment-bound dispatch for eight controlled specialist lenses.
+- Made state/v1 through state/v3 material-review runs observation/restoration-only; new authority is never inferred, migrated, or backfilled.
+- Corrected comparison-side rename/copy evidence resolution and distinguished matched bytes, matched missing paths, and bounded context fallback.
+- Added checkpoint/v4 complete HEAD, refs, index, and workspace authority plus one compare-and-swap restoration engine for every v4 recovery caller.
+- Hardened package publication across Python exceptions and interruptions, retaining exact destination-to-backup recovery evidence when rollback is incomplete.
+- Centralized safe package-path and exact integer schema-version validation across the publisher and both review validators.
+- Required evaluator-owned fixture repositories to initialize and attest SHA-1 before staging, committing, or worker dispatch.
+- Kept standalone material simplification at adapter 1.3.0 while updating its embedded shared-controller/helper provenance and schema closure to 1.5.0.
+
 ## 1.4.1 — 2026-08-01
 
 - Added fail-closed `privileged_field_type_exactness` coverage to machine-contract review obligations for affected fields controlling authorization, ownership, deletion or cleanup, mutation, publication or external writes, migration, or schema/version interpretation.

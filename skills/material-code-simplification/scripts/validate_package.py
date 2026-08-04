@@ -28,7 +28,7 @@ from static_version_contract import (  # noqa: E402
     validate_static_version_declaration,
 )
 VERSION = "1.3.0"
-CORE_VERSION = "1.4.1"
+CORE_VERSION = "1.5.0"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -59,8 +59,10 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "core/schemas/candidate-set.schema.json",
     "core/schemas/candidate-set-v2.schema.json",
     "core/schemas/candidate-set-v3.schema.json",
+    "core/schemas/candidate-set-v4.schema.json",
     "core/schemas/coverage-plan.schema.json",
     "core/schemas/coverage-plan-v2.schema.json",
+    "core/schemas/coverage-plan-v3.schema.json",
     "core/schemas/adjudication.schema.json",
     "core/schemas/adjudication-v4.schema.json",
     "core/schemas/fix-plan.schema.json",
@@ -321,8 +323,10 @@ def main(argv: list[str] | None = None) -> int:
             "candidate-set.schema.json",
             "candidate-set-v2.schema.json",
             "candidate-set-v3.schema.json",
+            "candidate-set-v4.schema.json",
             "coverage-plan.schema.json",
             "coverage-plan-v2.schema.json",
+            "coverage-plan-v3.schema.json",
             "adjudication.schema.json",
             "adjudication-v4.schema.json",
             "fix-plan.schema.json",

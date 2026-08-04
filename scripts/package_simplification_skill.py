@@ -13,9 +13,20 @@ import hashlib
 import os
 import re
 import stat
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
+
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+
+from package_publication import (  # noqa: E402
+    PublicationRecoveryError,
+    cleanup_owned_paths,
+    publish_staged_outputs as publish_shared_staged_outputs,
+)
 
 SKILL_NAME = "material-code-simplification"
 VERSION = "1.3.0"
@@ -88,54 +99,10 @@ def write_file(archive: zipfile.ZipFile, source: Path, archive_path: str) -> Non
     archive.writestr(info, source.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
-def allocate_owned_path(destination: Path, purpose: str) -> Path:
-    descriptor, raw_path = tempfile.mkstemp(
-        prefix=f".{destination.name}.material-simplification-{purpose}-",
-        dir=destination.parent,
-    )
-    os.close(descriptor)
-    return Path(raw_path)
-
-
-def path_entry_exists(path: Path) -> bool:
-    return path.exists() or path.is_symlink()
-
-
-def unlink_owned_non_directory(path: Path) -> None:
-    if path_entry_exists(path) and (path.is_symlink() or not path.is_dir()):
-        path.unlink()
-
-
 def publish_staged_outputs(staged_outputs: list[tuple[Path, Path]]) -> None:
-    backups: dict[Path, Path] = {}
-    published: list[Path] = []
-    try:
-        for destination, _ in staged_outputs:
-            if destination.is_dir() and not destination.is_symlink():
-                raise IsADirectoryError(
-                    f"destination must not be a directory: {destination}"
-                )
-        for destination, _ in staged_outputs:
-            if path_entry_exists(destination):
-                backup = allocate_owned_path(destination, "backup")
-                backup.unlink()
-                os.replace(destination, backup)
-                backups[destination] = backup
-        for destination, staged in staged_outputs:
-            os.replace(staged, destination)
-            published.append(destination)
-    except OSError:
-        for destination in reversed(published):
-            unlink_owned_non_directory(destination)
-        for destination, backup in reversed(list(backups.items())):
-            if path_entry_exists(backup):
-                os.replace(backup, destination)
-        raise
-    finally:
-        for _, staged in staged_outputs:
-            unlink_owned_non_directory(staged)
-        for backup in backups.values():
-            unlink_owned_non_directory(backup)
+    publish_shared_staged_outputs(
+        staged_outputs, owner_label="material-simplification"
+    )
 
 
 def iter_files(root: Path):
@@ -224,9 +191,9 @@ def main() -> int:
                 ]
             )
         finally:
-            checksum_temp.unlink(missing_ok=True)
+            cleanup_owned_paths([checksum_temp])
     finally:
-        temp.unlink(missing_ok=True)
+        cleanup_owned_paths([temp])
     print(f"[OK] Wrote {output}")
     print(f"SHA-256: {digest}")
     return 0

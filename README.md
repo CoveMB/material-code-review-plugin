@@ -2,7 +2,7 @@
 
 `material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
-The package freezes the exact scope and bounded source context, partitions every changed path into explicit change units, and records a coverage-plan/v2 before candidate dispatch. Six controlled risk decisions map deterministically to required review obligations. Candidate-set/v3 binds one assignment to one result and requires every declared check outcome before the controller accepts the complete wave. After validation, material review carries assignment provenance through candidates-normalized/v3, adjudication/v4, and ledger/v4. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
+The package freezes the exact scope and bounded source context, partitions every changed path into explicit change units, and records a coverage-plan/v3 before candidate dispatch. Six controlled risk decisions map deterministically to required review obligations, while every change unit receives an exhaustive selected-or-rejected decision for eight controlled specialist lenses. Candidate-set/v4 binds one assignment to one result and requires every declared obligation check outcome before the controller accepts the complete wave. After validation, material review carries assignment and specialist provenance through candidates-normalized/v4, adjudication/v4, and ledger/v4. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
 1. **Gate A — finding approval:** approve, reject, or defer each exact material finding.
 2. **Gate B — repair-plan approval:** approve the exact repair steps, writable paths, validation commands, risks, retry limits, and rollback behavior.
@@ -20,7 +20,7 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
 
-The artifact version split is deliberate: current material review state/v3 uses coverage-plan/v2, candidate-set/v3, candidates-normalized/v3, adjudication/v4, and ledger/v4. Material-review state/v2 and state/v1 are historical bounded contracts; they are not inferred, backfilled, renumbered, rehashed, or rewritten. Unmarked legacy runs remain observation/restoration-only, while a marked run already in final repair may complete only its explicitly bounded compatibility path. Explicitly profiled material simplification state/v1 remains on candidates-normalized/v1, adjudication/v3, and ledger/v3 and never selects obligation semantics.
+The artifact version split is deliberate: current material review state/v4 uses coverage-plan/v3, candidate-set/v4, candidates-normalized/v4, adjudication/v4, and ledger/v4. Material-review state/v1 through state/v3 are historical bounded contracts; they are not inferred, backfilled, renumbered, rehashed, or rewritten, and remain observation/restoration-only. Explicitly profiled material simplification state/v1 remains on candidates-normalized/v1, adjudication/v3, and ledger/v3 and never selects obligation or specialist semantics.
 
 ## Invocation and activation boundary
 
@@ -69,7 +69,7 @@ The controller uses only the Python standard library.
 Extract the archive first:
 
 ```bash
-unzip material-code-review-plugin-1.4.1.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.5.0.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a local Codex marketplace:
@@ -97,7 +97,7 @@ Use the smaller archive for direct Codex skill installation:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.4.1.zip \
+unzip material-code-review-codex-skill-1.5.0.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -128,7 +128,7 @@ unzip material-code-simplification-codex-skill-1.3.0.zip \
   -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-Its `core/` directory embeds shared controller and obligation helper 1.4.1 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v3, coverage-plan/v2, candidate-set/v3, assignments, check results, and obligations do not apply to simplification.
+Its `core/` directory embeds shared controller and obligation helper 1.5.0 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v4, coverage-plan/v3, candidate-set/v4, assignments, check results, obligations, and specialist policy do not apply to simplification.
 
 ## Optional project-scoped Codex reviewers
 
@@ -186,7 +186,7 @@ This keeps source snapshots, evidence, hashes, test logs, checkpoints, and user-
 
 ## State machine
 
-New material-review runs use `material-review/state/v3`, coverage-plan/v2, candidate-set/v3, and candidates-normalized/v3. Existing material-review state/v2 and state/v1 runs are not migrated. Unmarked runs retain only status, scope observation, and checkpointed restoration. Marked runs already in final repair may follow only their bounded compatibility path without reopening attempts; every other forward command requires a new run. The shared controller continues to authorize explicitly profiled simplification runs on state/v1 without obligations.
+New material-review runs use `material-review/state/v4`, coverage-plan/v3, candidate-set/v4, and candidates-normalized/v4. Existing material-review state/v1 through state/v3 runs are not migrated and retain only status, scope observation, and checkpointed restoration; every forward command requires a new run. The shared controller continues to authorize explicitly profiled simplification runs on state/v1 without obligations or specialist assignments.
 
 ```text
 CONTEXT_FROZEN
@@ -282,10 +282,10 @@ Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may co
 Packaging produces:
 
 ```text
-material-code-review-plugin-1.4.1.zip
-material-code-review-plugin-1.4.1.zip.sha256
-material-code-review-codex-skill-1.4.1.zip
-material-code-review-codex-skill-1.4.1.zip.sha256
+material-code-review-plugin-1.5.0.zip
+material-code-review-plugin-1.5.0.zip.sha256
+material-code-review-codex-skill-1.5.0.zip
+material-code-review-codex-skill-1.5.0.zip.sha256
 material-code-simplification-codex-skill-1.3.0.zip
 material-code-simplification-codex-skill-1.3.0.zip.sha256
 ```
