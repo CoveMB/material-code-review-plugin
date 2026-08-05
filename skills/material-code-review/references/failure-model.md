@@ -10,16 +10,22 @@
 | Positive risk lacks exactly one obligation or obligation assignment | Reject coverage. A broad or supplemental assignment cannot substitute. |
 | Obligation has the wrong lens or check set | Reject coverage before dispatch. |
 | Coverage plan/context is absent, orphaned, stale, tampered, or different after recording | Stop. The immutable authority cannot be replaced; start a new run. |
+| Artifact run or authoritative descendant is initially a symlink/reparse point, is rebound during a command, or no complete platform capability is available | Fail before the next mutation and never fall back to pathname writes. Identity-bound writes remain in the retained original directory; the rebound target is untouched. |
+| Artifact run is renamed after an identity-bound replacement | Stop with terminal evidence that a bounded mutation may exist in the renamed original identity. Do not report success at the old name or attempt pathname rollback. |
 | Ref/remote source unavailable | Mark coverage incomplete or stop; never inspect unrelated workspace files. |
 | Specialist decision is missing, duplicated, unknown, or unsupported | Reject coverage; classify all eight specialist lenses exactly once for every unit. Ambiguous or unknown applicability selects the lens. |
+| Selected specialist lacks atomic scenarios, repeats a scenario code, uses a generic claim/countercontrol, or cites a path outside its unit | Reject coverage before dispatch. Rejected specialists must have no scenarios. |
 | Specialist assignment is missing, duplicated, wrong-lens, wrong-unit, or wrong-path | Reject coverage. It cannot substitute for core or obligation authority. |
-| Malformed candidate-set/v4 JSON | Reject the entire wave. Do not repair it by guessing. |
+| Assignment `required_review_paths` or `required_checks` differs from controller derivation | Reject coverage before dispatch. Do not widen or narrow authority manually. |
+| Malformed candidate-set/v5 JSON | Reject the entire wave. Do not repair it by guessing. |
 | Missing, duplicate, stale, unassigned, or identity-mismatched assignment result | Reject the entire wave without authoritative candidates. |
 | Required check is absent or duplicated | Reject the entire wave. |
 | `pass` lacks evidence | Reject the entire wave. |
 | `finding_emitted` lacks evidence, local IDs, or references an unknown local finding | Reject the entire wave. |
-| Required check is `blocked` | Treat the obligation as incomplete; do not create candidate authority. |
-| An unresolved required-check limitation appears only in `coverage.limitations` or as a finding on another check | Reject the entire wave. Return the affected check as `blocked`, obtain the missing evidence, and submit a new complete wave; the controller must not infer an outcome. |
+| Required obligation or specialist check is `blocked` | Treat the wave as incomplete; do not create candidate authority. |
+| Check evidence path is outside assignment authority or absent from reviewed coverage | Reject the entire wave. Evidence must remain exact and path-bound. |
+| Limitation names a non-blocked check, or an unresolved check appears only as a general limitation or another check's finding | Reject the entire wave. Return the affected check as `blocked`, obtain the missing evidence, and submit a new complete wave; the controller must not infer an outcome. |
+| One `finding_local_id` is reused across multiple required check results | Reject the entire wave. Each finding may discharge only the single atomic check whose evidence it records; return independent outcomes for every other check. |
 | Required assignment paths are incomplete | Reject the entire wave. |
 | Evidence side/path resolves to a changed-path entry frozen as missing | Reject the evidence as missing. Do not fall through to coverage context. |
 | Evidence side/path has no changed-path match | Comparison evidence may use only an exact frozen coverage-context path; baseline evidence has no context fallback. |
@@ -49,7 +55,7 @@
 | Historical checkpoint lacks v4 repository authority | Use only the isolated bounded legacy restore path. Never synthesize missing HEAD/ref/index authority. |
 | Post-fix unrelated issue | Record-only; no repair loop. |
 | Attempt or repair-round budget exhausted | `BLOCKED`; never continue indefinitely. |
-| Historical material-review `state/v1`, `state/v2`, or `state/v3` run | Do not migrate or backfill it into discovery. Preserve only bounded inspection and checkpointed restoration; forward work requires a state/v4 run. |
+| Historical material-review `state/v1` through `state/v4` run | Do not migrate, backfill, or reinterpret it into discovery. Preserve only bounded inspection and checkpointed restoration; forward work requires a state/v5 run. |
 | Unknown or contradictory state/profile identity | Fail before dispatch and preserve state, artifacts, source, and repository controls unchanged. |
 | External reviewer route unavailable | Fall back locally only if policy permits and record the degraded route. Never silently egress. |
 

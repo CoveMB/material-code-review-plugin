@@ -4,7 +4,7 @@ Use this guide to classify each change unit against every controlled risk before
 
 Every positive `(unit_id, risk_code)` pair creates exactly one `review_obligation` and exactly one obligation assignment. The obligation's required lens and checks are fixed below. Negative decisions create no obligation. A low-risk plan therefore contains only the three core assignments.
 
-The separate specialist roster is exactly `security_privacy`, `reliability`, `api_contract`, `migration_deployment`, `concurrency`, `performance`, `documentation`, and `architecture_simplification`. Every change unit classifies every specialist as selected or rejected. Under `depth:auto`, behavior evidence selects applicable lenses and ambiguous or unknown applicability selects rather than rejects. Under `depth:full`, every lens is selected for every unit. Each selected lens receives one specialist assignment over the exact selected units and primary-path union. Specialist assignments have no `obligation_id` or required checks and cannot satisfy a controlled obligation.
+The separate specialist roster is exactly `security_privacy`, `reliability`, `api_contract`, `migration_deployment`, `concurrency`, `performance`, `documentation`, and `architecture_simplification`. Every change unit classifies every specialist as selected or rejected. Under `depth:auto`, behavior evidence selects applicable lenses and ambiguous or unknown applicability selects rather than rejects. Under `depth:full`, every lens is selected for every unit. Each selected decision defines one or more plan-unique atomic scenarios with a bounded claim, exact in-unit evidence paths, and a concrete countercontrol. Each selected lens receives one specialist assignment over the exact selected units and their complete primary/context union, with the exact union of scenario codes as its required checks. Specialist assignments have no `obligation_id` and cannot satisfy a controlled obligation.
 
 For every required check, return one outcome:
 
@@ -72,13 +72,17 @@ A `pass` cites the complete ordered sequence and its prerequisite control. `find
 
 **Required lens:** `reliability`.
 
-**Required checks:** `destination_collision`, `canonical_filesystem_identity`, `runtime_writer_target_inventory`, `writer_cleanup_order`.
+**Required checks:** `destination_collision`, `canonical_filesystem_identity`, `runtime_writer_target_inventory`, `writer_cleanup_order`, `runtime_target_derivation_parity`, `validation_to_mutation_identity_stability`.
 
 `destination_collision` covers direct configured or resolved collisions. `writer_cleanup_order` covers write, delete, success, and failure sequencing. A `pass` cites resolved destination identities and both ordering paths. `finding_emitted` points to the local collision or cleanup finding. `blocked` names the unresolved direct destination or unavailable ordering path.
 
 `canonical_filesystem_identity` compares every applicable local destination using exact spelling, platform case folding, Unicode normalization, symlink or same-file resolution, and parent-child containment. A `pass` identifies the applicable identity classes and cites accepted and rejected alias controls. If no local destination is selected, a `pass` names the inspected runtime target selection and explains why no filesystem identity class applies. An applicable class that cannot be inspected or simulated is `blocked`, even when another destination collision has already emitted a finding.
 
 `runtime_writer_target_inventory` enumerates every authoritative and auxiliary writer, cleanup target, retained or discovered artifact that can become an input or writer, and local or remote logical target selected at runtime. A `pass` cites the complete runtime inventory and proves unique ownership or explicit precedence for every target. `finding_emitted` identifies the conflicting runtime writers or target owners. `blocked` names the unresolved runtime selection or retained-artifact path.
+
+`runtime_target_derivation_parity` traces every configured value, normalization, sanitization, collision suffix, reuse rule, affix, adapter, and writer selection that determines the final target. A `pass` identifies one authoritative derivation shared by validation and execution and cites paired equal/distinct final-identity controls. `finding_emitted` identifies a derivation mismatch or ownership collision. `blocked` names the unresolved transformation, target-selection owner, writer, or causal control.
+
+`validation_to_mutation_identity_stability` traces the interval from the last accepted validation through every write, replace, rename, delete, cleanup, publication, or other mutation. A `pass` cites the invariant binding validation to mutation and a negative control at the latest meaningful replacement, rebinding, parent-change, stale-handle, or concurrent interleaving point. `finding_emitted` identifies a validate-then-mutate identity gap. `blocked` names the unavailable mutation boundary, platform control, or interleaving evidence.
 
 ## `persisted_config_semantics`
 

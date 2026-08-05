@@ -2,9 +2,9 @@
 
 ## Compatibility decision
 
-Version 1.5.1 is natively compatible with the current Codex plugin system and remains portable as an Agent Skill. New material-review runs freeze bounded source context, partition changed paths into change units, map six controlled risks to review obligations, classify all eight controlled specialist lenses, and accept only assignment-matched candidate-set/v4 results with complete required check outcomes. They use state/v4, coverage-plan/v3, candidates-normalized/v4, adjudication/v4, and ledger/v4 while retaining the two mandatory user gates and restoration model. Material-review state/v1 through state/v3 are historical bounded contracts and are not migrated or backfilled. The full plugin also contains material simplification: standalone adapter 1.3.0 embeds shared controller/helper 1.5.1 for provenance but continues to select only its exact state/v1, candidates-normalized/v1, adjudication/v3, and ledger/v3 profile without obligation or specialist semantics.
+Version 1.6.0 is natively compatible with the current Codex plugin system and remains portable as an Agent Skill. New material-review runs freeze bounded source context, partition changed paths into explicit owner/consumer change units, map six controlled risks to review obligations, classify all eight controlled specialist lenses, and bind selected specialists to atomic scenario claims, evidence paths, and countercontrols. They accept only assignment-matched candidate-set/v5 results with exact required path/check evidence and use state/v5, coverage-plan/v4, candidates-normalized/v5, adjudication/v4, and ledger/v4 while retaining the two mandatory user gates and restoration model. Material-review state/v1 through state/v4 are historical bounded contracts and are not migrated or backfilled. The full plugin also contains material simplification: standalone adapter 1.3.0 embeds shared controller/helper 1.6.0 for provenance but continues to select only its exact state/v1, candidates-normalized/v1, adjudication/v3, and ledger/v3 profile without obligation or specialist semantics.
 
-New 1.5.1 runs require independent evidence for `disabled_mode_dependency_boundary`, `canonical_filesystem_identity`, and `runtime_writer_target_inventory`. A recorded 1.5.0 coverage plan that omits any of these checks is not backfilled and must restart for forward work; bounded observation and checkpointed restoration remain available.
+New 1.6.0 runs require independent evidence for `runtime_target_derivation_parity` and `validation_to_mutation_identity_stability`, in addition to the retained controlled checks. A historical coverage plan is not backfilled and must restart for forward work; bounded observation and checkpointed restoration remain available. Raw candidate records and completed atomic checks are separate evidence counts, not recall or breadth claims.
 
 The native package surfaces are:
 
@@ -24,7 +24,7 @@ The package also includes a root `SKILL.md` adapter and a standalone skill archi
 Extract the full ZIP:
 
 ```bash
-unzip material-code-review-plugin-1.5.1.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.6.0.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a marketplace:
@@ -46,7 +46,7 @@ Install the smaller archive directly into the user skill directory:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.5.1.zip \
+unzip material-code-review-codex-skill-1.6.0.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -54,7 +54,7 @@ Restart Codex if it does not detect the skill immediately. An OpenAI Skills surf
 
 Its archive root contains the canonical `SKILL.md`, `agents/openai.yaml`, controller, schemas, references, examples, and tests.
 
-For a simplification-only installation, use `material-code-simplification-codex-skill-1.3.0.zip`. Its `core/` layout carries shared controller/helper 1.5.1, historical and current core schemas, and repair-direction references. Explicitly profiled simplification runs retain state/v1, candidate-set/v1, candidates-normalized/v1, adjudication/v3, and ledger/v3 semantics and do not adopt material-review state/v4, coverage-plan/v3, candidate-set/v4, assignments, check results, obligations, or specialist policy.
+For a simplification-only installation, use `material-code-simplification-codex-skill-1.3.0.zip`. Its `core/` layout carries shared controller/helper 1.6.0, historical and current core schemas, and repair-direction references. Explicitly profiled simplification runs retain state/v1, candidate-set/v1, candidates-normalized/v1, adjudication/v3, and ledger/v3 semantics and do not adopt material-review state/v5, coverage-plan/v4, candidate-set/v5, assignments, check results, obligations, or specialist policy.
 
 ## Invocation
 

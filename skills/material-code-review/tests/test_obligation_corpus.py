@@ -34,10 +34,186 @@ REVIEWCTL_SPEC.loader.exec_module(reviewctl)
 
 
 class ObligationCorpusTest(unittest.TestCase):
+    @staticmethod
+    def atomic_causal_case(
+        source: dict,
+        *,
+        case_id: str,
+        specialist_lens: str,
+        check_code: str,
+        claim: str,
+        countercontrol: str,
+        expected_defect: str,
+    ) -> dict:
+        case = copy.deepcopy(source)
+        case["case_id"] = case_id
+        case["expected_defect"] = expected_defect
+        case["mutation_profile"] = "atomic_specialist"
+        unit = case["valid_plan"]["change_units"][0]
+        decision = next(
+            item
+            for item in unit["specialist_decisions"]
+            if item["lens_id"] == specialist_lens
+        )
+        decision.update(
+            {
+                "decision": "selected",
+                "basis": "high_risk_mandate",
+                "evidence": [claim],
+                "scenario_checks": [
+                    {
+                        "check_code": check_code,
+                        "claim": claim,
+                        "evidence_paths": sorted(
+                            {*unit["primary_paths"], *unit["context_paths"]}
+                        ),
+                        "countercontrol": countercontrol,
+                    }
+                ],
+            }
+        )
+        assignment_id = f"specialist-{specialist_lens.replace('_', '-')}"
+        required_paths = sorted({*unit["primary_paths"], *unit["context_paths"]})
+        assignment = {
+            "assignment_id": assignment_id,
+            "assignment_kind": "specialist",
+            "lens_id": specialist_lens,
+            "reviewer_id": f"reviewer-{specialist_lens.replace('_', '-')}",
+            "independence_group": "corpus-specialist-independent",
+            "review_mode": "subagent",
+            "unit_ids": [unit["unit_id"]],
+            "primary_paths": unit["primary_paths"],
+            "context_paths": unit["context_paths"],
+            "required_review_paths": required_paths,
+            "required_checks": [check_code],
+        }
+        case["valid_plan"]["assignments"].append(assignment)
+        template = case["valid_candidate_sets"][0]
+        case["valid_candidate_sets"].append(
+            {
+                "schema_version": "material-review/candidate-set/v5",
+                "scope_hash": template["scope_hash"],
+                "coverage_plan_hash": template["coverage_plan_hash"],
+                "coverage_context_hash": template["coverage_context_hash"],
+                "assignment_id": assignment_id,
+                "assignment_kind": "specialist",
+                "lens_id": specialist_lens,
+                "reviewer_id": assignment["reviewer_id"],
+                "independence_group": assignment["independence_group"],
+                "review_mode": "subagent",
+                "unit_ids": assignment["unit_ids"],
+                "primary_paths": assignment["primary_paths"],
+                "context_paths": assignment["context_paths"],
+                "check_results": [
+                    {
+                        "check_code": check_code,
+                        "outcome": "pass",
+                        "evidence": [f"The bounded control supports {claim}"],
+                        "evidence_paths": required_paths,
+                        "finding_local_ids": [],
+                    }
+                ],
+                "findings": [],
+                "coverage": {
+                    "files_reviewed": required_paths,
+                    "areas": [specialist_lens],
+                    "limitations": [],
+                },
+            }
+        )
+        case["negative_mutations"] = [
+            {
+                "name": "omit one atomic specialist result",
+                "mutation": "omitted_atomic_check",
+                "target_assignment_id": assignment_id,
+                "check_code": check_code,
+                "expected_error": "required checks",
+            },
+            {
+                "name": "omit a dispatched context path",
+                "mutation": "unreviewed_context",
+                "target_assignment_id": assignment_id,
+                "expected_error": "required_review_path",
+            },
+            {
+                "name": "remove the bounded countercontrol",
+                "mutation": "missing_countercontrol_evidence",
+                "target_assignment_id": assignment_id,
+                "check_code": check_code,
+                "expected_error": "countercontrol",
+            },
+            {
+                "name": "return empty specialist evidence",
+                "mutation": "empty_specialist_evidence",
+                "target_assignment_id": assignment_id,
+                "check_code": check_code,
+                "expected_error": "requires evidence",
+            },
+            {
+                "name": "submit stale coverage hashes",
+                "mutation": "stale_hashes",
+                "target_assignment_id": assignment_id,
+                "expected_error": "coverage_context_hash",
+            },
+            {
+                "name": "let one broad finding mask an omitted scenario",
+                "mutation": "broad_finding_saturation",
+                "target_assignment_id": assignment_id,
+                "check_code": check_code,
+                "expected_error": "one finding_local_id cannot discharge multiple required checks",
+            },
+        ]
+        return case
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.corpus = json.loads(FIXTURE.read_text(encoding="utf-8"))
-        cls.cases = cls.corpus["cases"]
+        cls.cases = list(cls.corpus["cases"])
+        output_case = next(
+            case
+            for case in cls.cases
+            if case["case_id"] == "output-target-identity-and-runtime-ownership"
+        )
+        cls.cases.extend(
+            [
+                cls.atomic_causal_case(
+                    output_case,
+                    case_id="runtime-target-derivation-parity",
+                    specialist_lens="api_contract",
+                    check_code="configured-target-derivation-authority",
+                    claim=(
+                        "Validation and execution use the same transformed and "
+                        "collision-adjusted final target identity."
+                    ),
+                    countercontrol=(
+                        "Compare equal raw labels that normalize to different final targets "
+                        "and distinct raw labels that collide after final derivation."
+                    ),
+                    expected_defect=(
+                        "Validation compares source labels while execution writes to a "
+                        "transformed and collision-adjusted target."
+                    ),
+                ),
+                cls.atomic_causal_case(
+                    output_case,
+                    case_id="validation-to-mutation-identity",
+                    specialist_lens="concurrency",
+                    check_code="validated-target-rebind-before-mutation",
+                    claim=(
+                        "The final mutation remains bound to the identity accepted at the "
+                        "last validation point."
+                    ),
+                    countercontrol=(
+                        "Replace the selected target or its parent after preflight and before "
+                        "the final path-based mutation."
+                    ),
+                    expected_defect=(
+                        "Preflight accepts a target that can be replaced or rebound before "
+                        "a path-based final mutation."
+                    ),
+                ),
+            ]
+        )
 
     def normalized_case_wave(self, case: dict, candidate_sets: list[dict]) -> tuple[dict, list[dict]]:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -78,7 +254,7 @@ class ObligationCorpusTest(unittest.TestCase):
                     ]
                 )
             if result != 0:
-                raise AssertionError(stderr.getvalue())
+                raise reviewctl.ReviewError(stderr.getvalue())
             run_dir = repo / ".git" / "material-code-review" / "runs" / run_id
             state = reviewctl.load_state(run_dir)
             plan_input = copy.deepcopy(case["valid_plan"])
@@ -98,7 +274,7 @@ class ObligationCorpusTest(unittest.TestCase):
                     ]
                 )
             if result != 0:
-                raise AssertionError(stderr.getvalue())
+                raise reviewctl.ReviewError(stderr.getvalue())
             state = reviewctl.load_state(run_dir)
             plan = reviewctl.load_recorded_coverage_plan(run_dir, state)
 
@@ -132,7 +308,7 @@ class ObligationCorpusTest(unittest.TestCase):
             reviewctl.validate_candidate_wave_against_coverage(plan, normalized)
             return plan, normalized
 
-    def apply_mutation(self, candidate_sets: list[dict], mutation: dict) -> None:
+    def apply_mutation(self, case: dict, candidate_sets: list[dict], mutation: dict) -> None:
         target = next(
             item
             for item in candidate_sets
@@ -171,30 +347,113 @@ class ObligationCorpusTest(unittest.TestCase):
             target["coverage_context_hash"] = "0" * 64
         elif mutation_type == "semantic_bypass":
             selected_check()["evidence"] = []
+        elif mutation_type == "omitted_atomic_check":
+            target["check_results"] = [
+                item
+                for item in target["check_results"]
+                if item["check_code"] != check_code
+            ]
+        elif mutation_type == "unreviewed_context":
+            target["coverage"]["files_reviewed"].remove(target["context_paths"][0])
+        elif mutation_type == "missing_countercontrol_evidence":
+            unit = case["valid_plan"]["change_units"][0]
+            decision = next(
+                item
+                for item in unit["specialist_decisions"]
+                if item["lens_id"] == target["lens_id"]
+            )
+            scenario = next(
+                item
+                for item in decision["scenario_checks"]
+                if item["check_code"] == check_code
+            )
+            scenario["countercontrol"] = ""
+        elif mutation_type == "empty_specialist_evidence":
+            selected_check()["evidence"] = []
+        elif mutation_type == "stale_hashes":
+            target["coverage_context_hash"] = "0" * 64
+        elif mutation_type == "broad_finding_saturation":
+            unit = case["valid_plan"]["change_units"][0]
+            decision = next(
+                item
+                for item in unit["specialist_decisions"]
+                if item["lens_id"] == target["lens_id"]
+            )
+            second_code = f"{check_code}-second-control"
+            decision["scenario_checks"].append(
+                {
+                    "check_code": second_code,
+                    "claim": "A distinct final-boundary control remains independently valid.",
+                    "evidence_paths": target["coverage"]["files_reviewed"],
+                    "countercontrol": "Break only the second control while preserving the first.",
+                }
+            )
+            assignment = next(
+                item
+                for item in case["valid_plan"]["assignments"]
+                if item["assignment_id"] == target["assignment_id"]
+            )
+            assignment["required_checks"].append(second_code)
+            finding = copy.deepcopy(
+                next(
+                    finding
+                    for candidate in candidate_sets
+                    for finding in candidate["findings"]
+                )
+            )
+            target["findings"] = [finding]
+            selected_check().update(
+                outcome="finding_emitted",
+                finding_local_ids=[finding["local_id"]],
+            )
+            target["check_results"].append(
+                {
+                    "check_code": second_code,
+                    "outcome": "finding_emitted",
+                    "evidence": [
+                        "The same broad finding is asserted as evidence for a distinct control."
+                    ],
+                    "evidence_paths": target["coverage"]["files_reviewed"],
+                    "finding_local_ids": [finding["local_id"]],
+                }
+            )
         else:
             self.fail(f"Unknown corpus mutation: {mutation_type}")
 
     def assert_negative_mutations_fail_for_case(self, case: dict) -> None:
-        self.assertEqual(
-            {mutation["mutation"] for mutation in case["negative_mutations"]},
+        expected_mutations = (
             {
+                "omitted_atomic_check",
+                "unreviewed_context",
+                "missing_countercontrol_evidence",
+                "empty_specialist_evidence",
+                "stale_hashes",
+                "broad_finding_saturation",
+            }
+            if case.get("mutation_profile") == "atomic_specialist"
+            else {
                 "wrong_lens",
                 "omitted_check",
                 "compound_assignment",
                 "blocked_result",
                 "stale_context",
                 "semantic_bypass",
-            },
+            }
+        )
+        self.assertEqual(
+            {mutation["mutation"] for mutation in case["negative_mutations"]},
+            expected_mutations,
         )
         for mutation in case["negative_mutations"]:
             with self.subTest(case=case["case_id"], mutation=mutation["name"]):
+                mutated_case = copy.deepcopy(case)
                 candidate_sets = copy.deepcopy(case["valid_candidate_sets"])
-                self.apply_mutation(candidate_sets, mutation)
+                self.apply_mutation(mutated_case, candidate_sets, mutation)
                 with self.assertRaisesRegex(
                     (ObligationContractError, reviewctl.ReviewError),
                     mutation["expected_error"],
                 ):
-                    self.normalized_case_wave(case, candidate_sets)
+                    self.normalized_case_wave(mutated_case, candidate_sets)
 
     def test_every_missed_contract_case_requires_its_causal_obligation(self) -> None:
         self.assertEqual(
@@ -206,6 +465,8 @@ class ObligationCorpusTest(unittest.TestCase):
                 "duplicate-required-risk-code",
                 "archive-missing-contract",
                 "output-target-identity-and-runtime-ownership",
+                "runtime-target-derivation-parity",
+                "validation-to-mutation-identity",
             },
         )
         for case in self.cases:
@@ -244,9 +505,9 @@ class ObligationCorpusTest(unittest.TestCase):
                     set(RISK_REQUIREMENTS[risk_code]["required_checks"]),
                 )
 
-    def test_positive_corpus_uses_complete_v4_candidate_contract(self) -> None:
+    def test_positive_corpus_uses_complete_v5_candidate_contract(self) -> None:
         schema = json.loads(
-            (SKILL_ROOT / "schemas" / "candidate-set-v4.schema.json").read_text(
+            (SKILL_ROOT / "schemas" / "candidate-set-v5.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -272,7 +533,6 @@ class ObligationCorpusTest(unittest.TestCase):
             with self.subTest(case=case["case_id"], category="contract"):
                 with self.assertRaisesRegex(reviewctl.ReviewError, "category"):
                     self.normalized_case_wave(case, invalid)
-            self.assert_negative_mutations_fail_for_case(case)
 
     def test_every_negative_mutation_fails_for_declared_reason(self) -> None:
         for case in self.cases:

@@ -18,7 +18,7 @@ from package_layout_contract import (  # noqa: E402
     normalize_package_path,
     schema_version_is_supported,
 )
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -34,10 +34,15 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 CONTROLLED_WORKFLOW_MARKERS = (
-    "material-review/state/v4",
-    "material-review/coverage-plan/v3",
-    "material-review/candidate-set/v4",
-    "material-review/candidates-normalized/v4",
+    "material-review/state/v5",
+    "material-review/coverage-plan/v4",
+    "material-review/candidate-set/v5",
+    "material-review/candidates-normalized/v5",
+    "canonical_owner",
+    "affected_consumers",
+    "scenario_checks",
+    "required_review_paths",
+    "required_checks",
     "change_units",
     "review_obligations",
     "assignment_id",
@@ -45,6 +50,8 @@ CONTROLLED_WORKFLOW_MARKERS = (
     "record-coverage",
     "user_selectable_output_paths",
     "persisted_config_semantics",
+    "runtime_target_derivation_parity",
+    "validation_to_mutation_identity_stability",
     "Missing required assignment coverage",
     "CONSEQUENCE_UNSUPPORTED",
     "plausibly blocker/high",

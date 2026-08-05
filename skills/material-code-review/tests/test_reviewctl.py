@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -26,10 +27,50 @@ CONTROLLER_1_3_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewct
 CONTROLLER_1_3_COMPAT_SHA256 = "9e80034e8dcbfbe31cc576f03ed855f04ce3007d97ac0dbfbc66ad71c47cf28f"
 CONTROLLER_1_4_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewctl_1_4_compat.py"
 CONTROLLER_1_4_COMPAT_SHA256 = "93ddef8c5c712a7426acf4ab0307a4f62824f68a924cc76ad9ddd2f3245b7280"
+CONTROLLER_1_5_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewctl_1_5_compat.py"
+CONTROLLER_1_5_COMPAT_SHA256 = "0e1b9c87c10e990f8d3eb11f747a84504a4b13bbb31a4db159ecf847910c8245"
 SPEC = importlib.util.spec_from_file_location("material_reviewctl", SCRIPT)
 assert SPEC and SPEC.loader
 reviewctl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reviewctl)
+
+SIMULTANEOUS_INGEST_HARNESS = r"""
+import importlib.util
+import sys
+import time
+from pathlib import Path
+
+script = Path(sys.argv[1])
+barrier_directory = Path(sys.argv[2])
+worker_id = sys.argv[3]
+controller_arguments = sys.argv[4:]
+spec = importlib.util.spec_from_file_location(
+    f"simultaneous_reviewctl_{worker_id}", script
+)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"unable to load controller: {script}")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original_load_state = module.load_state
+load_count = 0
+
+def barrier_load_state(run_dir):
+    global load_count
+    state = original_load_state(run_dir)
+    load_count += 1
+    if load_count == 2 and state.get("phase") == module.PHASE_CONTEXT:
+        (barrier_directory / f"ready-{worker_id}").write_text("ready\n", encoding="utf-8")
+        release = barrier_directory / "release"
+        deadline = time.monotonic() + 15.0
+        while not release.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("simultaneous ingestion barrier was not released")
+            time.sleep(0.005)
+    return state
+
+module.load_state = barrier_load_state
+raise SystemExit(module.main(controller_arguments))
+"""
 
 
 class ReviewCtlTest(unittest.TestCase):
@@ -151,6 +192,20 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def make_run_state_v4_with_frozen_1_5_fixture(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CONTROLLER_1_5_COMPAT),
+                "--run-dir",
+                str(self.run_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def reach_plan_approved(self) -> None:
         self.approve_and_plan()
 
@@ -259,6 +314,8 @@ class ReviewCtlTest(unittest.TestCase):
                     "destination_collision",
                     "canonical_filesystem_identity",
                     "runtime_writer_target_inventory",
+                    "runtime_target_derivation_parity",
+                    "validation_to_mutation_identity_stability",
                     "writer_cleanup_order",
                 },
                 set(),
@@ -344,8 +401,26 @@ class ReviewCtlTest(unittest.TestCase):
                         "review_mode": "subagent",
                     }
                 )
+        unit_paths = sorted({*primary_paths, *context_paths})
+        obligations_by_id = {
+            item["obligation_id"]: item for item in obligations
+        }
+        for assignment in assignments:
+            if assignment["assignment_kind"] == "obligation":
+                obligation = obligations_by_id[assignment["obligation_id"]]
+                assignment["required_review_paths"] = sorted(
+                    {
+                        obligation["canonical_owner"],
+                        *obligation["affected_consumers"],
+                        *obligation["evidence_paths"],
+                    }
+                )
+                assignment["required_checks"] = obligation["required_checks"]
+            else:
+                assignment["required_review_paths"] = unit_paths
+                assignment["required_checks"] = []
         return {
-            "schema_version": "material-review/coverage-plan/v3",
+            "schema_version": "material-review/coverage-plan/v4",
             "scope_hash": scope_hash,
             "workflow_profile": "material_review",
             "depth": "auto",
@@ -355,6 +430,8 @@ class ReviewCtlTest(unittest.TestCase):
                     "purpose": "Review one coherent changed contract.",
                     "primary_paths": primary_paths,
                     "context_paths": context_paths,
+                    "canonical_owner": primary_paths[0],
+                    "affected_consumers": [*primary_paths[1:], *context_paths],
                     "risk_codes": sorted(risk_codes),
                     "selected_risk_rationale": selected,
                     "rejected_risk_rationale": [
@@ -372,6 +449,7 @@ class ReviewCtlTest(unittest.TestCase):
                             "evidence": [
                                 f"The fixture behavior does not trigger {lens_id}."
                             ],
+                            "scenario_checks": [],
                         }
                         for lens_id in (
                             "security_privacy",
@@ -490,7 +568,7 @@ class ReviewCtlTest(unittest.TestCase):
         findings: list[dict] | None = None,
     ) -> dict:
         payload = {
-            "schema_version": "material-review/candidate-set/v4",
+            "schema_version": "material-review/candidate-set/v5",
             "scope_hash": scope_hash,
             "coverage_plan_hash": coverage_plan_hash,
             "coverage_context_hash": coverage_context_hash,
@@ -503,7 +581,7 @@ class ReviewCtlTest(unittest.TestCase):
             "check_results": [],
             "findings": findings or [],
             "coverage": {
-                "files_reviewed": ["calc.py"],
+                "files_reviewed": assignment["required_review_paths"],
                 "areas": [assignment["lens_id"]],
                 "limitations": [],
             },
@@ -519,6 +597,7 @@ class ReviewCtlTest(unittest.TestCase):
                     "check_code": check_code,
                     "outcome": "pass",
                     "evidence": [f"Observed {check_code} against frozen evidence."],
+                    "evidence_paths": assignment["required_review_paths"],
                     "finding_local_ids": [],
                 }
                 for check_code in obligation["required_checks"]
@@ -526,7 +605,21 @@ class ReviewCtlTest(unittest.TestCase):
         elif assignment["assignment_kind"] == "specialist":
             for field in ("unit_ids", "primary_paths", "context_paths"):
                 payload[field] = assignment[field]
-            payload["coverage"]["files_reviewed"] = assignment["primary_paths"]
+            payload["coverage"]["files_reviewed"] = assignment[
+                "required_review_paths"
+            ]
+            payload["check_results"] = [
+                {
+                    "check_code": check_code,
+                    "outcome": "pass",
+                    "evidence": [
+                        f"Observed {check_code} against frozen specialist evidence."
+                    ],
+                    "evidence_paths": assignment["required_review_paths"],
+                    "finding_local_ids": [],
+                }
+                for check_code in assignment["required_checks"]
+            ]
         return payload
 
     def candidate_paths_for_coverage_v3(
@@ -540,9 +633,6 @@ class ReviewCtlTest(unittest.TestCase):
         obligations = {
             item["obligation_id"]: item for item in plan["review_obligations"]
         }
-        primary_paths = sorted(
-            path for unit in plan["change_units"] for path in unit["primary_paths"]
-        )
         paths = []
         for assignment in plan["assignments"]:
             if assignment["lens_id"] == omit_lens:
@@ -562,7 +652,9 @@ class ReviewCtlTest(unittest.TestCase):
                 findings=findings,
             )
             if assignment["assignment_kind"] == "core":
-                payload["coverage"]["files_reviewed"] = primary_paths
+                payload["coverage"]["files_reviewed"] = assignment[
+                    "required_review_paths"
+                ]
             paths.append(
                 self.write_json(f"candidate-{assignment['assignment_id']}.json", payload)
             )
@@ -2122,11 +2214,9 @@ class ReviewCtlTest(unittest.TestCase):
                     obligation=obligations.get(assignment.get("obligation_id")),
                 )
                 if assignment["assignment_kind"] == "core":
-                    payload["coverage"]["files_reviewed"] = sorted(
-                        path
-                        for unit in recorded_plan["change_units"]
-                        for path in unit["primary_paths"]
-                    )
+                    payload["coverage"]["files_reviewed"] = assignment[
+                        "required_review_paths"
+                    ]
                 if assignment["lens_id"] == "correctness":
                     payload["findings"] = [
                         copy.deepcopy(tied_finding),
@@ -2157,7 +2247,7 @@ class ReviewCtlTest(unittest.TestCase):
             bundle = self.load("candidates.json")
             self.assertEqual(
                 bundle["schema_version"],
-                "material-review/candidates-normalized/v4",
+                "material-review/candidates-normalized/v5",
             )
             self.assertEqual(
                 [candidate.get("lens_id") for candidate in bundle["candidates"]],
@@ -2182,6 +2272,16 @@ class ReviewCtlTest(unittest.TestCase):
             )
             self.assertEqual(len(bundle["reviewer_sets"]), len(recorded_plan["assignments"]))
             rendered_candidates = (self.run_dir / "candidates.md").read_text(encoding="utf-8")
+            self.assertIn("candidate_records: `9`", rendered_candidates)
+            completed_atomic_checks = sum(
+                len(reviewer_set["check_results"])
+                for reviewer_set in bundle["reviewer_sets"]
+            )
+            self.assertIn(
+                f"completed_atomic_checks: `{completed_atomic_checks}`",
+                rendered_candidates,
+            )
+            self.assertNotIn("Candidates accepted", rendered_candidates)
             self.assertIn("lens `correctness`", rendered_candidates)
             self.assertIn("lens `test_adequacy`", rendered_candidates)
             self.assertIn("lens `standards_alignment`", rendered_candidates)
@@ -2305,7 +2405,7 @@ class ReviewCtlTest(unittest.TestCase):
                 )
                 expected_cause = (
                     "normalized candidates schema_version does not match the active "
-                    "workflow profile: expected material-review/candidates-normalized/v4, "
+                    "workflow profile: expected material-review/candidates-normalized/v5, "
                     "got material-review/candidates-normalized/v1"
                     if name == "old-normalized-version"
                     else "normalized candidates.candidates[0] identity does not match its validated assignment source"
@@ -2693,6 +2793,342 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse((self.root / "escape").exists())
         self.assertFalse((self.repo / "review-artifacts").exists())
 
+    def test_artifact_identity_stable_default_and_custom_roots(self) -> None:
+        scope_hash = self.init()
+        self.assertEqual(self.load("state.json")["scope_hash"], scope_hash)
+        authority = reviewctl.RunArtifactAuthority(self.run_dir)
+        with reviewctl.active_artifact_authority(authority):
+            reviewctl.atomic_write_bytes(self.run_dir / "identity.bin", b"bytes")
+            reviewctl.atomic_write_text(
+                self.run_dir / "nested" / "identity.txt",
+                "line\r\n",
+            )
+            reviewctl.atomic_write_json(
+                self.run_dir / "nested" / "identity.json",
+                {"value": 1},
+            )
+            self.assertEqual(
+                reviewctl.artifact_read_bytes(self.run_dir / "identity.bin"),
+                b"bytes",
+            )
+            self.assertEqual(
+                reviewctl.artifact_read_text(
+                    self.run_dir / "nested" / "identity.txt"
+                ),
+                "line\n",
+            )
+            self.assertEqual(
+                reviewctl.load_json(self.run_dir / "nested" / "identity.json"),
+                {"value": 1},
+            )
+
+        custom_root = self.out / "custom-artifacts"
+        custom_run_id = "custom-identity-run"
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "uncommitted",
+            "--run-id",
+            custom_run_id,
+            "--artifact-root",
+            str(custom_root),
+        )
+        custom_state = json.loads(
+            (custom_root / "runs" / custom_run_id / "state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(custom_state["phase"], "CONTEXT_FROZEN")
+        self.run_tool(
+            "check-scope",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            custom_run_id,
+            "--artifact-root",
+            str(custom_root),
+        )
+
+    def test_artifact_identity_rebind_never_writes_replacement_target(self) -> None:
+        def exercise(label: str, artifact_root: Path | None) -> None:
+            self.run_id = f"identity-rebind-{label}"
+            init_arguments = [
+                "init",
+                "--repo-root",
+                str(self.repo),
+                "--scope",
+                "uncommitted",
+                "--run-id",
+                self.run_id,
+            ]
+            if artifact_root is not None:
+                init_arguments.extend(["--artifact-root", str(artifact_root)])
+            self.run_tool(*init_arguments)
+            runs_root = (
+                artifact_root / "runs"
+                if artifact_root is not None
+                else self.repo / ".git" / "material-code-review" / "runs"
+            )
+            run_dir = runs_root / self.run_id
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            plan_path = self.write_json(
+                f"coverage-rebind-{label}.json",
+                self.coverage_plan(state["scope_hash"]),
+            )
+            moved = runs_root / f"{self.run_id}-moved"
+            replacement = self.out / f"replacement-{label}"
+            replacement.mkdir()
+            sentinel = replacement / "coverage-context.json"
+            sentinel.write_bytes(b"replacement sentinel")
+            triggered = False
+
+            def rebind_after_temp(stage, _authority, path):
+                nonlocal triggered
+                if (
+                    stage == "after_temp_created"
+                    and path.name == "coverage-context.json"
+                    and not triggered
+                ):
+                    triggered = True
+                    os.rename(run_dir, moved)
+                    run_dir.symlink_to(replacement, target_is_directory=True)
+
+            reviewctl._ARTIFACT_TEST_HOOK = rebind_after_temp
+            try:
+                command = [
+                    "record-coverage",
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    "--input",
+                    str(plan_path),
+                ]
+                if artifact_root is not None:
+                    command.extend(["--artifact-root", str(artifact_root)])
+                _, stderr = self.run_tool(*command, expected=2)
+            finally:
+                reviewctl._ARTIFACT_TEST_HOOK = None
+
+            self.assertTrue(triggered)
+            self.assertIn("retained directory identity", stderr)
+            self.assertEqual(sentinel.read_bytes(), b"replacement sentinel")
+            self.assertEqual(sorted(path.name for path in replacement.iterdir()), [sentinel.name])
+            moved_state = json.loads((moved / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(moved_state["phase"], "CONTEXT_FROZEN")
+            self.assertFalse((moved / "coverage-context.json").exists())
+
+        exercise("default", None)
+        exercise("custom", self.out / "custom-rebind-artifacts")
+
+    def test_artifact_identity_boundaries_cover_temp_and_nested_rebinds(self) -> None:
+        for stage in ("before_temp_created", "after_temp_created"):
+            with self.subTest(stage=stage):
+                root = self.out / f"authority-{stage}"
+                moved = self.out / f"authority-{stage}-moved"
+                replacement = self.out / f"authority-{stage}-replacement"
+                replacement.mkdir()
+                sentinel = replacement / "state.json"
+                sentinel.write_bytes(b"sentinel")
+                authority = reviewctl.RunArtifactAuthority(root, create=True)
+                triggered = False
+
+                def rebind(boundary, _authority, _path):
+                    nonlocal triggered
+                    if boundary == stage and not triggered:
+                        triggered = True
+                        os.rename(root, moved)
+                        root.symlink_to(replacement, target_is_directory=True)
+
+                reviewctl._ARTIFACT_TEST_HOOK = rebind
+                try:
+                    with reviewctl.active_artifact_authority(authority):
+                        with self.assertRaisesRegex(
+                            reviewctl.ReviewError,
+                            "retained directory identity|rebound",
+                        ):
+                            reviewctl.atomic_write_json(
+                                root / "state.json", {"phase": "changed"}
+                            )
+                finally:
+                    reviewctl._ARTIFACT_TEST_HOOK = None
+                self.assertTrue(triggered)
+                self.assertEqual(sentinel.read_bytes(), b"sentinel")
+                self.assertFalse(any(path.name.endswith(".tmp") for path in moved.iterdir()))
+
+        root = self.out / "nested-authority"
+        replacement = self.out / "nested-replacement"
+        replacement.mkdir()
+        sentinel = replacement / "gate.json"
+        sentinel.write_bytes(b"nested sentinel")
+        moved = root / "gates-moved"
+        authority = reviewctl.RunArtifactAuthority(root, create=True)
+        with reviewctl.active_artifact_authority(authority):
+            reviewctl.atomic_write_json(root / "gates" / "gate.json", {"value": 1})
+
+            def rebind_nested(stage, _authority, path):
+                if stage == "after_temp_created" and path.name == "gate.json":
+                    os.rename(root / "gates", moved)
+                    (root / "gates").symlink_to(
+                        replacement, target_is_directory=True
+                    )
+
+            reviewctl._ARTIFACT_TEST_HOOK = rebind_nested
+            try:
+                with self.assertRaisesRegex(
+                    reviewctl.ReviewError,
+                    "descendant|rebound",
+                ):
+                    reviewctl.atomic_write_json(
+                        root / "gates" / "gate.json", {"value": 2}
+                    )
+            finally:
+                reviewctl._ARTIFACT_TEST_HOOK = None
+        self.assertEqual(sentinel.read_bytes(), b"nested sentinel")
+        self.assertEqual(
+            json.loads((moved / "gate.json").read_text(encoding="utf-8")),
+            {"value": 1},
+        )
+
+    def test_artifact_identity_rejects_initial_symlink_and_missing_capability(self) -> None:
+        artifact_root = self.out / "initial-symlink-artifacts"
+        runs_root = artifact_root / "runs"
+        runs_root.mkdir(parents=True)
+        replacement = self.out / "initial-symlink-target"
+        replacement.mkdir()
+        run_id = "initial-symlink-run"
+        (runs_root / run_id).symlink_to(replacement, target_is_directory=True)
+        self.run_tool(
+            "init",
+            "--repo-root",
+            str(self.repo),
+            "--scope",
+            "uncommitted",
+            "--run-id",
+            run_id,
+            "--artifact-root",
+            str(artifact_root),
+            expected=2,
+        )
+        self.assertEqual(list(replacement.iterdir()), [])
+
+        unavailable_root = self.out / "unavailable-artifacts"
+        backend_class = (
+            reviewctl._WindowsArtifactBackend
+            if os.name == "nt"
+            else reviewctl._PosixArtifactBackend
+        )
+        with mock.patch.object(
+            backend_class,
+            "__init__",
+            side_effect=reviewctl.ReviewError("forced capability absence"),
+        ):
+            _, stderr = self.run_tool(
+                "init",
+                "--repo-root",
+                str(self.repo),
+                "--scope",
+                "uncommitted",
+                "--run-id",
+                "unavailable-run",
+                "--artifact-root",
+                str(unavailable_root),
+                expected=2,
+            )
+        self.assertIn("forced capability absence", stderr)
+        self.assertFalse(unavailable_root.exists())
+
+    def test_artifact_identity_windows_api_contract_uses_relative_handles(self) -> None:
+        import ctypes
+
+        class FakeFunction:
+            def __init__(self, callback=None, return_value=1):
+                self.callback = callback
+                self.return_value = return_value
+                self.calls = []
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *arguments):
+                self.calls.append(arguments)
+                if self.callback is not None:
+                    return self.callback(*arguments)
+                return self.return_value
+
+        def create_file(handle_pointer, *_arguments):
+            handle_pointer._obj.value = 321
+            return 0
+
+        def file_information(_handle, _information_class, info_pointer, _size):
+            info_pointer._obj.FileAttributes = 0
+            return 1
+
+        ntcreate = FakeFunction(create_file)
+        rtl_status = FakeFunction(return_value=2)
+        query_directory = FakeFunction(return_value=reviewctl._WindowsArtifactBackend.STATUS_NO_MORE_FILES)
+        ntdll = mock.Mock(
+            NtCreateFile=ntcreate,
+            RtlNtStatusToDosError=rtl_status,
+            NtQueryDirectoryFile=query_directory,
+        )
+        get_information = FakeFunction(file_information)
+        set_information = FakeFunction(return_value=1)
+        kernel32 = mock.Mock(
+            CreateFileW=FakeFunction(return_value=321),
+            GetFileInformationByHandleEx=get_information,
+            SetFileInformationByHandle=set_information,
+            CloseHandle=FakeFunction(return_value=1),
+            FlushFileBuffers=FakeFunction(return_value=1),
+        )
+
+        def load_library(name, **_keywords):
+            return ntdll if name == "ntdll" else kernel32
+
+        with mock.patch.object(reviewctl.os, "name", "nt"), mock.patch.object(
+            ctypes, "WinDLL", create=True, side_effect=load_library
+        ):
+            backend = reviewctl._WindowsArtifactBackend()
+            handle = backend._open_relative(
+                456,
+                "child.json",
+                directory=False,
+                disposition=backend.FILE_OPEN,
+                access=backend.FILE_READ_DATA,
+            )
+        self.assertEqual(handle, 321)
+        object_attributes = ntcreate.calls[-1][2]._obj
+        self.assertEqual(object_attributes.RootDirectory, 456)
+        self.assertTrue(ntcreate.calls[-1][8] & backend.FILE_OPEN_REPARSE_POINT)
+
+        fake_msvcrt = mock.Mock()
+        fake_msvcrt.get_osfhandle.return_value = 789
+        with mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}):
+            backend.replace_temporary(
+                456,
+                reviewctl._ArtifactTemporary("temporary", 99),
+                "state.json",
+            )
+        rename_arguments = set_information.calls[-1]
+        rename_buffer = rename_arguments[2]
+        header = backend.FileRenameHeader.from_buffer(rename_buffer)
+        self.assertEqual(header.ReplaceIfExists, 1)
+        self.assertEqual(header.RootDirectory, 456)
+        name_offset = ctypes.sizeof(backend.FileRenameHeader)
+        encoded_name = bytes(rename_buffer)[
+            name_offset : name_offset + header.FileNameLength
+        ]
+        self.assertEqual(encoded_name.decode("utf-16-le"), "state.json")
+        with self.assertRaises(FileNotFoundError):
+            backend._raise_status(-1, "injected missing entry")
+
+    def test_artifact_identity_preserves_candidate_write_once_contract(self) -> None:
+        self.test_candidate_ingestion_is_write_once_and_idempotent()
+
+    def test_artifact_identity_preserves_gate_checkpoint_completion_contract(self) -> None:
+        self.test_empty_material_set_requires_explicit_gate_and_completes()
+
     def test_shared_artifact_run_cannot_be_reused_for_another_repository(self) -> None:
         shared = self.out / "shared-artifacts"
         self.run_tool(
@@ -3050,7 +3486,6 @@ class ReviewCtlTest(unittest.TestCase):
                     path for path in paths if "core-correctness" in path.name
                 )
                 candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
-                candidate["coverage"]["files_reviewed"].append("owner.py")
                 candidate["findings"][0].update(
                     file="owner.py",
                     line_start=1,
@@ -3138,13 +3573,13 @@ class ReviewCtlTest(unittest.TestCase):
                 self.tearDown()
                 self.setUp()
 
-    def test_v3_coverage_and_v4_candidate_schemas_share_canonical_paths(self) -> None:
+    def test_v4_coverage_and_v5_candidate_schemas_share_canonical_paths(self) -> None:
         schema_root = Path(__file__).resolve().parents[1] / "schemas"
         coverage_schema = json.loads(
-            (schema_root / "coverage-plan-v3.schema.json").read_text(encoding="utf-8")
+            (schema_root / "coverage-plan-v4.schema.json").read_text(encoding="utf-8")
         )
         candidate_schema = json.loads(
-            (schema_root / "candidate-set-v4.schema.json").read_text(encoding="utf-8")
+            (schema_root / "candidate-set-v5.schema.json").read_text(encoding="utf-8")
         )
         path_definition = coverage_schema["$defs"]["repositoryRelativeGitPath"]
         self.assertEqual(
@@ -3164,11 +3599,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(
             coverage_schema["properties"]["schema_version"]["const"],
-            "material-review/coverage-plan/v3",
+            "material-review/coverage-plan/v4",
         )
         self.assertEqual(
             candidate_schema["properties"]["schema_version"]["const"],
-            "material-review/candidate-set/v4",
+            "material-review/candidate-set/v5",
         )
 
         accepted = (
@@ -3201,6 +3636,74 @@ class ReviewCtlTest(unittest.TestCase):
                     reviewctl.canonical_git_path(path, "path")
                 with self.assertRaises(reviewctl.ReviewError):
                     reviewctl.require_canonical_repo_path(path, "path")
+
+    def test_candidate_v5_array_uniqueness_matches_runtime(self) -> None:
+        schema_root = Path(__file__).resolve().parents[1] / "schemas"
+        candidate_schema = json.loads(
+            (schema_root / "candidate-set-v5.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        finding_properties = candidate_schema["$defs"]["finding"]["properties"]
+        for field in ("counterevidence_checked", "assumptions"):
+            with self.subTest(field=field, contract="schema"):
+                self.assertIs(finding_properties[field]["uniqueItems"], True)
+
+        def candidate_wave(run_id: str) -> tuple[list[Path], Path]:
+            self.run_id = run_id
+            scope_hash = self.init_with_recorded_coverage()
+            paths = self.candidate_paths_for_coverage(
+                scope_hash,
+                primary_candidate=self.candidate_set(
+                    scope_hash,
+                    include_style=False,
+                ),
+            )
+            correctness_path = next(
+                path
+                for path in paths
+                if json.loads(path.read_text(encoding="utf-8"))["assignment_id"]
+                == "core-correctness"
+            )
+            return paths, correctness_path
+
+        for field in ("counterevidence_checked", "assumptions"):
+            with self.subTest(field=field, contract="runtime-duplicate"):
+                paths, correctness_path = candidate_wave(f"duplicate-{field}")
+                payload = json.loads(correctness_path.read_text(encoding="utf-8"))
+                payload["findings"][0][field] = ["duplicate", "duplicate"]
+                correctness_path.write_text(json.dumps(payload), encoding="utf-8")
+                _, stderr = self.ingest_candidate_paths(paths, expected=2)
+                self.assertIn(f".{field} must contain unique values", stderr)
+                self.assertEqual(self.load("state.json")["phase"], "CONTEXT_FROZEN")
+                self.assertFalse((self.run_dir / "candidates.json").exists())
+                self.assertTrue(self.load("candidate-ingestion-failure.json")["rejections"])
+
+        paths, correctness_path = candidate_wave("unique-array-controls")
+        payload = json.loads(correctness_path.read_text(encoding="utf-8"))
+        payload["findings"][0]["counterevidence_checked"] = ["first", "second"]
+        payload["findings"][0]["assumptions"] = ["first", "second"]
+        correctness_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.ingest_candidate_paths(paths)
+        self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
+
+        paths, correctness_path = candidate_wave("empty-assumptions-control")
+        payload = json.loads(correctness_path.read_text(encoding="utf-8"))
+        payload["findings"][0]["assumptions"] = []
+        correctness_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.ingest_candidate_paths(paths)
+        self.assertEqual(self.load("state.json")["phase"], "CANDIDATES_CAPTURED")
+
+        paths, correctness_path = candidate_wave("empty-counterevidence-control")
+        payload = json.loads(correctness_path.read_text(encoding="utf-8"))
+        payload["findings"][0]["counterevidence_checked"] = []
+        correctness_path.write_text(json.dumps(payload), encoding="utf-8")
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+        self.assertIn(
+            "high/certain confidence requires checked counterevidence",
+            stderr,
+        )
+        self.assertFalse((self.run_dir / "candidates.json").exists())
 
     def test_adjudication_v4_schema_and_runtime_share_canonical_path_language(self) -> None:
         schema_root = Path(__file__).resolve().parents[1] / "schemas"
@@ -3395,7 +3898,7 @@ class ReviewCtlTest(unittest.TestCase):
         payload["coverage"]["files_reviewed"] = ["test_calc.py"]
         migration.write_text(json.dumps(payload), encoding="utf-8")
         _, stderr = self.ingest_candidate_paths(paths, expected=2)
-        self.assertIn("did not review required assignment paths: calc.py", stderr)
+        self.assertIn("must review every required_review_path: calc.py", stderr)
 
     def test_conditional_risk_lenses_cover_four_state_matrix(self) -> None:
         output_path = "generated_output.py"
@@ -3425,6 +3928,22 @@ class ReviewCtlTest(unittest.TestCase):
                 evidence_path = evidence_by_risk[obligation["risk_code"]]
                 obligation["canonical_owner"] = evidence_path
                 obligation["evidence_paths"] = [evidence_path]
+            obligations = {
+                obligation["obligation_id"]: obligation
+                for obligation in plan["review_obligations"]
+            }
+            for assignment in plan["assignments"]:
+                if assignment["assignment_kind"] != "obligation":
+                    continue
+                obligation = obligations[assignment["obligation_id"]]
+                assignment["required_review_paths"] = sorted(
+                    {
+                        obligation["canonical_owner"],
+                        *obligation["affected_consumers"],
+                        *obligation["evidence_paths"],
+                    }
+                )
+                assignment["required_checks"] = obligation["required_checks"]
             plan_path = self.write_json(f"risk-matrix-{name}-plan.json", plan)
             self.run_tool(
                 "record-coverage",
@@ -3555,12 +4074,7 @@ class ReviewCtlTest(unittest.TestCase):
                     minimum_required,
                 )
 
-                reviewed_paths = {
-                    "reliability": [output_path],
-                    "migration_data_safety": [config_path],
-                    "api_config_compatibility": [config_path],
-                }
-                paths = candidate_paths(name, scope_hash, plan, reviewed_paths=reviewed_paths)
+                paths = candidate_paths(name, scope_hash, plan)
                 self.ingest_candidate_paths(paths)
                 state = self.load("state.json")
                 self.assertEqual(state["phase"], "CANDIDATES_CAPTURED")
@@ -3634,25 +4148,19 @@ class ReviewCtlTest(unittest.TestCase):
                     "missing-own-risk-path",
                     None,
                     {lens_id: ["calc.py"]},
-                    f"{assignment_id} did not review required assignment paths: {own_path}",
+                    "must review every required_review_path",
                 ),
                 (
                     "substituted-other-risk-path",
                     None,
                     {lens_id: [other_path]},
-                    f"{assignment_id} did not review required assignment paths: {own_path}",
+                    "must review every required_review_path",
                 ),
             ):
                 with self.subTest(lens=lens_id, control=control):
                     name = f"{lens_id}-{control}"
                     scope_hash, plan = prepare_run(name, output_present=True, config_present=True)
-                    reviewed_paths = {
-                        "reliability": [output_path],
-                        "migration_data_safety": [config_path],
-                        "api_config_compatibility": [config_path],
-                    }
-                    if lens_paths:
-                        reviewed_paths.update(lens_paths)
+                    reviewed_paths = lens_paths or {}
                     state_before = self.load("state.json")
                     _, stderr = self.ingest_candidate_paths(
                         candidate_paths(
@@ -3664,7 +4172,9 @@ class ReviewCtlTest(unittest.TestCase):
                         ),
                         expected=2,
                     )
-                    self.assertEqual(stderr, f"[FAIL] {expected_cause}\n")
+                    self.assertIn(expected_cause, stderr)
+                    if lens_paths:
+                        self.assertIn(own_path, stderr)
                     assert_non_authoritative_failure(state_before)
 
     def test_required_assignments_cannot_have_empty_file_coverage(self) -> None:
@@ -3742,6 +4252,13 @@ class ReviewCtlTest(unittest.TestCase):
                 "reviewer_id": "workflow-reviewer",
                 "independence_group": "model-c",
                 "review_mode": "subagent",
+                "required_review_paths": ["calc.py"],
+                "required_checks": [
+                    "disabled_mode_dependency_boundary",
+                    "normative_sequence",
+                    "paired_control",
+                    "prerequisite_before_dependent_step",
+                ],
             }
         )
         self.run_tool(
@@ -4092,7 +4609,7 @@ class ReviewCtlTest(unittest.TestCase):
         schema_path = (
             Path(__file__).resolve().parents[1]
             / "schemas"
-            / "candidate-set-v4.schema.json"
+            / "candidate-set-v5.schema.json"
         )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertIs(schema["additionalProperties"], False)
@@ -4116,11 +4633,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(
             reviewctl.CANDIDATE_SCHEMA_REVIEW,
-            "material-review/candidate-set/v4",
+            "material-review/candidate-set/v5",
         )
         self.assertEqual(
             schema["properties"]["schema_version"]["const"],
-            "material-review/candidate-set/v4",
+            "material-review/candidate-set/v5",
         )
         self.assertEqual(
             schema["properties"]["coverage_plan_hash"],
@@ -4390,6 +4907,130 @@ class ReviewCtlTest(unittest.TestCase):
         _, stderr = self.ingest_candidate_paths(later_inputs, expected=2)
         self.assertIn("Cannot ingest candidates in phase ADJUDICATED", stderr)
         self.assertEqual(authority_bytes(), later_authority)
+
+    def test_simultaneous_candidate_ingestion_has_one_coherent_winner(self) -> None:
+        scope_hash = self.init_with_recorded_coverage()
+        primary_a = self.candidate_set(scope_hash, include_style=False)
+        consequence_a = primary_a["findings"][0]["observable_consequence"]
+        title_a = primary_a["findings"][0]["title"]
+        wave_a = self.candidate_paths_for_coverage(
+            scope_hash,
+            primary_candidate=primary_a,
+        )
+        wave_b: list[Path] = []
+        consequence_b = "The simultaneous alternate wave has distinct evidence."
+        title_b = "Alternate simultaneous candidate title"
+        for index, path in enumerate(wave_a):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload["assignment_id"] == "core-correctness":
+                payload["findings"][0]["observable_consequence"] = consequence_b
+                payload["findings"][0]["title"] = title_b
+            wave_b.append(self.write_json(f"simultaneous-b-{index}.json", payload))
+
+        barrier_directory = self.root / "simultaneous-ingest-barrier"
+        barrier_directory.mkdir()
+
+        def command(worker_id: str, paths: list[Path]) -> list[str]:
+            inputs = [value for path in paths for value in ("--input", str(path))]
+            return [
+                sys.executable,
+                "-B",
+                "-c",
+                SIMULTANEOUS_INGEST_HARNESS,
+                str(SCRIPT),
+                str(barrier_directory),
+                worker_id,
+                "ingest-candidates",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                *inputs,
+            ]
+
+        environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+        processes = [
+            subprocess.Popen(
+                command("a", wave_a),
+                cwd=self.repo,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ),
+            subprocess.Popen(
+                command("b", wave_b),
+                cwd=self.repo,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ),
+        ]
+        completed: list[tuple[int, str, str]] = []
+        try:
+            ready_paths = [
+                barrier_directory / "ready-a",
+                barrier_directory / "ready-b",
+            ]
+            deadline = time.monotonic() + 15.0
+            while not all(path.exists() for path in ready_paths):
+                exited = [
+                    process.returncode
+                    for process in processes
+                    if process.poll() is not None
+                ]
+                if exited:
+                    self.fail(f"ingestion worker exited before the barrier: {exited}")
+                if time.monotonic() >= deadline:
+                    self.fail("ingestion workers did not reach the semantic barrier")
+                time.sleep(0.005)
+            (barrier_directory / "release").write_text("go\n", encoding="utf-8")
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=30.0)
+                completed.append((process.returncode, stdout, stderr))
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+
+        self.assertEqual(sorted(result[0] for result in completed), [0, 2])
+        winner = next(result for result in completed if result[0] == 0)
+        loser = next(result for result in completed if result[0] == 2)
+        self.assertIn("Candidate bundle written", winner[1])
+        self.assertIn("candidate bundle is already captured", loser[2].lower())
+
+        bundle = self.load("candidates.json")
+        state = self.load("state.json")
+        rejections = self.load("candidate-rejections.json")
+        markdown = (self.run_dir / "candidates.md").read_text(encoding="utf-8")
+        bundle_hash = reviewctl.verify_embedded_hash(
+            bundle,
+            hash_field="candidate_bundle_hash",
+            context="simultaneous normalized candidates",
+            unhashed_fields={"generated_at"},
+        )
+        observed_consequence = bundle["candidates"][0]["observable_consequence"]
+        self.assertIn(observed_consequence, {consequence_a, consequence_b})
+        observed_title = bundle["candidates"][0]["title"]
+        self.assertIn(observed_title, {title_a, title_b})
+        losing_title = title_b if observed_title == title_a else title_a
+        self.assertIn(observed_title, markdown)
+        self.assertNotIn(losing_title, markdown)
+        self.assertEqual(rejections, [])
+        self.assertEqual(state["phase"], "CANDIDATES_CAPTURED")
+        self.assertEqual(state["hashes"]["candidate_bundle_hash"], bundle_hash)
+        ingestion_events = [
+            event
+            for event in state["events"]
+            if event["event"] == "candidates_ingested"
+        ]
+        self.assertEqual(len(ingestion_events), 1)
+        self.assertEqual(
+            ingestion_events[0]["candidate_bundle_hash"],
+            bundle_hash,
+        )
 
     def test_ingest_rejects_duplicate_or_unassigned_assignment_without_authoritative_write(self) -> None:
         self.run_id = "test-run-duplicate-assignment"
@@ -4727,12 +5368,61 @@ class ReviewCtlTest(unittest.TestCase):
                 )
                 self.assertNotIn("Run predates required coverage", stderr)
 
-    def test_new_review_run_uses_state_v4(self) -> None:
+    def test_new_review_run_uses_state_v5(self) -> None:
         self.init()
         state = self.load("state.json")
-        self.assertEqual(state["schema_version"], "material-review/state/v4")
+        self.assertEqual(state["schema_version"], "material-review/state/v5")
         self.assertEqual(state["workflow_profile"], "material_review")
         self.assertIs(state["coverage_required"], True)
+
+    def test_state_v4_review_is_restart_only_after_state_v5_release(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(CONTROLLER_1_5_COMPAT.read_bytes()).hexdigest(),
+            CONTROLLER_1_5_COMPAT_SHA256,
+        )
+        scope_hash = self.init()
+        self.make_run_state_v4_with_frozen_1_5_fixture()
+        state = self.load("state.json")
+        self.assertEqual(state["schema_version"], "material-review/state/v4")
+        self.assertEqual(
+            reviewctl.classify_state_contract(state),
+            "legacy_material_review_v4",
+        )
+
+        self.run_tool(
+            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
+        )
+        self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        coverage = self.write_json("state-v4-coverage.json", self.coverage_plan(scope_hash))
+        _, stderr = self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(coverage),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+
+        for command in (
+            ("rollback-finding", "--finding", "F001", "--reason", "Bounded legacy check."),
+            ("abort-fixes", "--reason", "Bounded legacy check."),
+        ):
+            with self.subTest(command=command[0]):
+                _, stderr = self.run_tool(
+                    command[0],
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    *command[1:],
+                    expected=2,
+                )
+                self.assertNotIn("Run predates required coverage", stderr)
 
     def test_state_v3_review_is_restart_only_after_state_v4_release(self) -> None:
         self.assertEqual(
@@ -4797,6 +5487,14 @@ class ReviewCtlTest(unittest.TestCase):
                 "decision": "selected",
                 "basis": "ambiguous",
                 "evidence": ["The trust boundary is ambiguous in the changed behavior."],
+                "scenario_checks": [
+                    {
+                        "check_code": "trust-boundary-dispatch-stability",
+                        "claim": "The validated trust classification remains stable through dispatch.",
+                        "evidence_paths": unit["primary_paths"],
+                        "countercontrol": "Change the trust classification after validation and before dispatch.",
+                    }
+                ],
             }
         )
         plan["assignments"].append(
@@ -4810,6 +5508,10 @@ class ReviewCtlTest(unittest.TestCase):
                 "unit_ids": ["unit-001"],
                 "primary_paths": unit["primary_paths"],
                 "context_paths": unit["context_paths"],
+                "required_review_paths": sorted(
+                    {*unit["primary_paths"], *unit["context_paths"]}
+                ),
+                "required_checks": ["trust-boundary-dispatch-stability"],
             }
         )
         self.run_tool(
@@ -4831,6 +5533,96 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(reviewer_set["unit_ids"], ["unit-001"])
         self.assertEqual(reviewer_set["primary_paths"], ["calc.py"])
         self.assertEqual(reviewer_set["context_paths"], [])
+        self.assertEqual(reviewer_set["required_review_paths"], ["calc.py"])
+        self.assertEqual(
+            reviewer_set["required_checks"],
+            ["trust-boundary-dispatch-stability"],
+        )
+        self.assertEqual(
+            [item["check_code"] for item in reviewer_set["scenario_checks"]],
+            ["trust-boundary-dispatch-stability"],
+        )
+
+    def test_blocked_specialist_result_prevents_candidate_wave_write(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan_v2(scope_hash, risk_code=None)
+        unit = plan["change_units"][0]
+        decision = next(
+            item
+            for item in unit["specialist_decisions"]
+            if item["lens_id"] == "concurrency"
+        )
+        check_code = "validated-target-rebind-before-mutation"
+        decision.update(
+            {
+                "decision": "selected",
+                "basis": "high_risk_mandate",
+                "evidence": [
+                    "The changed writer has a validation-to-mutation identity interval."
+                ],
+                "scenario_checks": [
+                    {
+                        "check_code": check_code,
+                        "claim": (
+                            "The final mutation remains bound to the target identity "
+                            "accepted at validation."
+                        ),
+                        "evidence_paths": unit["primary_paths"],
+                        "countercontrol": (
+                            "Replace the target after validation and before the final mutation."
+                        ),
+                    }
+                ],
+            }
+        )
+        plan["assignments"].append(
+            {
+                "assignment_id": "specialist-concurrency",
+                "assignment_kind": "specialist",
+                "lens_id": "concurrency",
+                "reviewer_id": "concurrency-reviewer",
+                "independence_group": "model-b",
+                "review_mode": "subagent",
+                "unit_ids": [unit["unit_id"]],
+                "primary_paths": unit["primary_paths"],
+                "context_paths": unit["context_paths"],
+                "required_review_paths": sorted(
+                    {*unit["primary_paths"], *unit["context_paths"]}
+                ),
+                "required_checks": [check_code],
+            }
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(self.write_json("blocked-specialist-plan.json", plan)),
+        )
+        paths = self.candidate_paths_for_coverage_v3(scope_hash)
+        specialist_path = next(path for path in paths if "specialist-concurrency" in path.name)
+        specialist = json.loads(specialist_path.read_text(encoding="utf-8"))
+        specialist["check_results"][0].update(
+            outcome="blocked",
+            evidence=["The required replacement interleaving is unavailable."],
+            finding_local_ids=[],
+        )
+        specialist["coverage"]["limitations"] = [
+            {
+                "description": "The target replacement interleaving is unavailable.",
+                "related_check_codes": [check_code],
+            }
+        ]
+        specialist_path.write_text(json.dumps(specialist), encoding="utf-8")
+
+        _, stderr = self.ingest_candidate_paths(paths, expected=2)
+
+        self.assertIn("blocked", stderr)
+        self.assertFalse((self.run_dir / "candidates.json").exists())
+        self.assertFalse((self.run_dir / "candidate-rejections.json").exists())
+        self.assertFalse((self.run_dir / "candidates.md").exists())
 
     def test_side_aware_snapshot_evidence_resolution(self) -> None:
         source_root = self.root / "snapshot-evidence"
@@ -5533,7 +6325,7 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse(downgrade_sentinel.exists())
         self.assertFalse((self.run_dir / "candidates.json").exists())
         self.assertEqual((self.run_dir / "state.json").read_bytes(), state_before_downgrade)
-        self.assertEqual(initial_state["schema_version"], "material-review/state/v4")
+        self.assertEqual(initial_state["schema_version"], "material-review/state/v5")
         self.assertIs(initial_state["coverage_required"], True)
         self.assertEqual(initial_state["workflow_profile"], "material_review")
 

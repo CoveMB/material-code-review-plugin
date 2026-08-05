@@ -19,7 +19,7 @@
       "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v3",
+        "schema_version": "material-review/coverage-plan/v4",
         "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
         "workflow_profile": "material_review",
         "change_units": [
@@ -73,7 +73,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger security_privacy."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "reliability",
@@ -81,7 +82,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger reliability."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "api_contract",
@@ -89,7 +91,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger api_contract."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "migration_deployment",
@@ -97,7 +100,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger migration_deployment."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "concurrency",
@@ -105,7 +109,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger concurrency."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "performance",
@@ -113,7 +118,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger performance."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "documentation",
@@ -121,7 +127,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger documentation."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "architecture_simplification",
@@ -129,8 +136,13 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger architecture_simplification."
-                ]
+                ],
+                "scenario_checks": []
               }
+            ],
+            "canonical_owner": "scripts/validate_version.py",
+            "affected_consumers": [
+              "scripts/package.py"
             ]
           }
         ],
@@ -162,7 +174,12 @@
             "lens_id": "correctness",
             "reviewer_id": "core-correctness",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "scripts/package.py",
+              "scripts/validate_version.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-standards",
@@ -170,7 +187,12 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "core-standards",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "scripts/package.py",
+              "scripts/validate_version.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-tests",
@@ -178,7 +200,12 @@
             "lens_id": "test_adequacy",
             "reviewer_id": "core-tests",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "scripts/package.py",
+              "scripts/validate_version.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "assignment-obligation-unit-001-verification-mechanism-semantics",
@@ -189,14 +216,23 @@
             "lens_id": "adversarial_verification",
             "reviewer_id": "reviewer-1",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "scripts/package.py",
+              "scripts/validate_version.py"
+            ],
+            "required_checks": [
+              "authoritative_parsing",
+              "decoy_duplicate_resistance",
+              "paired_control"
+            ]
           }
         ],
         "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -210,6 +246,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "scripts/package.py",
               "scripts/validate_version.py"
             ],
             "areas": [
@@ -219,7 +256,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -233,6 +270,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "scripts/package.py",
               "scripts/validate_version.py"
             ],
             "areas": [
@@ -242,7 +280,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -256,6 +294,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "scripts/package.py",
               "scripts/validate_version.py"
             ],
             "areas": [
@@ -265,7 +304,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -284,6 +323,10 @@
               ],
               "finding_local_ids": [
                 "observed-defect"
+              ],
+              "evidence_paths": [
+                "scripts/package.py",
+                "scripts/validate_version.py"
               ]
             },
             {
@@ -292,7 +335,11 @@
               "evidence": [
                 "Observed decoy_duplicate_resistance against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "scripts/package.py",
+                "scripts/validate_version.py"
+              ]
             },
             {
               "check_code": "paired_control",
@@ -300,7 +347,11 @@
               "evidence": [
                 "Observed paired_control against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "scripts/package.py",
+                "scripts/validate_version.py"
+              ]
             }
           ],
           "findings": [
@@ -404,7 +455,7 @@
       "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v3",
+        "schema_version": "material-review/coverage-plan/v4",
         "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
         "workflow_profile": "material_review",
         "change_units": [
@@ -458,7 +509,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger security_privacy."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "reliability",
@@ -466,7 +518,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger reliability."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "api_contract",
@@ -474,7 +527,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger api_contract."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "migration_deployment",
@@ -482,7 +536,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger migration_deployment."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "concurrency",
@@ -490,7 +545,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger concurrency."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "performance",
@@ -498,7 +554,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger performance."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "documentation",
@@ -506,7 +563,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger documentation."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "architecture_simplification",
@@ -514,8 +572,13 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger architecture_simplification."
-                ]
+                ],
+                "scenario_checks": []
               }
+            ],
+            "canonical_owner": "references/workflow.md",
+            "affected_consumers": [
+              "SKILL.md"
             ]
           }
         ],
@@ -548,7 +611,12 @@
             "lens_id": "correctness",
             "reviewer_id": "core-correctness",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "SKILL.md",
+              "references/workflow.md"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-standards",
@@ -556,7 +624,12 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "core-standards",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "SKILL.md",
+              "references/workflow.md"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-tests",
@@ -564,7 +637,12 @@
             "lens_id": "test_adequacy",
             "reviewer_id": "core-tests",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "SKILL.md",
+              "references/workflow.md"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
@@ -575,14 +653,24 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "reviewer-2",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "SKILL.md",
+              "references/workflow.md"
+            ],
+            "required_checks": [
+              "disabled_mode_dependency_boundary",
+              "normative_sequence",
+              "paired_control",
+              "prerequisite_before_dependent_step"
+            ]
           }
         ],
         "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -596,6 +684,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "SKILL.md",
               "references/workflow.md"
             ],
             "areas": [
@@ -605,7 +694,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -619,6 +708,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "SKILL.md",
               "references/workflow.md"
             ],
             "areas": [
@@ -628,7 +718,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -642,6 +732,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "SKILL.md",
               "references/workflow.md"
             ],
             "areas": [
@@ -651,7 +742,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -668,7 +759,11 @@
               "evidence": [
                 "The inspected workflow has no optional or disabled subsystem boundary."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "SKILL.md",
+                "references/workflow.md"
+              ]
             },
             {
               "check_code": "normative_sequence",
@@ -678,6 +773,10 @@
               ],
               "finding_local_ids": [
                 "observed-defect"
+              ],
+              "evidence_paths": [
+                "SKILL.md",
+                "references/workflow.md"
               ]
             },
             {
@@ -686,7 +785,11 @@
               "evidence": [
                 "Observed paired_control against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "SKILL.md",
+                "references/workflow.md"
+              ]
             },
             {
               "check_code": "prerequisite_before_dependent_step",
@@ -694,7 +797,11 @@
               "evidence": [
                 "Observed prerequisite_before_dependent_step against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "SKILL.md",
+                "references/workflow.md"
+              ]
             }
           ],
           "findings": [
@@ -799,7 +906,7 @@
       "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v3",
+        "schema_version": "material-review/coverage-plan/v4",
         "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
         "workflow_profile": "material_review",
         "change_units": [
@@ -853,7 +960,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger security_privacy."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "reliability",
@@ -861,7 +969,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger reliability."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "api_contract",
@@ -869,7 +978,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger api_contract."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "migration_deployment",
@@ -877,7 +987,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger migration_deployment."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "concurrency",
@@ -885,7 +996,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger concurrency."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "performance",
@@ -893,7 +1005,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger performance."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "documentation",
@@ -901,7 +1014,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger documentation."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "architecture_simplification",
@@ -909,8 +1023,13 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger architecture_simplification."
-                ]
+                ],
+                "scenario_checks": []
               }
+            ],
+            "canonical_owner": "schemas/path.schema.json",
+            "affected_consumers": [
+              "scripts/runtime_validator.py"
             ]
           }
         ],
@@ -943,7 +1062,12 @@
             "lens_id": "correctness",
             "reviewer_id": "core-correctness",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-standards",
@@ -951,7 +1075,12 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "core-standards",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-tests",
@@ -959,7 +1088,12 @@
             "lens_id": "test_adequacy",
             "reviewer_id": "core-tests",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
@@ -970,14 +1104,24 @@
             "lens_id": "api_config_compatibility",
             "reviewer_id": "reviewer-3",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
+            ],
+            "required_checks": [
+              "canonical_git_path_language",
+              "privileged_field_type_exactness",
+              "required_value_cardinality",
+              "schema_runtime_parity"
+            ]
           }
         ],
         "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -991,7 +1135,8 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
-              "schemas/path.schema.json"
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
             ],
             "areas": [
               "correctness"
@@ -1000,7 +1145,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1014,7 +1159,8 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
-              "schemas/path.schema.json"
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
             ],
             "areas": [
               "standards_alignment"
@@ -1023,7 +1169,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1037,7 +1183,8 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
-              "schemas/path.schema.json"
+              "schemas/path.schema.json",
+              "scripts/runtime_validator.py"
             ],
             "areas": [
               "test_adequacy"
@@ -1046,7 +1193,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1065,6 +1212,10 @@
               ],
               "finding_local_ids": [
                 "observed-defect"
+              ],
+              "evidence_paths": [
+                "schemas/path.schema.json",
+                "scripts/runtime_validator.py"
               ]
             },
             {
@@ -1073,7 +1224,11 @@
               "evidence": [
                 "Observed privileged_field_type_exactness against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "schemas/path.schema.json",
+                "scripts/runtime_validator.py"
+              ]
             },
             {
               "check_code": "required_value_cardinality",
@@ -1081,7 +1236,11 @@
               "evidence": [
                 "Observed required_value_cardinality against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "schemas/path.schema.json",
+                "scripts/runtime_validator.py"
+              ]
             },
             {
               "check_code": "schema_runtime_parity",
@@ -1089,7 +1248,11 @@
               "evidence": [
                 "Observed schema_runtime_parity against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "schemas/path.schema.json",
+                "scripts/runtime_validator.py"
+              ]
             }
           ],
           "findings": [
@@ -1193,7 +1356,7 @@
       "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v3",
+        "schema_version": "material-review/coverage-plan/v4",
         "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
         "workflow_profile": "material_review",
         "change_units": [
@@ -1247,7 +1410,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger security_privacy."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "reliability",
@@ -1255,7 +1419,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger reliability."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "api_contract",
@@ -1263,7 +1428,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger api_contract."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "migration_deployment",
@@ -1271,7 +1437,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger migration_deployment."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "concurrency",
@@ -1279,7 +1446,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger concurrency."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "performance",
@@ -1287,7 +1455,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger performance."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "documentation",
@@ -1295,7 +1464,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger documentation."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "architecture_simplification",
@@ -1303,8 +1473,13 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger architecture_simplification."
-                ]
+                ],
+                "scenario_checks": []
               }
+            ],
+            "canonical_owner": "schemas/coverage.json",
+            "affected_consumers": [
+              "scripts/coverage.py"
             ]
           }
         ],
@@ -1337,7 +1512,12 @@
             "lens_id": "correctness",
             "reviewer_id": "core-correctness",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/coverage.json",
+              "scripts/coverage.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-standards",
@@ -1345,7 +1525,12 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "core-standards",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/coverage.json",
+              "scripts/coverage.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-tests",
@@ -1353,7 +1538,12 @@
             "lens_id": "test_adequacy",
             "reviewer_id": "core-tests",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/coverage.json",
+              "scripts/coverage.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "assignment-obligation-unit-001-machine-contract-semantics",
@@ -1364,14 +1554,24 @@
             "lens_id": "api_config_compatibility",
             "reviewer_id": "reviewer-4",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "schemas/coverage.json",
+              "scripts/coverage.py"
+            ],
+            "required_checks": [
+              "canonical_git_path_language",
+              "privileged_field_type_exactness",
+              "required_value_cardinality",
+              "schema_runtime_parity"
+            ]
           }
         ],
         "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1385,7 +1585,8 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
-              "schemas/coverage.json"
+              "schemas/coverage.json",
+              "scripts/coverage.py"
             ],
             "areas": [
               "correctness"
@@ -1394,7 +1595,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1408,7 +1609,8 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
-              "schemas/coverage.json"
+              "schemas/coverage.json",
+              "scripts/coverage.py"
             ],
             "areas": [
               "standards_alignment"
@@ -1417,7 +1619,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1431,7 +1633,8 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
-              "schemas/coverage.json"
+              "schemas/coverage.json",
+              "scripts/coverage.py"
             ],
             "areas": [
               "test_adequacy"
@@ -1440,7 +1643,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1459,6 +1662,10 @@
               ],
               "finding_local_ids": [
                 "observed-defect"
+              ],
+              "evidence_paths": [
+                "schemas/coverage.json",
+                "scripts/coverage.py"
               ]
             },
             {
@@ -1467,7 +1674,11 @@
               "evidence": [
                 "Observed privileged_field_type_exactness against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "schemas/coverage.json",
+                "scripts/coverage.py"
+              ]
             },
             {
               "check_code": "required_value_cardinality",
@@ -1475,7 +1686,11 @@
               "evidence": [
                 "Observed required_value_cardinality against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "schemas/coverage.json",
+                "scripts/coverage.py"
+              ]
             },
             {
               "check_code": "schema_runtime_parity",
@@ -1483,7 +1698,11 @@
               "evidence": [
                 "Observed schema_runtime_parity against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "schemas/coverage.json",
+                "scripts/coverage.py"
+              ]
             }
           ],
           "findings": [
@@ -1586,7 +1805,7 @@
       "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v3",
+        "schema_version": "material-review/coverage-plan/v4",
         "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
         "workflow_profile": "material_review",
         "change_units": [
@@ -1640,7 +1859,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger security_privacy."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "reliability",
@@ -1648,7 +1868,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger reliability."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "api_contract",
@@ -1656,7 +1877,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger api_contract."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "migration_deployment",
@@ -1664,7 +1886,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger migration_deployment."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "concurrency",
@@ -1672,7 +1895,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger concurrency."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "performance",
@@ -1680,7 +1904,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger performance."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "documentation",
@@ -1688,7 +1913,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger documentation."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "architecture_simplification",
@@ -1696,8 +1922,13 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger architecture_simplification."
-                ]
+                ],
+                "scenario_checks": []
               }
+            ],
+            "canonical_owner": "scripts/validate_archive.py",
+            "affected_consumers": [
+              "package-layouts.json"
             ]
           }
         ],
@@ -1729,7 +1960,12 @@
             "lens_id": "correctness",
             "reviewer_id": "core-correctness",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "package-layouts.json",
+              "scripts/validate_archive.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-standards",
@@ -1737,7 +1973,12 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "core-standards",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "package-layouts.json",
+              "scripts/validate_archive.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-tests",
@@ -1745,7 +1986,12 @@
             "lens_id": "test_adequacy",
             "reviewer_id": "core-tests",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "package-layouts.json",
+              "scripts/validate_archive.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
@@ -1756,14 +2002,23 @@
             "lens_id": "reliability",
             "reviewer_id": "reviewer-5",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "package-layouts.json",
+              "scripts/validate_archive.py"
+            ],
+            "required_checks": [
+              "manifest_reference_closure",
+              "paired_control",
+              "remove_one_required_entry"
+            ]
           }
         ],
         "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1777,6 +2032,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "package-layouts.json",
               "scripts/validate_archive.py"
             ],
             "areas": [
@@ -1786,7 +2042,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1800,6 +2056,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "package-layouts.json",
               "scripts/validate_archive.py"
             ],
             "areas": [
@@ -1809,7 +2066,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1823,6 +2080,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "package-layouts.json",
               "scripts/validate_archive.py"
             ],
             "areas": [
@@ -1832,7 +2090,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1851,6 +2109,10 @@
               ],
               "finding_local_ids": [
                 "observed-defect"
+              ],
+              "evidence_paths": [
+                "package-layouts.json",
+                "scripts/validate_archive.py"
               ]
             },
             {
@@ -1859,7 +2121,11 @@
               "evidence": [
                 "Observed paired_control against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "package-layouts.json",
+                "scripts/validate_archive.py"
+              ]
             },
             {
               "check_code": "remove_one_required_entry",
@@ -1867,7 +2133,11 @@
               "evidence": [
                 "Observed remove_one_required_entry against the frozen positive and negative controls."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "package-layouts.json",
+                "scripts/validate_archive.py"
+              ]
             }
           ],
           "findings": [
@@ -1964,14 +2234,16 @@
       "expected_checks": [
         "canonical_filesystem_identity",
         "destination_collision",
+        "runtime_target_derivation_parity",
         "runtime_writer_target_inventory",
+        "validation_to_mutation_identity_stability",
         "writer_cleanup_order"
       ],
       "expected_defect": "Resolved destination identity and runtime writer selection do not preserve unique target ownership.",
       "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
       "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v3",
+        "schema_version": "material-review/coverage-plan/v4",
         "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
         "workflow_profile": "material_review",
         "change_units": [
@@ -2025,7 +2297,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger security_privacy."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "reliability",
@@ -2033,7 +2306,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The controlled obligation provides the bounded reliability review."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "api_contract",
@@ -2041,7 +2315,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger api_contract."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "migration_deployment",
@@ -2049,7 +2324,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger migration_deployment."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "concurrency",
@@ -2057,7 +2333,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger concurrency."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "performance",
@@ -2065,7 +2342,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger performance."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "documentation",
@@ -2073,7 +2351,8 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger documentation."
-                ]
+                ],
+                "scenario_checks": []
               },
               {
                 "lens_id": "architecture_simplification",
@@ -2081,8 +2360,13 @@
                 "basis": "behavior_evidence",
                 "evidence": [
                   "The fixture behavior does not trigger architecture_simplification."
-                ]
+                ],
+                "scenario_checks": []
               }
+            ],
+            "canonical_owner": "writers.py",
+            "affected_consumers": [
+              "runtime_config.py"
             ]
           }
         ],
@@ -2103,7 +2387,9 @@
             "required_checks": [
               "canonical_filesystem_identity",
               "destination_collision",
+              "runtime_target_derivation_parity",
               "runtime_writer_target_inventory",
+              "validation_to_mutation_identity_stability",
               "writer_cleanup_order"
             ]
           }
@@ -2115,7 +2401,12 @@
             "lens_id": "correctness",
             "reviewer_id": "core-correctness",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "runtime_config.py",
+              "writers.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-standards",
@@ -2123,7 +2414,12 @@
             "lens_id": "standards_alignment",
             "reviewer_id": "core-standards",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "runtime_config.py",
+              "writers.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "core-tests",
@@ -2131,7 +2427,12 @@
             "lens_id": "test_adequacy",
             "reviewer_id": "core-tests",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "runtime_config.py",
+              "writers.py"
+            ],
+            "required_checks": []
           },
           {
             "assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
@@ -2142,14 +2443,26 @@
             "lens_id": "reliability",
             "reviewer_id": "reviewer-output-targets",
             "independence_group": "corpus-independent",
-            "review_mode": "subagent"
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "runtime_config.py",
+              "writers.py"
+            ],
+            "required_checks": [
+              "canonical_filesystem_identity",
+              "destination_collision",
+              "runtime_target_derivation_parity",
+              "runtime_writer_target_inventory",
+              "validation_to_mutation_identity_stability",
+              "writer_cleanup_order"
+            ]
           }
         ],
         "depth": "auto"
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2163,6 +2476,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "runtime_config.py",
               "writers.py"
             ],
             "areas": [
@@ -2172,7 +2486,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2186,6 +2500,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "runtime_config.py",
               "writers.py"
             ],
             "areas": [
@@ -2195,7 +2510,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2209,6 +2524,7 @@
           "findings": [],
           "coverage": {
             "files_reviewed": [
+              "runtime_config.py",
               "writers.py"
             ],
             "areas": [
@@ -2218,7 +2534,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v4",
+          "schema_version": "material-review/candidate-set/v5",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2235,7 +2551,11 @@
               "evidence": [
                 "Accepted and rejected filesystem aliases were compared against the frozen writer boundary."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "runtime_config.py",
+                "writers.py"
+              ]
             },
             {
               "check_code": "destination_collision",
@@ -2243,7 +2563,11 @@
               "evidence": [
                 "Direct configured and resolved destinations are distinct."
               ],
-              "finding_local_ids": []
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "runtime_config.py",
+                "writers.py"
+              ]
             },
             {
               "check_code": "runtime_writer_target_inventory",
@@ -2253,6 +2577,10 @@
               ],
               "finding_local_ids": [
                 "observed-defect"
+              ],
+              "evidence_paths": [
+                "runtime_config.py",
+                "writers.py"
               ]
             },
             {
@@ -2260,6 +2588,34 @@
               "outcome": "pass",
               "evidence": [
                 "Success and failure cleanup ordering preserves each independently owned target."
+              ],
+              "finding_local_ids": [],
+              "evidence_paths": [
+                "runtime_config.py",
+                "writers.py"
+              ]
+            },
+            {
+              "check_code": "runtime_target_derivation_parity",
+              "outcome": "pass",
+              "evidence": [
+                "Validation and execution derive the same collision-adjusted target identity, and the distinct-target control remains accepted."
+              ],
+              "evidence_paths": [
+                "runtime_config.py",
+                "writers.py"
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "validation_to_mutation_identity_stability",
+              "outcome": "pass",
+              "evidence": [
+                "The frozen writer binds the validated identity through mutation and rejects replacement before the final write."
+              ],
+              "evidence_paths": [
+                "runtime_config.py",
+                "writers.py"
               ],
               "finding_local_ids": []
             }
@@ -2357,7 +2713,7 @@
     ],
     "context_paths": [],
     "valid_plan": {
-      "schema_version": "material-review/coverage-plan/v3",
+      "schema_version": "material-review/coverage-plan/v4",
       "scope_hash": "9999999999999999999999999999999999999999999999999999999999999999",
       "workflow_profile": "material_review",
       "change_units": [
@@ -2403,7 +2759,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger security_privacy."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "reliability",
@@ -2411,7 +2768,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger reliability."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "api_contract",
@@ -2419,7 +2777,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger api_contract."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "migration_deployment",
@@ -2427,7 +2786,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger migration_deployment."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "concurrency",
@@ -2435,7 +2795,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger concurrency."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "performance",
@@ -2443,7 +2804,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger performance."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "documentation",
@@ -2451,7 +2813,8 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger documentation."
-              ]
+              ],
+              "scenario_checks": []
             },
             {
               "lens_id": "architecture_simplification",
@@ -2459,9 +2822,12 @@
               "basis": "behavior_evidence",
               "evidence": [
                 "The fixture behavior does not trigger architecture_simplification."
-              ]
+              ],
+              "scenario_checks": []
             }
-          ]
+          ],
+          "canonical_owner": "src/format_name.py",
+          "affected_consumers": []
         }
       ],
       "review_obligations": [],
@@ -2472,7 +2838,11 @@
           "lens_id": "correctness",
           "reviewer_id": "core-correctness",
           "independence_group": "corpus-independent",
-          "review_mode": "subagent"
+          "review_mode": "subagent",
+          "required_review_paths": [
+            "src/format_name.py"
+          ],
+          "required_checks": []
         },
         {
           "assignment_id": "core-standards",
@@ -2480,7 +2850,11 @@
           "lens_id": "standards_alignment",
           "reviewer_id": "core-standards",
           "independence_group": "corpus-independent",
-          "review_mode": "subagent"
+          "review_mode": "subagent",
+          "required_review_paths": [
+            "src/format_name.py"
+          ],
+          "required_checks": []
         },
         {
           "assignment_id": "core-tests",
@@ -2488,7 +2862,11 @@
           "lens_id": "test_adequacy",
           "reviewer_id": "core-tests",
           "independence_group": "corpus-independent",
-          "review_mode": "subagent"
+          "review_mode": "subagent",
+          "required_review_paths": [
+            "src/format_name.py"
+          ],
+          "required_checks": []
         }
       ],
       "depth": "auto"

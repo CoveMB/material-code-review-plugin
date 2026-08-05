@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "material-code-review",
   "displayName": "Material Code Review",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Evidence-gated review and bounded repair of a concrete Git change scope. Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR for material defects, regressions, test gaps protecting changed behavior, or merge readiness. Do not implicitly use for document or generated-output review, output diagnosis, general skill, plugin, or repository analysis, architecture exploration, or planning-only work.",
   "author": {
     "name": "Cove"

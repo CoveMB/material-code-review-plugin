@@ -10,6 +10,10 @@ Enumerate authoritative outputs, metadata, splits, reports, debug logs, temporar
 
 Check pairwise resolved-destination aliasing; relative, symlink-mediated, case-folded, Unicode-normalized, and relevant platform-specific path aliases; parent/child ownership overlap; success- and failure-path write ordering; and auxiliary or cleanup writes after authoritative writes. A successful command that can overwrite its own authoritative artifact is a material reliability defect.
 
+Trace final-target derivation through every applicable configured value, transformation, collision adjustment, existing-target reuse rule, adapter, and writer selection. Validation and execution must use the same authoritative final identity; cite paired controls where raw identities diverge after transformation or distinct raw values collide after derivation.
+
+Trace the last accepted validation through every final mutation. Check target and parent replacement, symlink rebinding, stale handles, rename/delete/cleanup, and relevant concurrent interleavings. Cite the invariant that binds the validated identity to mutation and a negative control at the latest meaningful interleaving point.
+
 ## Counterevidence
 
 Check early path validation, atomic replacement semantics, no-follow behavior, ownership metadata, guarded cleanup, write ordering, and causal custom-path tests. Do not report a collision that the existing boundary rejects before authoritative mutation.

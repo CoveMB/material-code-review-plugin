@@ -8,9 +8,12 @@ Before candidate synthesis or Gate A, report:
 - every change unit's purpose, primary paths, frozen context paths, and `coverage_context_hash`;
 - every controlled risk's positive or negative decision and evidence;
 - each obligation's risk, required lens, required checks, evidence paths, and exact assignment;
+- each selected specialist's atomic scenario claims, countercontrols, required review paths, and exact completed outcomes;
 - completion status for every assignment and any blocked, missing, stale, or degraded evidence.
 
 Completion means the controller accepted the structure and evidence fields. It does not prove semantic quality or reviewer cognition.
+
+Label raw finding volume as `candidate_records` and completed obligation/specialist results as completed atomic checks. Never present candidate-record count, assignment count, or atomic-check count as recall, breadth, independence, or semantic coverage.
 
 ## Gate A — findings approval for planning
 

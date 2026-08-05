@@ -92,11 +92,16 @@ class DiscoveryContractTests(unittest.TestCase):
     def test_discovery_contract_requires_change_units_and_obligations(self) -> None:
         text = self.read("SKILL.md")
         for marker in (
-            "material-review/state/v4",
-            "material-review/coverage-plan/v3",
-            "material-review/candidate-set/v4",
-            "material-review/candidates-normalized/v4",
+            "material-review/state/v5",
+            "material-review/coverage-plan/v4",
+            "material-review/candidate-set/v5",
+            "material-review/candidates-normalized/v5",
             "change_units",
+            "canonical_owner",
+            "affected_consumers",
+            "scenario_checks",
+            "required_review_paths",
+            "required_checks",
             "review_obligations",
             "assignment_id",
             "check_results",
@@ -142,6 +147,8 @@ class DiscoveryContractTests(unittest.TestCase):
                 "canonical_filesystem_identity",
                 "runtime_writer_target_inventory",
                 "writer_cleanup_order",
+                "runtime_target_derivation_parity",
+                "validation_to_mutation_identity_stability",
                 "local or remote logical target selected at runtime",
                 "no local destination is selected",
             ),
@@ -167,13 +174,17 @@ class DiscoveryContractTests(unittest.TestCase):
         reviewer = self.read("references/reviewer-template.md")
         for text in (skill, reviewer):
             self.assertIn("Each outcome accounts only for its named check", text)
+            self.assertIn(
+                "A `finding_local_id` may appear in only one required check result",
+                text,
+            )
             self.assertIn("A finding on one check does not complete another required check", text)
-            self.assertIn("coverage.limitations", text)
+            self.assertIn("related_check_codes", text)
 
-    def test_reviewer_template_requires_assignment_matched_v4_output(self) -> None:
+    def test_reviewer_template_requires_assignment_matched_v5_output(self) -> None:
         reviewer = self.read("references/reviewer-template.md")
         for marker in (
-            "candidate-set-v4.schema.json",
+            "candidate-set-v5.schema.json",
             "coverage_context_hash",
             "assignment_id",
             "assignment_kind",
@@ -182,6 +193,9 @@ class DiscoveryContractTests(unittest.TestCase):
             "pass",
             "finding_emitted",
             "blocked",
+            "required_review_paths",
+            "required_checks",
+            "evidence_paths",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, reviewer)
@@ -217,11 +231,12 @@ class DiscoveryContractTests(unittest.TestCase):
             "primary_paths",
             "context_paths",
             "Specialist assignments",
-            "empty `check_results`",
+            "atomic check results",
+            "scenario_checks",
         ):
-            self.assertIn(marker, reviewer)
+            self.assertIn(marker, reviewer if marker != "scenario_checks" else context)
         self.assertIn("Specialists cannot satisfy core assignments or controlled obligations", skill)
-        self.assertIn("specialist unit and path provenance", workflow)
+        self.assertIn("specialist unit/path/scenario provenance", workflow)
 
     def test_workflow_discovery_order_requires_scope_check(self) -> None:
         workflow = self.read("references/workflow.md")
@@ -249,7 +264,13 @@ class DiscoveryContractTests(unittest.TestCase):
     def test_targeted_lenses_define_causal_checks(self) -> None:
         reliability = self.read("references/reliability-output-integrity-lens.md")
         migration = self.read("references/persisted-config-migration-lens.md")
-        for marker in ("pairwise resolved-destination aliasing", "success- and failure-path write ordering", "platform-specific path aliases"):
+        for marker in (
+            "pairwise resolved-destination aliasing",
+            "success- and failure-path write ordering",
+            "platform-specific path aliases",
+            "final-target derivation",
+            "last accepted validation",
+        ):
             self.assertIn(marker, reliability)
         for marker in ("new-file default", "missing-key fallback", "explicit empty value", "external target identity"):
             self.assertIn(marker, migration)

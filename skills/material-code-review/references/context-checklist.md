@@ -20,7 +20,7 @@ Build `change_units` around coherent behavior or contract ownership, not directo
 
 - Every changed comparison path appears exactly once in one unit's `primary_paths`.
 - A unit may cross files when they jointly implement one contract. Do not combine unrelated contracts because one reviewer could inspect them together.
-- Record a concise `purpose`, the canonical changed owner, affected changed consumers, and any unchanged `context_paths` needed to evaluate the contract.
+- Record a concise `purpose`, one exact `canonical_owner` from `primary_paths`, every other primary path in `affected_consumers`, and any unchanged `context_paths` and consumers needed to evaluate the contract.
 - Context paths must be canonical repository-relative tracked regular files from the comparison tree. Symlinks, untracked files, deleted files, unsafe spellings, and unrelated checkout copies are not valid context.
 - Keep frozen context within 32 files, 2 MiB per file, and 25 MiB total.
 
@@ -40,11 +40,13 @@ For every unit, `specialist_decisions` classifies exactly these eight lenses as 
 
 Under `depth:auto`, select a lens when behavior evidence makes it applicable. Ambiguous or unknown evidence selects the lens; reject only with concrete behavior-based non-trigger evidence. Under `depth:full`, select all eight lenses for every unit with `full_depth` basis.
 
-Create exactly one specialist assignment per selected lens. Bind it to the exact selected `unit_ids`, the exact union of those units' `primary_paths`, and only bounded `context_paths` from those units. Specialist selection is independent of the six controlled risks: it cannot add, replace, or satisfy a core assignment, review obligation, or obligation-derived supplemental assignment.
+Every selected decision defines non-empty atomic `scenario_checks`. Each check has a plan-unique canonical code, one bounded behavior or failure-path claim, non-empty evidence paths from that unit, and a concrete countercontrol that could disprove the claim. Rejected decisions have an empty scenario list; generic lens restatements are invalid.
+
+Create exactly one specialist assignment per selected lens. Bind it to the exact selected `unit_ids`, the exact union of those units' `primary_paths` and `context_paths`, and the exact union of the selected scenario codes. Specialist selection is independent of the six controlled risks: it cannot add, replace, or satisfy a core assignment, review obligation, or obligation-derived supplemental assignment.
 
 ## Dispatch bundle
 
-Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, and its required paths. Include any exact `obligation_id` plus `required_checks` and the canonical definition and `pass`/`finding_emitted`/`blocked` evidence standard for every supplied check code, or for a specialist the exact `unit_ids`, `primary_paths`, and `context_paths`. Supply `schemas/candidate-set-v4.schema.json`. Do not include another assignment's candidate output.
+Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, exact `required_review_paths`, and exact `required_checks`. Include any exact `obligation_id` plus the canonical check definitions, or for a specialist the exact `unit_ids`, paths, and scenario definitions. Supply `schemas/candidate-set-v5.schema.json`. Do not include another assignment's candidate output.
 
 ## Evidence-side identity
 

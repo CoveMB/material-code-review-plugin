@@ -13,8 +13,8 @@ import re
 from typing import Any
 
 
-COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v3"
-CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v4"
+COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v4"
+CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v5"
 WORKFLOW_PROFILE = "material_review"
 CANDIDATE_LOCAL_ID_MAX_LENGTH = 128
 
@@ -96,6 +96,8 @@ RISK_REQUIREMENTS = {
                 "destination_collision",
                 "canonical_filesystem_identity",
                 "runtime_writer_target_inventory",
+                "runtime_target_derivation_parity",
+                "validation_to_mutation_identity_stability",
                 "writer_cleanup_order",
             }
         ),
@@ -127,8 +129,16 @@ REPOSITORY_RELATIVE_GIT_PATH_PATTERN = (
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,127}$")
 LENS_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+CHECK_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 REVIEWER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+GENERIC_SCENARIO_TEXT_PATTERN = re.compile(
+    r"^(?:full[_ -]?depth|"
+    r"(?:review|inspect|check|analy[sz]e|assess|evaluate)"
+    r"(?:\s+(?:the|this))?\s+[a-z0-9_-]+"
+    r"(?:\s+(?:for\s+)?(?:issues?|risks?|problems?|correctness))?[.!]?)$",
+    re.IGNORECASE,
+)
 
 
 class ObligationContractError(ValueError):
@@ -160,6 +170,15 @@ def _identifier(raw: object, context: str) -> str:
     if IDENTIFIER_PATTERN.fullmatch(value) is None:
         raise ObligationContractError(
             f"{context} must start with a lowercase letter and use lowercase letters, digits, or hyphens"
+        )
+    return value
+
+
+def _check_code(raw: object, context: str) -> str:
+    value = _string(raw, context)
+    if CHECK_CODE_PATTERN.fullmatch(value) is None:
+        raise ObligationContractError(
+            f"{context} must start with a lowercase letter and use lowercase letters, digits, underscores, or hyphens"
         )
     return value
 
@@ -248,6 +267,72 @@ def _risk_rationales(
     return sorted(normalized, key=lambda item: item["risk_code"])
 
 
+def _bounded_scenario_text(raw: object, context: str, label: str) -> str:
+    value = _string(raw, context)
+    if GENERIC_SCENARIO_TEXT_PATTERN.fullmatch(value.strip()) is not None:
+        raise ObligationContractError(
+            f"{context} must state a bounded {label}, not a generic review instruction"
+        )
+    return value
+
+
+def _scenario_checks(
+    raw: object,
+    context: str,
+    *,
+    selected: bool,
+    unit_paths: set[str],
+) -> list[dict[str, Any]]:
+    scenarios: list[dict[str, Any]] = []
+    for index, raw_scenario in enumerate(_array(raw, context)):
+        scenario_context = f"{context}[{index}]"
+        scenario = _object(raw_scenario, scenario_context)
+        _exact_keys(
+            scenario,
+            {"check_code", "claim", "evidence_paths", "countercontrol"},
+            scenario_context,
+        )
+        evidence_paths = _path_array(
+            scenario["evidence_paths"],
+            f"{scenario_context}.evidence_paths",
+            allow_empty=False,
+        )
+        outside_unit = sorted(set(evidence_paths) - unit_paths)
+        if outside_unit:
+            raise ObligationContractError(
+                f"{scenario_context}.evidence_paths are outside the change unit: "
+                + ", ".join(outside_unit)
+            )
+        scenarios.append(
+            {
+                "check_code": _check_code(
+                    scenario["check_code"], f"{scenario_context}.check_code"
+                ),
+                "claim": _bounded_scenario_text(
+                    scenario["claim"], f"{scenario_context}.claim", "claim"
+                ),
+                "evidence_paths": evidence_paths,
+                "countercontrol": _bounded_scenario_text(
+                    scenario["countercontrol"],
+                    f"{scenario_context}.countercontrol",
+                    "countercontrol",
+                ),
+            }
+        )
+    if selected and not scenarios:
+        raise ObligationContractError(
+            f"{context} must contain at least one scenario for a selected specialist"
+        )
+    if not selected and scenarios:
+        raise ObligationContractError(
+            f"{context} must be empty for a rejected specialist"
+        )
+    codes = [scenario["check_code"] for scenario in scenarios]
+    if len(codes) != len(set(codes)):
+        raise ObligationContractError(f"{context} contains duplicate check_code values")
+    return sorted(scenarios, key=lambda item: item["check_code"])
+
+
 def _normalize_unit(
     raw: object,
     index: int,
@@ -263,6 +348,8 @@ def _normalize_unit(
             "purpose",
             "primary_paths",
             "context_paths",
+            "canonical_owner",
+            "affected_consumers",
             "risk_codes",
             "selected_risk_rationale",
             "rejected_risk_rationale",
@@ -283,11 +370,35 @@ def _normalize_unit(
         raise ObligationContractError(
             f"{context}.context_paths are not in the allowed context paths: {', '.join(unavailable)}"
         )
+    unit_paths = set(primary_paths) | set(context_paths)
+    canonical_owner = canonical_git_path(
+        unit["canonical_owner"], f"{context}.canonical_owner"
+    )
+    if canonical_owner not in primary_paths:
+        raise ObligationContractError(
+            f"{context}.canonical_owner must be one of the unit primary_paths"
+        )
+    affected_consumers = _path_array(
+        unit["affected_consumers"], f"{context}.affected_consumers"
+    )
+    outside_unit = sorted(set(affected_consumers) - unit_paths)
+    if outside_unit:
+        raise ObligationContractError(
+            f"{context}.affected_consumers are outside the change unit: "
+            + ", ".join(outside_unit)
+        )
+    missing_primary_consumers = sorted(
+        (set(primary_paths) - {canonical_owner}) - set(affected_consumers)
+    )
+    if missing_primary_consumers:
+        raise ObligationContractError(
+            f"{context}.affected_consumers must contain every non-owner primary path: "
+            + ", ".join(missing_primary_consumers)
+        )
     risk_codes = _unique_strings(unit["risk_codes"], f"{context}.risk_codes")
     unknown = sorted(set(risk_codes) - CONTROLLED_RISK_CODES)
     if unknown:
         raise ObligationContractError(f"{context}.risk_codes contains unknown risk code: {', '.join(unknown)}")
-    unit_paths = set(primary_paths) | set(context_paths)
     selected = _risk_rationales(
         unit["selected_risk_rationale"],
         f"{context}.selected_risk_rationale",
@@ -313,7 +424,11 @@ def _normalize_unit(
     ):
         decision_context = f"{context}.specialist_decisions[{decision_index}]"
         decision = _object(decision_raw, decision_context)
-        _exact_keys(decision, {"lens_id", "decision", "basis", "evidence"}, decision_context)
+        _exact_keys(
+            decision,
+            {"lens_id", "decision", "basis", "evidence", "scenario_checks"},
+            decision_context,
+        )
         lens_id = _string(decision["lens_id"], f"{decision_context}.lens_id")
         if lens_id not in SPECIALIST_LENS_IDS:
             raise ObligationContractError(
@@ -346,6 +461,12 @@ def _normalize_unit(
                 "evidence": _unique_strings(
                     decision["evidence"], f"{decision_context}.evidence", allow_empty=False
                 ),
+                "scenario_checks": _scenario_checks(
+                    decision["scenario_checks"],
+                    f"{decision_context}.scenario_checks",
+                    selected=decision_value == "selected",
+                    unit_paths=unit_paths,
+                ),
             }
         )
     if specialist_lenses != SPECIALIST_LENS_IDS:
@@ -357,6 +478,8 @@ def _normalize_unit(
         "purpose": _string(unit["purpose"], f"{context}.purpose"),
         "primary_paths": primary_paths,
         "context_paths": context_paths,
+        "canonical_owner": canonical_owner,
+        "affected_consumers": affected_consumers,
         "risk_codes": sorted(risk_codes),
         "selected_risk_rationale": selected,
         "rejected_risk_rationale": rejected,
@@ -483,6 +606,8 @@ def _normalize_assignment(
         "reviewer_id",
         "independence_group",
         "review_mode",
+        "required_review_paths",
+        "required_checks",
     }
     expected_keys = set(common_keys)
     if assignment_kind == "obligation":
@@ -497,13 +622,44 @@ def _normalize_assignment(
         "assignment_kind": assignment_kind,
         **_assignment_identity(assignment, context),
     }
+    required_review_paths = _path_array(
+        assignment["required_review_paths"],
+        f"{context}.required_review_paths",
+        allow_empty=False,
+    )
+    required_checks = _unique_strings(
+        assignment["required_checks"], f"{context}.required_checks"
+    )
+
+    def bind_authority(
+        expected_paths: set[str], expected_checks: set[str]
+    ) -> dict[str, Any]:
+        if set(required_review_paths) != expected_paths:
+            raise ObligationContractError(
+                f"{context}.required_review_paths must equal the controller-derived assignment paths"
+            )
+        if set(required_checks) != expected_checks:
+            raise ObligationContractError(
+                f"{context}.required_checks must equal the controller-derived assignment checks"
+            )
+        normalized["required_review_paths"] = required_review_paths
+        normalized["required_checks"] = required_checks
+        return normalized
+
     if assignment_kind == "core":
         expected_lens = CORE_ASSIGNMENT_LENSES.get(normalized["assignment_id"])
         if expected_lens is None or normalized["lens_id"] != expected_lens:
             raise ObligationContractError(
                 f"{context} is not one of the mandatory core assignments with its exact lens"
             )
-        return normalized
+        return bind_authority(
+            {
+                path
+                for unit in units_by_id.values()
+                for path in (*unit["primary_paths"], *unit["context_paths"])
+            },
+            set(),
+        )
 
     if assignment_kind == "specialist":
         if normalized["lens_id"] not in SPECIALIST_LENS_IDS:
@@ -535,10 +691,9 @@ def _normalize_assignment(
             raise ObligationContractError(
                 f"{context}.primary_paths must equal the exact union of selected unit primary paths"
             )
-        outside_context = sorted(set(context_paths) - available_context)
-        if outside_context:
+        if set(context_paths) != available_context:
             raise ObligationContractError(
-                f"{context}.context_paths are outside selected units: {', '.join(outside_context)}"
+                f"{context}.context_paths must equal the exact union of selected unit context paths"
             )
         normalized.update(
             {
@@ -547,7 +702,15 @@ def _normalize_assignment(
                 "context_paths": context_paths,
             }
         )
-        return normalized
+        expected_checks = {
+            scenario["check_code"]
+            for unit_id in unit_ids
+            for decision in units_by_id[unit_id]["specialist_decisions"]
+            if decision["lens_id"] == normalized["lens_id"]
+            and decision["decision"] == "selected"
+            for scenario in decision["scenario_checks"]
+        }
+        return bind_authority(expected_primary | available_context, expected_checks)
 
     unit_id = _identifier(assignment["unit_id"], f"{context}.unit_id")
     risk_code = _string(assignment["risk_code"], f"{context}.risk_code")
@@ -568,14 +731,25 @@ def _normalize_assignment(
         if normalized["lens_id"] != obligation["required_lens"]:
             raise ObligationContractError(f"{context} does not use the obligation's required lens")
         normalized["obligation_id"] = obligation_id
-        return normalized
+        return bind_authority(
+            {
+                obligation["canonical_owner"],
+                *obligation["affected_consumers"],
+                *obligation["evidence_paths"],
+            },
+            set(obligation["required_checks"]),
+        )
 
     requirement = RISK_REQUIREMENTS[risk_code]
     if normalized["lens_id"] not in requirement["supporting_lenses"]:
         raise ObligationContractError(
             f"{context} is not a required supporting lens for {risk_code}"
         )
-    return normalized
+    unit = units_by_id[unit_id]
+    return bind_authority(
+        set(unit["primary_paths"]) | set(unit["context_paths"]),
+        set(),
+    )
 
 
 def validate_coverage_contract(
@@ -624,6 +798,16 @@ def validate_coverage_contract(
             "coverage plan change_units must form one exact primary partition of every changed path"
         )
     units = sorted(units, key=lambda item: item["unit_id"])
+    scenario_codes = [
+        scenario["check_code"]
+        for unit in units
+        for decision in unit["specialist_decisions"]
+        for scenario in decision["scenario_checks"]
+    ]
+    if len(scenario_codes) != len(set(scenario_codes)):
+        raise ObligationContractError(
+            "coverage plan specialist scenario check_code values must be unique"
+        )
     units_by_id = {unit["unit_id"]: unit for unit in units}
 
     obligations = [
@@ -748,16 +932,67 @@ def required_assignment_ids(plan: dict[str, Any]) -> set[str]:
     return result
 
 
+def scenario_checks_for_assignment(
+    plan: dict[str, Any], assignment: dict[str, Any]
+) -> list[dict[str, Any]]:
+    if assignment.get("assignment_kind") != "specialist":
+        return []
+    unit_ids = set(assignment["unit_ids"])
+    lens_id = assignment["lens_id"]
+    scenarios = [
+        copy.deepcopy(scenario)
+        for unit in plan["change_units"]
+        if unit["unit_id"] in unit_ids
+        for decision in unit["specialist_decisions"]
+        if decision["lens_id"] == lens_id and decision["decision"] == "selected"
+        for scenario in decision["scenario_checks"]
+    ]
+    return sorted(scenarios, key=lambda item: item["check_code"])
+
+
 def _normalize_coverage(raw: object) -> dict[str, Any]:
     coverage = _object(raw, "assignment result.coverage")
     _exact_keys(coverage, {"files_reviewed", "areas", "limitations"}, "assignment result.coverage")
+    limitations: list[dict[str, Any]] = []
+    for index, limitation_raw in enumerate(
+        _array(coverage["limitations"], "assignment result.coverage.limitations")
+    ):
+        context = f"assignment result.coverage.limitations[{index}]"
+        limitation = _object(limitation_raw, context)
+        _exact_keys(
+            limitation, {"description", "related_check_codes"}, context
+        )
+        related_check_codes = [
+            _check_code(item, f"{context}.related_check_codes[{code_index}]")
+            for code_index, item in enumerate(
+                _array(
+                    limitation["related_check_codes"],
+                    f"{context}.related_check_codes",
+                )
+            )
+        ]
+        if len(related_check_codes) != len(set(related_check_codes)):
+            raise ObligationContractError(
+                f"{context}.related_check_codes must contain unique values"
+            )
+        limitations.append(
+            {
+                "description": _string(
+                    limitation["description"], f"{context}.description"
+                ),
+                "related_check_codes": sorted(related_check_codes),
+            }
+        )
     return {
         "files_reviewed": _path_array(
             coverage["files_reviewed"], "assignment result.coverage.files_reviewed", allow_empty=False
         ),
         "areas": _unique_strings(coverage["areas"], "assignment result.coverage.areas"),
-        "limitations": _unique_strings(
-            coverage["limitations"], "assignment result.coverage.limitations"
+        "limitations": sorted(
+            limitations,
+            key=lambda item: (
+                item["description"], item["related_check_codes"]
+            ),
         ),
     }
 
@@ -783,16 +1018,29 @@ def _finding_local_ids(raw_findings: object) -> tuple[list[dict[str, Any]], set[
 def _normalize_check_results(
     raw: object,
     *,
-    obligation: dict[str, Any],
+    required_checks: set[str],
+    required_review_paths: set[str],
+    files_reviewed: set[str],
     finding_local_ids: set[str],
 ) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     seen: set[str] = set()
+    finding_check_owners: dict[str, str] = {}
     for index, check_raw in enumerate(_array(raw, "assignment result.check_results")):
         context = f"assignment result.check_results[{index}]"
         check = _object(check_raw, context)
-        _exact_keys(check, {"check_code", "outcome", "evidence", "finding_local_ids"}, context)
-        check_code = _string(check["check_code"], f"{context}.check_code")
+        _exact_keys(
+            check,
+            {
+                "check_code",
+                "outcome",
+                "evidence",
+                "evidence_paths",
+                "finding_local_ids",
+            },
+            context,
+        )
+        check_code = _check_code(check["check_code"], f"{context}.check_code")
         if check_code in seen:
             raise ObligationContractError("assignment result required checks must occur exactly once")
         seen.add(check_code)
@@ -804,6 +1052,23 @@ def _normalize_check_results(
         evidence = _unique_strings(check["evidence"], f"{context}.evidence")
         if not evidence:
             raise ObligationContractError(f"{context} {outcome} requires evidence")
+        evidence_paths = _path_array(
+            check["evidence_paths"],
+            f"{context}.evidence_paths",
+            allow_empty=False,
+        )
+        outside_authority = sorted(set(evidence_paths) - required_review_paths)
+        if outside_authority:
+            raise ObligationContractError(
+                f"{context}.evidence_paths are outside required_review_paths: "
+                + ", ".join(outside_authority)
+            )
+        unreviewed = sorted(set(evidence_paths) - files_reviewed)
+        if unreviewed:
+            raise ObligationContractError(
+                f"{context}.evidence_paths are absent from coverage.files_reviewed: "
+                + ", ".join(unreviewed)
+            )
         referenced_ids = _unique_strings(
             check["finding_local_ids"], f"{context}.finding_local_ids"
         )
@@ -820,20 +1085,40 @@ def _normalize_check_results(
             raise ObligationContractError(
                 f"{context}.finding_local_ids contains unknown local IDs: {', '.join(unknown_ids)}"
             )
+        for local_id in referenced_ids:
+            prior_check = finding_check_owners.get(local_id)
+            if prior_check is not None and prior_check != check_code:
+                raise ObligationContractError(
+                    "one finding_local_id cannot discharge multiple required checks: "
+                    f"{local_id} is referenced by {prior_check} and {check_code}"
+                )
+            finding_check_owners[local_id] = check_code
         checks.append(
             {
                 "check_code": check_code,
                 "outcome": outcome,
                 "evidence": evidence,
+                "evidence_paths": evidence_paths,
                 "finding_local_ids": referenced_ids,
             }
         )
-    required_checks = set(obligation["required_checks"])
     if seen != required_checks or len(checks) != len(required_checks):
         raise ObligationContractError(
             f"assignment result required checks must equal {sorted(required_checks)}"
         )
     return sorted(checks, key=lambda item: item["check_code"])
+
+
+def _validate_limitations(
+    limitations: list[dict[str, Any]], check_results: list[dict[str, Any]]
+) -> None:
+    outcomes = {item["check_code"]: item["outcome"] for item in check_results}
+    for limitation in limitations:
+        for check_code in limitation["related_check_codes"]:
+            if outcomes.get(check_code) != "blocked":
+                raise ObligationContractError(
+                    "assignment result coverage limitation related_check_codes must name blocked results"
+                )
 
 
 def validate_assignment_result(
@@ -884,11 +1169,37 @@ def validate_assignment_result(
                 f"assignment identity mismatch for {field}: expected {assignment[field]!r}"
             )
     findings, local_ids = _finding_local_ids(result["findings"])
+    coverage = _normalize_coverage(result["coverage"])
+    required_review_paths = set(assignment["required_review_paths"])
+    missing_paths = sorted(
+        required_review_paths - set(coverage["files_reviewed"])
+    )
+    if missing_paths:
+        raise ObligationContractError(
+            "assignment result must review every required_review_path: "
+            + ", ".join(missing_paths)
+        )
     if assignment_kind == "obligation":
         if obligation is None or result["obligation_id"] != assignment.get("obligation_id") or result["obligation_id"] != obligation.get("obligation_id"):
             raise ObligationContractError("assignment result obligation_id does not match its assignment")
         check_results = _normalize_check_results(
-            result["check_results"], obligation=obligation, finding_local_ids=local_ids
+            result["check_results"],
+            required_checks=set(assignment["required_checks"]),
+            required_review_paths=required_review_paths,
+            files_reviewed=set(coverage["files_reviewed"]),
+            finding_local_ids=local_ids,
+        )
+    elif assignment_kind == "specialist":
+        if obligation is not None:
+            raise ObligationContractError(
+                "specialist assignments must not receive an obligation"
+            )
+        check_results = _normalize_check_results(
+            result["check_results"],
+            required_checks=set(assignment["required_checks"]),
+            required_review_paths=required_review_paths,
+            files_reviewed=set(coverage["files_reviewed"]),
+            finding_local_ids=local_ids,
         )
     else:
         if obligation is not None:
@@ -896,9 +1207,10 @@ def validate_assignment_result(
         check_results = _array(result["check_results"], "assignment result.check_results")
         if check_results:
             raise ObligationContractError(
-                "core, supplemental, and specialist assignment check_results must be empty"
+                "core and supplemental assignment check_results must be empty"
             )
         check_results = []
+    _validate_limitations(coverage["limitations"], check_results)
     normalized = {
         "schema_version": CANDIDATE_SET_SCHEMA,
         "scope_hash": _sha256(result["scope_hash"], "assignment result.scope_hash"),
@@ -912,14 +1224,6 @@ def validate_assignment_result(
     }
     if assignment_kind == "obligation":
         normalized["obligation_id"] = result["obligation_id"]
-    coverage = _normalize_coverage(result["coverage"])
-    if assignment_kind == "specialist":
-        missing_paths = sorted(set(assignment["primary_paths"]) - set(coverage["files_reviewed"]))
-        if missing_paths:
-            raise ObligationContractError(
-                "specialist assignment result must review every assigned primary path: "
-                + ", ".join(missing_paths)
-            )
     normalized.update(
         {
             "check_results": check_results,

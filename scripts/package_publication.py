@@ -4,12 +4,18 @@
 from __future__ import annotations
 
 import os
+import errno
+import hashlib
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 RECOVERY_SCHEMA_VERSION = "package-publication/recovery/v1"
+PUBLICATION_LOCK_TIMEOUT_SECONDS = 10.0
+PUBLICATION_LOCK_POLL_SECONDS = 0.05
 
 
 class PublicationRecoveryError(OSError):
@@ -22,6 +28,166 @@ class PublicationRecoveryError(OSError):
             "package publication failed and recovery was incomplete; "
             f"{remaining} prior output backup(s) retained"
         )
+
+
+class PublicationLockTimeoutError(TimeoutError):
+    """Report bounded cooperative publication-lock contention."""
+
+
+def _normalized_destination_identity(destination: Path) -> str:
+    resolved = destination.expanduser().resolve(strict=False)
+    return os.path.normcase(os.fspath(resolved))
+
+
+def _publication_lock_directory() -> Path:
+    home_identity = os.path.normcase(
+        os.path.abspath(os.path.expanduser("~"))
+    ).encode("utf-8", "surrogatepass")
+    user_digest = hashlib.sha256(home_identity).hexdigest()[:16]
+    lock_directory = (
+        Path(tempfile.gettempdir())
+        / f"material-code-review-publication-locks-{user_digest}"
+    )
+    lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return lock_directory
+
+
+def _publication_lock_path(destination_identity: str) -> Path:
+    digest = hashlib.sha256(
+        destination_identity.encode("utf-8", "surrogatepass")
+    ).hexdigest()
+    return _publication_lock_directory() / f"{digest}.lock"
+
+
+def _acquire_descriptor_lock(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        return
+    raise OSError(f"publication locking is unsupported on platform {os.name!r}")
+
+
+def _release_descriptor_lock(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        return
+    raise OSError(f"publication locking is unsupported on platform {os.name!r}")
+
+
+def _lock_is_contended(error: OSError) -> bool:
+    return error.errno in {errno.EACCES, errno.EAGAIN}
+
+
+def _release_publication_locks(
+    locked_descriptors: list[tuple[Path, int]],
+) -> list[dict[str, str]]:
+    failures: list[dict[str, str]] = []
+    for lock_path, descriptor in reversed(locked_descriptors):
+        try:
+            _release_descriptor_lock(descriptor)
+        except BaseException as error:
+            failures.append(
+                {
+                    "operation": "release_publication_lock",
+                    "path": str(lock_path),
+                    **_exception_record(error),
+                }
+            )
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            failures.append(
+                {
+                    "operation": "close_publication_lock",
+                    "path": str(lock_path),
+                    **_exception_record(error),
+                }
+            )
+    return failures
+
+
+@contextmanager
+def _publication_locks(
+    destinations: list[Path],
+    *,
+    timeout_seconds: float = PUBLICATION_LOCK_TIMEOUT_SECONDS,
+) -> Iterator[None]:
+    identities = sorted(
+        {_normalized_destination_identity(destination) for destination in destinations}
+    )
+    deadline = time.monotonic() + timeout_seconds
+    locked_descriptors: list[tuple[Path, int]] = []
+    primary_error: BaseException | None = None
+    try:
+        for identity in identities:
+            lock_path = _publication_lock_path(identity)
+            flags = os.O_CREAT | os.O_RDWR
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+            descriptor = os.open(lock_path, flags, 0o600)
+            if os.name == "nt" and os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            while True:
+                try:
+                    _acquire_descriptor_lock(descriptor)
+                except OSError as error:
+                    if not _lock_is_contended(error):
+                        os.close(descriptor)
+                        raise
+                    if time.monotonic() >= deadline:
+                        os.close(descriptor)
+                        raise PublicationLockTimeoutError(
+                            "timed out acquiring package publication lock for "
+                            f"{identity}"
+                        ) from error
+                    time.sleep(
+                        min(PUBLICATION_LOCK_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
+                    )
+                    continue
+                locked_descriptors.append((lock_path, descriptor))
+                break
+        yield
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        release_failures = _release_publication_locks(locked_descriptors)
+        if release_failures:
+            if primary_error is not None:
+                try:
+                    setattr(
+                        primary_error,
+                        "publication_lock_release_failures",
+                        release_failures,
+                    )
+                except BaseException:
+                    pass
+            else:
+                release_error = OSError(
+                    "package publication completed with lock-release failures"
+                )
+                setattr(
+                    release_error,
+                    "publication_lock_release_failures",
+                    release_failures,
+                )
+                raise release_error
 
 
 def path_entry_exists(path: Path) -> bool:
@@ -114,6 +280,17 @@ def publish_staged_outputs(
     Recovery covers Python exceptions and process-level interrupts delivered as
     ``BaseException``. It cannot make guarantees across kernel or power loss.
     """
+
+    with _publication_locks(
+        [destination for destination, _staged in staged_outputs]
+    ):
+        _publish_staged_outputs_locked(staged_outputs, owner_label=owner_label)
+
+
+def _publish_staged_outputs_locked(
+    staged_outputs: list[tuple[Path, Path]], *, owner_label: str
+) -> None:
+    """Publish one batch while its complete destination lock set is held."""
 
     states: list[dict[str, Any]] = []
     for destination, staged in staged_outputs:

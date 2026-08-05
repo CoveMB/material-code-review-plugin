@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.0 — 2026-08-05
+
+- Added state/v5, coverage-plan/v4, candidate-set/v5, and candidates-normalized/v5 with explicit change-unit owners/consumers and controller-derived assignment path/check authority.
+- Required every selected specialist to define unique atomic scenario claims, in-unit evidence paths, and countercontrols; specialist and obligation results now return every assigned check exactly once with path-bound evidence, and one finding ID cannot discharge multiple atomic checks.
+- Replaced free-form material-review limitations with description/check-link objects and made every linked limitation block its named check and the complete write-once candidate wave.
+- Added independent `runtime_target_derivation_parity` and `validation_to_mutation_identity_stability` controls plus repository-neutral causal cases and negative mutations.
+- Bound controller artifact validation and atomic writes to retained no-follow directory identities on supported POSIX and Windows hosts, preserving custom roots and Windows mutation commands while failing before mutation when the complete platform capability is unavailable.
+- Labeled raw findings as candidate records and reported completed atomic checks separately without treating either count as breadth, recall, independence, cognition, or semantic-quality proof.
+- Kept adjudication/v4, ledger/v4, Gate A, Gate B, repair, checkpoint, restoration, verification, publication, and source-egress contracts unchanged.
+- Made material-review state/v1 through state/v4 inspection/restoration-only without migration or inferred scenario evidence; kept standalone material simplification at adapter/archive 1.3.0 with shared-controller/helper provenance 1.6.0.
+
 ## 1.5.1 — 2026-08-04
 
 - Corrected checkpoint/v4 recovery to use conditional symbolic-HEAD/ref transactions and the canonical index lock; existing-path worktree replacement or deletion now fails closed for manual reconciliation instead of relying on an observation followed by unconditional writes.

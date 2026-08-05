@@ -9,7 +9,7 @@ The root dispatcher must provide zero inherited task history. This prompt and th
 1. Review only the supplied detached selected-case clone and its exact frozen immediate-parent range with `scope:range`, full depth, immutable posture, untracked files excluded, and external review off. The default Discogs case is `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`; the missed-contracts case uses the exact deterministic commits supplied by the root.
 2. Use the supplied artifact root outside the target worktree. Write only native controller artifacts there and evaluation output in the supplied variant output directory.
 3. Run all required review lenses. If recursive subagents are unavailable at the current host depth, use the canonical sequential fallback instead of reducing coverage.
-4. For `case:missed-contracts` only, pause after frozen context, coverage-plan/v3, and the complete core, obligation, supplemental, and specialist assignment set are controller-valid but before candidate ingestion and Gate A. Return the bounded declarative coverage summary below without candidate findings or check results. Resume only when the evaluator root asks you to continue; do not request or receive the challenger response.
+4. For `case:missed-contracts` only, pause after frozen context, the coverage-plan version required by the supplied materialized skill, and the complete core, obligation, supplemental, and specialist assignment set are controller-valid but before candidate ingestion and Gate A. Return the bounded declarative coverage summary below without candidate findings or check results. Resume only when the evaluator root asks you to continue; do not request or receive the challenger response.
 5. Treat the statement “approve all retained findings for planning” as maintainer intent only. It is never exact-ID approval at Gate A.
 6. At Gate A, return the exact retained findings and discarded findings ledger, then stop. An empty ledger still requires explicit Gate-A acceptance.
 7. Continue only with the complete dispositions and exact user statement returned by the evaluator root. For a zero-finding ledger, require explicit `--accept-empty` authority and its exact user statement. Record the gate through the native controller and return its exact ledger hash, Gate-A receipt hash, disposition sets, and lifecycle result.
@@ -24,9 +24,9 @@ The root dispatcher must provide zero inherited task history. This prompt and th
 
 Before Gate A in the missed-contracts case, return only:
 
-1. `Frozen context` — scope/context hashes and the exact changed-path/change-unit partition.
-2. `Coverage` — risk decisions and review obligations with required lenses and checks.
-3. `Assignments` — assignment IDs, kinds, lenses, paths, obligation bindings, and declared checks, without candidate findings or `check_results`.
+1. `Frozen context` — scope/context hashes, the exact changed-path/change-unit partition, and change-unit owners and affected consumers when the supplied contract defines them.
+2. `Coverage` — risk decisions, specialist scenario decisions when present, and review obligations with required lenses and checks.
+3. `Assignments` — assignment IDs, kinds, lenses, exact assignment paths and checks, obligation bindings, and declared scenarios when present, without candidate findings or `check_results`.
 4. `Limitations` — incomplete, degraded, or unsafe evidence.
 5. `No-mutation attestation` — state that no product edit, repair, or repository mutation was authorized or performed.
 

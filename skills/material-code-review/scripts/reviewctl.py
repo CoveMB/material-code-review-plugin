@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import copy
 import difflib
+import errno
 import hashlib
 import json
 import os
@@ -19,13 +20,16 @@ import re
 import signal
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 if str(SCRIPT_DIRECTORY) not in sys.path:
@@ -37,13 +41,15 @@ from obligation_contract import (  # noqa: E402
     ObligationContractError,
     canonical_git_path,
     required_assignment_ids,
+    scenario_checks_for_assignment,
     validate_assignment_result,
     validate_coverage_contract,
 )
 
 
-TOOL_VERSION = "1.5.1"
-MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v4"
+TOOL_VERSION = "1.6.0"
+MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v5"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V4 = "material-review/state/v4"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3 = "material-review/state/v3"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1 = "material-review/state/v1"
@@ -51,7 +57,7 @@ SIMPLIFICATION_STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 CANDIDATE_SCHEMA_REVIEW = OBLIGATION_CANDIDATE_SET_SCHEMA
-NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v4"
+NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v5"
 NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA_REVIEW = "material-review/adjudication/v4"
 ADJUDICATION_SCHEMA_SIMPLIFICATION = "material-review/adjudication/v3"
@@ -74,6 +80,7 @@ STATE_CONTRACT_MATERIAL_REVIEW = "current_material_review"
 STATE_CONTRACT_SIMPLIFICATION = "current_simplification"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1 = "finalizable_material_review_v1"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2 = "finalizable_material_review_v2"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4 = "legacy_material_review_v4"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3 = "legacy_material_review_v3"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW = "legacy_material_review"
 
@@ -176,6 +183,8 @@ TRANSIENT_RUNTIME_DIR_MARKERS = {
 }
 TRANSIENT_RUNTIME_FILE_NAMES = {".ds_store", "thumbs.db", ".coverage"}
 TRANSIENT_RUNTIME_SUFFIXES = (".pyc", ".pyo", ".pyd")
+CANDIDATE_AUTHORITY_LOCK_TIMEOUT_SECONDS = 10.0
+CANDIDATE_AUTHORITY_LOCK_POLL_SECONDS = 0.05
 
 
 def is_transient_runtime_path(path: str) -> bool:
@@ -189,6 +198,1295 @@ def is_transient_runtime_path(path: str) -> bool:
 
 class ReviewError(RuntimeError):
     """Expected control failure with an actionable message."""
+
+
+class _ArtifactTemporary:
+    def __init__(self, name: str, descriptor: int) -> None:
+        self.name = name
+        self.descriptor = descriptor
+
+
+class _PosixArtifactBackend:
+    """No-follow, descriptor-relative artifact operations for POSIX hosts."""
+
+    platform_name = "posix"
+
+    def __init__(self) -> None:
+        required_dir_fd = (os.open, os.stat, os.mkdir, os.unlink, os.rmdir)
+        missing = [
+            function.__name__
+            for function in required_dir_fd
+            if function not in os.supports_dir_fd
+        ]
+        if os.rename not in os.supports_dir_fd:
+            missing.append("rename")
+        if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+            missing.append("O_DIRECTORY/O_NOFOLLOW")
+        if missing:
+            raise ReviewError(
+                "Artifact identity backend is unavailable before mutation; missing "
+                + ", ".join(sorted(set(missing)))
+            )
+
+    @staticmethod
+    def _directory_flags() -> int:
+        return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    def open_absolute_directory(
+        self, path: Path, *, create: bool
+    ) -> tuple[int, int, str]:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        if not absolute.is_absolute() or absolute == Path(absolute.anchor):
+            raise ReviewError(f"Artifact authority requires a non-root absolute path: {path}")
+        components = absolute.parts[1:]
+        parent = os.open(absolute.anchor, self._directory_flags())
+        try:
+            for index, name in enumerate(components):
+                if name in {"", ".", ".."} or "/" in name:
+                    raise ReviewError(f"Unsafe artifact directory component: {name!r}")
+                try:
+                    child = os.open(name, self._directory_flags(), dir_fd=parent)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    os.mkdir(name, 0o700, dir_fd=parent)
+                    child = os.open(name, self._directory_flags(), dir_fd=parent)
+                if index == len(components) - 1:
+                    return parent, child, name
+                os.close(parent)
+                parent = child
+        except BaseException:
+            os.close(parent)
+            raise
+        raise AssertionError("artifact authority path had no components")
+
+    def open_directory(
+        self,
+        parent: int,
+        name: str,
+        *,
+        create: bool = False,
+        exclusive: bool = False,
+    ) -> int:
+        if create and exclusive:
+            os.mkdir(name, 0o700, dir_fd=parent)
+            return os.open(name, self._directory_flags(), dir_fd=parent)
+        try:
+            return os.open(name, self._directory_flags(), dir_fd=parent)
+        except FileNotFoundError:
+            if not create:
+                raise
+            os.mkdir(name, 0o700, dir_fd=parent)
+            return os.open(name, self._directory_flags(), dir_fd=parent)
+
+    @staticmethod
+    def close_directory(directory: int) -> None:
+        os.close(directory)
+
+    @staticmethod
+    def identity(directory: int) -> tuple[int, int]:
+        info = os.fstat(directory)
+        return info.st_dev, info.st_ino
+
+    @staticmethod
+    def entry_kind(parent: int, name: str) -> str | None:
+        try:
+            info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(info.st_mode):
+            return "symlink"
+        if stat.S_ISDIR(info.st_mode):
+            return "directory"
+        if stat.S_ISREG(info.st_mode):
+            return "file"
+        return "other"
+
+    @staticmethod
+    def read_bytes(parent: int, name: str) -> bytes:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(descriptor, "rb") as handle:
+            return handle.read()
+
+    @staticmethod
+    def open_lock_descriptor(parent: int, name: str) -> int:
+        return os.open(
+            name,
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent,
+        )
+
+    @staticmethod
+    def create_temporary(parent: int, target_name: str, data: bytes) -> _ArtifactTemporary:
+        temporary_name = f".{target_name}.{uuid.uuid4().hex}.tmp"
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent,
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            raise
+        return _ArtifactTemporary(temporary_name, descriptor)
+
+    @staticmethod
+    def replace_temporary(
+        parent: int, temporary: _ArtifactTemporary, target_name: str
+    ) -> None:
+        os.rename(
+            temporary.name,
+            target_name,
+            src_dir_fd=parent,
+            dst_dir_fd=parent,
+        )
+
+    @staticmethod
+    def close_temporary(temporary: _ArtifactTemporary) -> None:
+        os.close(temporary.descriptor)
+
+    @staticmethod
+    def cleanup_temporary(parent: int, temporary: _ArtifactTemporary) -> None:
+        try:
+            os.unlink(temporary.name, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def flush_directory(directory: int) -> None:
+        os.fsync(directory)
+
+    @staticmethod
+    def list_names(directory: int) -> list[str]:
+        return sorted(os.listdir(directory))
+
+    def remove_entry(self, parent: int, name: str, *, recursive: bool) -> None:
+        kind = self.entry_kind(parent, name)
+        if kind is None:
+            return
+        if kind == "directory":
+            directory = self.open_directory(parent, name)
+            try:
+                names = self.list_names(directory)
+                if names and not recursive:
+                    raise OSError(f"artifact directory is not empty: {name}")
+                for child_name in names:
+                    self.remove_entry(directory, child_name, recursive=True)
+            finally:
+                self.close_directory(directory)
+            os.rmdir(name, dir_fd=parent)
+            return
+        os.unlink(name, dir_fd=parent)
+
+    @staticmethod
+    def rename_entry(parent: int, source_name: str, target_name: str) -> None:
+        os.rename(
+            source_name,
+            target_name,
+            src_dir_fd=parent,
+            dst_dir_fd=parent,
+        )
+
+
+class _WindowsArtifactBackend:
+    """Windows handle-relative artifact operations backed by documented NT APIs."""
+
+    platform_name = "windows"
+
+    FILE_LIST_DIRECTORY = 0x0001
+    FILE_READ_DATA = 0x0001
+    FILE_WRITE_DATA = 0x0002
+    FILE_APPEND_DATA = 0x0004
+    FILE_READ_ATTRIBUTES = 0x0080
+    FILE_WRITE_ATTRIBUTES = 0x0100
+    DELETE = 0x00010000
+    SYNCHRONIZE = 0x00100000
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    FILE_OPEN = 0x00000001
+    FILE_CREATE = 0x00000002
+    FILE_OPEN_IF = 0x00000003
+    FILE_DIRECTORY_FILE = 0x00000001
+    FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+    FILE_NON_DIRECTORY_FILE = 0x00000040
+    FILE_OPEN_REPARSE_POINT = 0x00200000
+    FILE_ATTRIBUTE_NORMAL = 0x00000080
+    FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    OBJ_CASE_INSENSITIVE = 0x00000040
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    FILE_ID_INFO_CLASS = 18
+    FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
+    FILE_RENAME_INFO_CLASS = 3
+    FILE_DISPOSITION_INFO_CLASS = 4
+    FILE_DIRECTORY_INFORMATION_CLASS = 1
+    STATUS_NO_MORE_FILES = 0x80000006
+    STATUS_BUFFER_OVERFLOW = 0x80000005
+
+    def __init__(self) -> None:
+        if os.name != "nt":
+            raise ReviewError("Windows artifact backend is available only on Windows")
+        import ctypes
+        from ctypes import wintypes
+
+        self.ctypes = ctypes
+        self.wintypes = wintypes
+        self.ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class UnicodeString(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.USHORT),
+                ("MaximumLength", wintypes.USHORT),
+                ("Buffer", wintypes.LPWSTR),
+            ]
+
+        class ObjectAttributes(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.ULONG),
+                ("RootDirectory", wintypes.HANDLE),
+                ("ObjectName", ctypes.POINTER(UnicodeString)),
+                ("Attributes", wintypes.ULONG),
+                ("SecurityDescriptor", wintypes.LPVOID),
+                ("SecurityQualityOfService", wintypes.LPVOID),
+            ]
+
+        class IoStatusBlock(ctypes.Structure):
+            _fields_ = [("Status", wintypes.LPVOID), ("Information", ctypes.c_size_t)]
+
+        class FileId128(ctypes.Structure):
+            _fields_ = [("Identifier", wintypes.BYTE * 16)]
+
+        class FileIdInfo(ctypes.Structure):
+            _fields_ = [
+                ("VolumeSerialNumber", ctypes.c_ulonglong),
+                ("FileId", FileId128),
+            ]
+
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = [("FileAttributes", wintypes.DWORD), ("ReparseTag", wintypes.DWORD)]
+
+        class FileDispositionInfo(ctypes.Structure):
+            _fields_ = [("DeleteFile", wintypes.BOOL)]
+
+        class FileRenameChoice(ctypes.Union):
+            _fields_ = [
+                ("ReplaceIfExists", wintypes.BYTE),
+                ("Flags", wintypes.DWORD),
+            ]
+
+        class FileRenameHeader(ctypes.Structure):
+            _anonymous_ = ("Choice",)
+            _fields_ = [
+                ("Choice", FileRenameChoice),
+                ("RootDirectory", wintypes.HANDLE),
+                ("FileNameLength", wintypes.DWORD),
+            ]
+
+        self.UnicodeString = UnicodeString
+        self.ObjectAttributes = ObjectAttributes
+        self.IoStatusBlock = IoStatusBlock
+        self.FileIdInfo = FileIdInfo
+        self.FileAttributeTagInfo = FileAttributeTagInfo
+        self.FileDispositionInfo = FileDispositionInfo
+        self.FileRenameHeader = FileRenameHeader
+
+        self.ntdll.NtCreateFile.argtypes = [
+            ctypes.POINTER(wintypes.HANDLE),
+            wintypes.ULONG,
+            ctypes.POINTER(ObjectAttributes),
+            ctypes.POINTER(IoStatusBlock),
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.LPVOID,
+            wintypes.ULONG,
+        ]
+        self.ntdll.NtCreateFile.restype = ctypes.c_long
+        self.ntdll.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
+        self.ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
+        self.ntdll.NtQueryDirectoryFile.argtypes = [
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.LPVOID,
+            ctypes.POINTER(IoStatusBlock),
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            ctypes.c_ubyte,
+            ctypes.POINTER(UnicodeString),
+            ctypes.c_ubyte,
+        ]
+        self.ntdll.NtQueryDirectoryFile.restype = ctypes.c_long
+        self.kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        self.kernel32.CreateFileW.restype = wintypes.HANDLE
+        self.kernel32.GetFileInformationByHandleEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        self.kernel32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        self.kernel32.SetFileInformationByHandle.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        self.kernel32.SetFileInformationByHandle.restype = wintypes.BOOL
+        self.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+        self.kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+        self.kernel32.FlushFileBuffers.restype = wintypes.BOOL
+
+    def _raise_status(self, status: int, context: str) -> None:
+        code = int(self.ntdll.RtlNtStatusToDosError(status))
+        if code in {2, 3}:
+            raise FileNotFoundError(code, context)
+        if code in {80, 183}:
+            raise FileExistsError(code, context)
+        raise OSError(code, f"{context}: {self.ctypes.FormatError(code)}")
+
+    def _raise_last_error(self, context: str) -> None:
+        code = self.ctypes.get_last_error()
+        raise OSError(code, f"{context}: {self.ctypes.FormatError(code)}")
+
+    def _open_relative(
+        self,
+        parent: int,
+        name: str,
+        *,
+        directory: bool | None,
+        disposition: int,
+        access: int,
+    ) -> int:
+        if name in {"", ".", ".."} or "\\" in name or "/" in name:
+            raise ReviewError(f"Unsafe Windows artifact component: {name!r}")
+        buffer = self.ctypes.create_unicode_buffer(name)
+        encoded_length = len(name.encode("utf-16-le"))
+        unicode_name = self.UnicodeString(
+            encoded_length,
+            encoded_length + 2,
+            self.ctypes.cast(buffer, self.wintypes.LPWSTR),
+        )
+        attributes = self.ObjectAttributes(
+            self.ctypes.sizeof(self.ObjectAttributes),
+            self.wintypes.HANDLE(parent),
+            self.ctypes.pointer(unicode_name),
+            self.OBJ_CASE_INSENSITIVE,
+            None,
+            None,
+        )
+        io_status = self.IoStatusBlock()
+        handle = self.wintypes.HANDLE()
+        options = self.FILE_SYNCHRONOUS_IO_NONALERT | self.FILE_OPEN_REPARSE_POINT
+        if directory is True:
+            options |= self.FILE_DIRECTORY_FILE
+        elif directory is False:
+            options |= self.FILE_NON_DIRECTORY_FILE
+        status = int(
+            self.ntdll.NtCreateFile(
+                self.ctypes.byref(handle),
+                access,
+                self.ctypes.byref(attributes),
+                self.ctypes.byref(io_status),
+                None,
+                self.FILE_ATTRIBUTE_NORMAL,
+                self.FILE_SHARE_READ | self.FILE_SHARE_WRITE | self.FILE_SHARE_DELETE,
+                disposition,
+                options,
+                None,
+                0,
+            )
+        )
+        if status < 0:
+            self._raise_status(status, f"NtCreateFile({name})")
+        raw_handle = int(handle.value)
+        attribute_info = self.FileAttributeTagInfo()
+        if not self.kernel32.GetFileInformationByHandleEx(
+            self.wintypes.HANDLE(raw_handle),
+            self.FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            self.ctypes.byref(attribute_info),
+            self.ctypes.sizeof(attribute_info),
+        ):
+            self.kernel32.CloseHandle(self.wintypes.HANDLE(raw_handle))
+            self._raise_last_error(f"GetFileInformationByHandleEx({name})")
+        if attribute_info.FileAttributes & self.FILE_ATTRIBUTE_REPARSE_POINT:
+            self.kernel32.CloseHandle(self.wintypes.HANDLE(raw_handle))
+            raise ReviewError(f"Artifact path contains a Windows reparse point: {name}")
+        return raw_handle
+
+    def open_absolute_directory(
+        self, path: Path, *, create: bool
+    ) -> tuple[int, int, str]:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        anchor = absolute.anchor
+        components = absolute.parts[1:]
+        if not anchor or not components:
+            raise ReviewError(f"Artifact authority requires a non-root absolute path: {path}")
+        root_handle = self.kernel32.CreateFileW(
+            anchor,
+            self.FILE_LIST_DIRECTORY | self.FILE_READ_ATTRIBUTES | self.SYNCHRONIZE,
+            self.FILE_SHARE_READ | self.FILE_SHARE_WRITE | self.FILE_SHARE_DELETE,
+            None,
+            self.OPEN_EXISTING,
+            self.FILE_FLAG_BACKUP_SEMANTICS | self.FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        if int(root_handle) == self.ctypes.c_void_p(-1).value:
+            self._raise_last_error(f"CreateFileW({anchor})")
+        parent = int(root_handle)
+        try:
+            for index, name in enumerate(components):
+                try:
+                    child = self.open_directory(parent, name)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    child = self.open_directory(parent, name, create=True)
+                if index == len(components) - 1:
+                    return parent, child, name
+                self.close_directory(parent)
+                parent = child
+        except BaseException:
+            self.close_directory(parent)
+            raise
+        raise AssertionError("artifact authority path had no components")
+
+    def open_directory(
+        self,
+        parent: int,
+        name: str,
+        *,
+        create: bool = False,
+        exclusive: bool = False,
+    ) -> int:
+        disposition = self.FILE_CREATE if create and exclusive else (
+            self.FILE_OPEN_IF if create else self.FILE_OPEN
+        )
+        try:
+            return self._open_relative(
+                parent,
+                name,
+                directory=True,
+                disposition=disposition,
+                access=self.FILE_LIST_DIRECTORY
+                | self.FILE_READ_ATTRIBUTES
+                | self.SYNCHRONIZE,
+            )
+        except OSError as error:
+            if getattr(error, "winerror", error.errno) in {2, 3}:
+                raise FileNotFoundError(name) from error
+            if getattr(error, "winerror", error.errno) in {80, 183}:
+                raise FileExistsError(name) from error
+            raise
+
+    def close_directory(self, directory: int) -> None:
+        if not self.kernel32.CloseHandle(self.wintypes.HANDLE(directory)):
+            self._raise_last_error("CloseHandle(directory)")
+
+    def identity(self, directory: int) -> tuple[int, bytes]:
+        info = self.FileIdInfo()
+        if not self.kernel32.GetFileInformationByHandleEx(
+            self.wintypes.HANDLE(directory),
+            self.FILE_ID_INFO_CLASS,
+            self.ctypes.byref(info),
+            self.ctypes.sizeof(info),
+        ):
+            self._raise_last_error("GetFileInformationByHandleEx(FileIdInfo)")
+        return int(info.VolumeSerialNumber), bytes(info.FileId.Identifier)
+
+    def _open_any(self, parent: int, name: str, *, access: int) -> int:
+        return self._open_relative(
+            parent,
+            name,
+            directory=None,
+            disposition=self.FILE_OPEN,
+            access=access | self.FILE_READ_ATTRIBUTES | self.SYNCHRONIZE,
+        )
+
+    def entry_kind(self, parent: int, name: str) -> str | None:
+        try:
+            handle = self._open_any(parent, name, access=self.FILE_READ_ATTRIBUTES)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            if getattr(error, "winerror", error.errno) in {2, 3}:
+                return None
+            raise
+        try:
+            info = self.FileAttributeTagInfo()
+            if not self.kernel32.GetFileInformationByHandleEx(
+                self.wintypes.HANDLE(handle),
+                self.FILE_ATTRIBUTE_TAG_INFO_CLASS,
+                self.ctypes.byref(info),
+                self.ctypes.sizeof(info),
+            ):
+                self._raise_last_error("GetFileInformationByHandleEx(FileAttributeTagInfo)")
+            if info.FileAttributes & self.FILE_ATTRIBUTE_REPARSE_POINT:
+                return "symlink"
+            if info.FileAttributes & self.FILE_ATTRIBUTE_DIRECTORY:
+                return "directory"
+            return "file"
+        finally:
+            self.close_directory(handle)
+
+    def _descriptor_from_handle(self, handle: int, flags: int) -> int:
+        import msvcrt
+
+        return msvcrt.open_osfhandle(handle, flags)
+
+    def read_bytes(self, parent: int, name: str) -> bytes:
+        handle = self._open_relative(
+            parent,
+            name,
+            directory=False,
+            disposition=self.FILE_OPEN,
+            access=self.FILE_READ_DATA | self.FILE_READ_ATTRIBUTES | self.SYNCHRONIZE,
+        )
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        descriptor = self._descriptor_from_handle(handle, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            return stream.read()
+
+    def open_lock_descriptor(self, parent: int, name: str) -> int:
+        handle = self._open_relative(
+            parent,
+            name,
+            directory=False,
+            disposition=self.FILE_OPEN_IF,
+            access=self.FILE_READ_DATA
+            | self.FILE_WRITE_DATA
+            | self.FILE_READ_ATTRIBUTES
+            | self.SYNCHRONIZE,
+        )
+        return self._descriptor_from_handle(
+            handle, os.O_RDWR | getattr(os, "O_BINARY", 0)
+        )
+
+    def create_temporary(
+        self, parent: int, target_name: str, data: bytes
+    ) -> _ArtifactTemporary:
+        temporary_name = f".{target_name}.{uuid.uuid4().hex}.tmp"
+        handle = self._open_relative(
+            parent,
+            temporary_name,
+            directory=False,
+            disposition=self.FILE_CREATE,
+            access=self.FILE_WRITE_DATA
+            | self.FILE_READ_ATTRIBUTES
+            | self.DELETE
+            | self.SYNCHRONIZE,
+        )
+        descriptor = self._descriptor_from_handle(
+            handle, os.O_WRONLY | getattr(os, "O_BINARY", 0)
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return _ArtifactTemporary(temporary_name, descriptor)
+
+    def replace_temporary(
+        self, parent: int, temporary: _ArtifactTemporary, target_name: str
+    ) -> None:
+        import msvcrt
+
+        handle = int(msvcrt.get_osfhandle(temporary.descriptor))
+        encoded_name = target_name.encode("utf-16-le")
+        header_size = self.ctypes.sizeof(self.FileRenameHeader)
+        buffer = self.ctypes.create_string_buffer(header_size + len(encoded_name))
+        header = self.FileRenameHeader.from_buffer(buffer)
+        header.ReplaceIfExists = 1
+        header.RootDirectory = self.wintypes.HANDLE(parent)
+        header.FileNameLength = len(encoded_name)
+        self.ctypes.memmove(
+            self.ctypes.addressof(buffer) + header_size,
+            encoded_name,
+            len(encoded_name),
+        )
+        if not self.kernel32.SetFileInformationByHandle(
+            self.wintypes.HANDLE(handle),
+            self.FILE_RENAME_INFO_CLASS,
+            buffer,
+            len(buffer),
+        ):
+            self._raise_last_error("SetFileInformationByHandle(FileRenameInfo)")
+
+    @staticmethod
+    def close_temporary(temporary: _ArtifactTemporary) -> None:
+        os.close(temporary.descriptor)
+
+    def cleanup_temporary(self, parent: int, temporary: _ArtifactTemporary) -> None:
+        self._delete_named_entry(parent, temporary.name)
+
+    def flush_directory(self, directory: int) -> None:
+        self.kernel32.FlushFileBuffers(self.wintypes.HANDLE(directory))
+
+    def list_names(self, directory: int) -> list[str]:
+        names: list[str] = []
+        restart = True
+        while True:
+            buffer = self.ctypes.create_string_buffer(64 * 1024)
+            io_status = self.IoStatusBlock()
+            status = int(
+                self.ntdll.NtQueryDirectoryFile(
+                    self.wintypes.HANDLE(directory),
+                    None,
+                    None,
+                    None,
+                    self.ctypes.byref(io_status),
+                    buffer,
+                    len(buffer),
+                    self.FILE_DIRECTORY_INFORMATION_CLASS,
+                    False,
+                    None,
+                    restart,
+                )
+            )
+            unsigned_status = status & 0xFFFFFFFF
+            if unsigned_status == self.STATUS_NO_MORE_FILES:
+                break
+            if status < 0 and unsigned_status != self.STATUS_BUFFER_OVERFLOW:
+                self._raise_status(status, "NtQueryDirectoryFile")
+            raw = buffer.raw[: int(io_status.Information)]
+            offset = 0
+            while offset + 64 <= len(raw):
+                next_offset = struct.unpack_from("<I", raw, offset)[0]
+                name_length = struct.unpack_from("<I", raw, offset + 60)[0]
+                name = raw[offset + 64 : offset + 64 + name_length].decode("utf-16-le")
+                if name not in {".", ".."}:
+                    names.append(name)
+                if next_offset == 0:
+                    break
+                offset += next_offset
+            restart = False
+        return sorted(names)
+
+    def _delete_handle(self, handle: int) -> None:
+        disposition = self.FileDispositionInfo(True)
+        if not self.kernel32.SetFileInformationByHandle(
+            self.wintypes.HANDLE(handle),
+            self.FILE_DISPOSITION_INFO_CLASS,
+            self.ctypes.byref(disposition),
+            self.ctypes.sizeof(disposition),
+        ):
+            self._raise_last_error("SetFileInformationByHandle(FileDispositionInfo)")
+
+    def _delete_named_entry(self, parent: int, name: str) -> None:
+        try:
+            handle = self._open_any(parent, name, access=self.DELETE)
+        except FileNotFoundError:
+            return
+        try:
+            self._delete_handle(handle)
+        finally:
+            self.close_directory(handle)
+
+    def remove_entry(self, parent: int, name: str, *, recursive: bool) -> None:
+        kind = self.entry_kind(parent, name)
+        if kind is None:
+            return
+        if kind == "directory":
+            directory = self._open_relative(
+                parent,
+                name,
+                directory=True,
+                disposition=self.FILE_OPEN,
+                access=self.FILE_LIST_DIRECTORY
+                | self.FILE_READ_ATTRIBUTES
+                | self.DELETE
+                | self.SYNCHRONIZE,
+            )
+            try:
+                names = self.list_names(directory)
+                if names and not recursive:
+                    raise OSError(f"artifact directory is not empty: {name}")
+                for child_name in names:
+                    self.remove_entry(directory, child_name, recursive=True)
+                self._delete_handle(directory)
+            finally:
+                self.close_directory(directory)
+            return
+        self._delete_named_entry(parent, name)
+
+    def rename_entry(self, parent: int, source_name: str, target_name: str) -> None:
+        handle = self._open_any(parent, source_name, access=self.DELETE)
+        try:
+            encoded_name = target_name.encode("utf-16-le")
+            header_size = self.ctypes.sizeof(self.FileRenameHeader)
+            buffer = self.ctypes.create_string_buffer(header_size + len(encoded_name))
+            header = self.FileRenameHeader.from_buffer(buffer)
+            header.ReplaceIfExists = 1
+            header.RootDirectory = self.wintypes.HANDLE(parent)
+            header.FileNameLength = len(encoded_name)
+            self.ctypes.memmove(
+                self.ctypes.addressof(buffer) + header_size,
+                encoded_name,
+                len(encoded_name),
+            )
+            if not self.kernel32.SetFileInformationByHandle(
+                self.wintypes.HANDLE(handle),
+                self.FILE_RENAME_INFO_CLASS,
+                buffer,
+                len(buffer),
+            ):
+                self._raise_last_error("SetFileInformationByHandle(FileRenameInfo)")
+        finally:
+            self.close_directory(handle)
+
+
+_ARTIFACT_TEST_HOOK: Any = None
+
+
+class RunArtifactAuthority:
+    """Bind artifact reads and mutations to retained no-follow directory identities."""
+
+    def __init__(self, root_path: Path, *, create: bool = False, backend: Any = None) -> None:
+        requested_root = Path(os.path.abspath(os.fspath(root_path)))
+        self.root_path = requested_root.resolve(strict=False)
+        self._accepted_roots = tuple(dict.fromkeys((requested_root, self.root_path)))
+        self.backend = backend or (
+            _WindowsArtifactBackend() if os.name == "nt" else _PosixArtifactBackend()
+        )
+        try:
+            self._root_parent, self._root, self._root_name = (
+                self.backend.open_absolute_directory(self.root_path, create=create)
+            )
+        except (FileNotFoundError, NotADirectoryError, OSError) as error:
+            raise ReviewError(
+                f"Could not establish artifact directory authority for {self.root_path}: {error}"
+            ) from error
+        self._root_identity = self.backend.identity(self._root)
+        self._directories: dict[tuple[str, ...], Any] = {(): self._root}
+        self._closed = False
+
+    def _relative_parts(self, path: Path) -> tuple[str, ...] | None:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        relative: Path | None = None
+        for accepted_root in self._accepted_roots:
+            try:
+                relative = absolute.relative_to(accepted_root)
+                break
+            except ValueError:
+                continue
+        if relative is None:
+            return None
+        if relative == Path("."):
+            return ()
+        parts = relative.parts
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ReviewError(f"Unsafe artifact-relative path: {relative}")
+        return parts
+
+    def contains(self, path: Path) -> bool:
+        return self._relative_parts(path) is not None
+
+    def _require_parts(self, path: Path) -> tuple[str, ...]:
+        parts = self._relative_parts(path)
+        if parts is None:
+            raise ReviewError(f"Path is outside the active artifact authority: {path}")
+        return parts
+
+    def _verify_root(self) -> None:
+        try:
+            current = self.backend.open_directory(self._root_parent, self._root_name)
+        except BaseException as error:
+            raise ReviewError(
+                "Artifact run name no longer resolves to the retained directory identity"
+            ) from error
+        try:
+            if self.backend.identity(current) != self._root_identity:
+                raise ReviewError(
+                    "Artifact run name was rebound to a different directory identity"
+                )
+        finally:
+            self.backend.close_directory(current)
+
+    def _directory(
+        self, parts: tuple[str, ...], *, create: bool = False
+    ) -> Any:
+        current_parts: tuple[str, ...] = ()
+        current = self._root
+        for name in parts:
+            next_parts = (*current_parts, name)
+            cached = self._directories.get(next_parts)
+            if cached is None:
+                try:
+                    cached = self.backend.open_directory(current, name)
+                except FileNotFoundError as error:
+                    if not create:
+                        raise ReviewError(
+                            f"Artifact directory is missing: {'/'.join(next_parts)}"
+                        ) from error
+                    self.verify_reachable(current_parts)
+                    try:
+                        cached = self.backend.open_directory(
+                            current,
+                            name,
+                            create=True,
+                            exclusive=True,
+                        )
+                    except FileExistsError:
+                        cached = self.backend.open_directory(current, name)
+                self._directories[next_parts] = cached
+            current_parts = next_parts
+            current = cached
+        return current
+
+    def verify_reachable(self, parts: tuple[str, ...] = ()) -> None:
+        self._verify_root()
+        current_parts: tuple[str, ...] = ()
+        current = self._root
+        for name in parts:
+            next_parts = (*current_parts, name)
+            retained = self._directories.get(next_parts)
+            if retained is None:
+                retained = self._directory(next_parts)
+            try:
+                fresh = self.backend.open_directory(current, name)
+            except BaseException as error:
+                raise ReviewError(
+                    "Artifact descendant no longer resolves to its retained identity: "
+                    + "/".join(next_parts)
+                ) from error
+            try:
+                if self.backend.identity(fresh) != self.backend.identity(retained):
+                    raise ReviewError(
+                        "Artifact descendant was rebound to a different identity: "
+                        + "/".join(next_parts)
+                    )
+            finally:
+                self.backend.close_directory(fresh)
+            current_parts = next_parts
+            current = retained
+
+    def read_bytes(self, path: Path) -> bytes:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError(f"Cannot read artifact directory as bytes: {path}")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        return self.backend.read_bytes(parent, name)
+
+    def entry_kind(self, path: Path) -> str | None:
+        parts = self._require_parts(path)
+        if not parts:
+            return "directory"
+        parent_parts, name = parts[:-1], parts[-1]
+        try:
+            parent = self._directory(parent_parts)
+        except ReviewError:
+            return None
+        self.verify_reachable(parent_parts)
+        return self.backend.entry_kind(parent, name)
+
+    def atomic_write_bytes(self, path: Path, data: bytes) -> None:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError(f"Cannot replace artifact authority root: {path}")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts, create=True)
+        self.verify_reachable(parent_parts)
+        if _ARTIFACT_TEST_HOOK is not None:
+            _ARTIFACT_TEST_HOOK("before_temp_created", self, path)
+        temporary = self.backend.create_temporary(parent, name, data)
+        replaced = False
+        try:
+            if _ARTIFACT_TEST_HOOK is not None:
+                _ARTIFACT_TEST_HOOK("after_temp_created", self, path)
+            self.verify_reachable(parent_parts)
+            self.backend.replace_temporary(parent, temporary, name)
+            replaced = True
+            self.backend.flush_directory(parent)
+        finally:
+            try:
+                self.backend.close_temporary(temporary)
+            finally:
+                self.backend.cleanup_temporary(parent, temporary)
+        try:
+            self.verify_reachable(parent_parts)
+        except ReviewError as error:
+            if replaced:
+                raise ReviewError(
+                    "Artifact directory was renamed after an identity-bound write; "
+                    "a bounded mutation may exist in the retained original directory "
+                    "and no pathname rollback was attempted"
+                ) from error
+            raise
+
+    def open_lock_descriptor(self, path: Path) -> int:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError("Artifact lock path must name a file")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts, create=True)
+        self.verify_reachable(parent_parts)
+        return self.backend.open_lock_descriptor(parent, name)
+
+    def mkdir(self, path: Path, *, parents: bool, exist_ok: bool) -> None:
+        parts = self._require_parts(path)
+        if not parts:
+            if exist_ok:
+                return
+            raise FileExistsError(path)
+        if parents:
+            if not exist_ok and self.entry_kind(path) is not None:
+                raise FileExistsError(path)
+            self._directory(parts, create=True)
+            self.verify_reachable(parts)
+            return
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        if self.backend.entry_kind(parent, name) is not None:
+            if exist_ok and self.backend.entry_kind(parent, name) == "directory":
+                self._directory(parts)
+                return
+            raise FileExistsError(path)
+        directory = self.backend.open_directory(
+            parent, name, create=True, exclusive=True
+        )
+        self._directories[parts] = directory
+        self.verify_reachable(parts)
+
+    def remove(self, path: Path, *, recursive: bool, missing_ok: bool = False) -> None:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError("Refusing to remove active artifact authority root")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        kind = self.backend.entry_kind(parent, name)
+        if kind is None:
+            if missing_ok:
+                return
+            raise FileNotFoundError(path)
+        for cached_parts in sorted(
+            [item for item in self._directories if item[: len(parts)] == parts],
+            key=len,
+            reverse=True,
+        ):
+            directory = self._directories.pop(cached_parts)
+            self.backend.close_directory(directory)
+        self.backend.remove_entry(parent, name, recursive=recursive)
+        self.verify_reachable(parent_parts)
+
+    def rename(self, source: Path, destination: Path) -> None:
+        source_parts = self._require_parts(source)
+        destination_parts = self._require_parts(destination)
+        if not source_parts or source_parts[:-1] != destination_parts[:-1]:
+            raise ReviewError("Artifact rename must remain within one retained parent")
+        parent_parts = source_parts[:-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        self.backend.rename_entry(parent, source_parts[-1], destination_parts[-1])
+        remapped: dict[tuple[str, ...], Any] = {}
+        for cached_parts in sorted(self._directories, key=len):
+            if cached_parts[: len(source_parts)] != source_parts:
+                continue
+            directory = self._directories.pop(cached_parts)
+            remapped[
+                (*destination_parts, *cached_parts[len(source_parts) :])
+            ] = directory
+        self._directories.update(remapped)
+        self.verify_reachable(destination_parts)
+
+    def list_names(self, path: Path) -> list[str]:
+        parts = self._require_parts(path)
+        directory = self._directory(parts)
+        self.verify_reachable(parts)
+        return self.backend.list_names(directory)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        seen: set[Any] = set()
+        for parts in sorted(self._directories, key=len, reverse=True):
+            directory = self._directories[parts]
+            if directory in seen:
+                continue
+            seen.add(directory)
+            self.backend.close_directory(directory)
+        if self._root_parent not in seen:
+            self.backend.close_directory(self._root_parent)
+
+
+_ACTIVE_ARTIFACT_AUTHORITY: RunArtifactAuthority | None = None
+
+
+@contextmanager
+def active_artifact_authority(authority: RunArtifactAuthority) -> Iterator[None]:
+    global _ACTIVE_ARTIFACT_AUTHORITY
+    if _ACTIVE_ARTIFACT_AUTHORITY is not None:
+        raise ReviewError("Nested artifact authorities are not supported")
+    _ACTIVE_ARTIFACT_AUTHORITY = authority
+    try:
+        yield
+    finally:
+        _ACTIVE_ARTIFACT_AUTHORITY = None
+        authority.close()
+
+
+def _authority_for_path(path: Path) -> RunArtifactAuthority | None:
+    authority = _ACTIVE_ARTIFACT_AUTHORITY
+    if authority is not None and authority.contains(path):
+        return authority
+    return None
+
+
+def _install_active_artifact_authority(authority: RunArtifactAuthority) -> None:
+    global _ACTIVE_ARTIFACT_AUTHORITY
+    if _ACTIVE_ARTIFACT_AUTHORITY is not None:
+        authority.close()
+        raise ReviewError("An artifact authority is already active")
+    _ACTIVE_ARTIFACT_AUTHORITY = authority
+
+
+def _close_active_artifact_authority() -> None:
+    global _ACTIVE_ARTIFACT_AUTHORITY
+    authority = _ACTIVE_ARTIFACT_AUTHORITY
+    _ACTIVE_ARTIFACT_AUTHORITY = None
+    if authority is not None:
+        authority.close()
+
+
+def artifact_read_bytes(path: Path) -> bytes:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        return authority.read_bytes(path)
+    return path.read_bytes()
+
+
+def artifact_read_text(
+    path: Path, *, encoding: str = "utf-8", errors: str = "strict"
+) -> str:
+    return artifact_read_bytes(path).decode(encoding, errors)
+
+
+def artifact_entry_kind(path: Path) -> str | None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        return authority.entry_kind(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink"
+    if stat.S_ISDIR(info.st_mode):
+        return "directory"
+    if stat.S_ISREG(info.st_mode):
+        return "file"
+    return "other"
+
+
+def artifact_exists(path: Path) -> bool:
+    return artifact_entry_kind(path) is not None
+
+
+def artifact_is_file(path: Path) -> bool:
+    return artifact_entry_kind(path) == "file"
+
+
+def artifact_is_dir(path: Path) -> bool:
+    return artifact_entry_kind(path) == "directory"
+
+
+def artifact_is_symlink(path: Path) -> bool:
+    return artifact_entry_kind(path) == "symlink"
+
+
+def artifact_mkdir(
+    path: Path, *, parents: bool = False, exist_ok: bool = False
+) -> None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        authority.mkdir(path, parents=parents, exist_ok=exist_ok)
+        return
+    path.mkdir(parents=parents, exist_ok=exist_ok)
+
+
+def artifact_remove(
+    path: Path, *, recursive: bool = False, missing_ok: bool = False
+) -> None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        authority.remove(path, recursive=recursive, missing_ok=missing_ok)
+        return
+    kind = artifact_entry_kind(path)
+    if kind is None:
+        if missing_ok:
+            return
+        raise FileNotFoundError(path)
+    if kind == "directory":
+        if recursive:
+            shutil.rmtree(path)
+        else:
+            path.rmdir()
+    else:
+        path.unlink()
+
+
+def artifact_rename(source: Path, destination: Path) -> None:
+    authority = _authority_for_path(source)
+    if authority is not None and authority.contains(destination):
+        authority.rename(source, destination)
+        return
+    os.replace(source, destination)
+
+
+def artifact_list_names(path: Path) -> list[str]:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        return authority.list_names(path)
+    return sorted(item.name for item in path.iterdir())
+
+
+def artifact_iterdir(path: Path) -> list[Path]:
+    return [path / name for name in artifact_list_names(path)]
+
+
+def _candidate_lock_is_contended(error: OSError) -> bool:
+    return error.errno in {errno.EACCES, errno.EAGAIN}
+
+
+def _acquire_candidate_lock(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        return
+    raise ReviewError(
+        f"Candidate authority locking is unsupported on platform {os.name!r}"
+    )
+
+
+def _release_candidate_lock(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        return
+    raise ReviewError(
+        f"Candidate authority locking is unsupported on platform {os.name!r}"
+    )
+
+
+@contextmanager
+def candidate_authority_lock(run_dir: Path) -> Iterator[None]:
+    """Serialize current-v5 first candidate authority for one stable run."""
+
+    lock_path = run_dir / ".candidate-ingestion.lock"
+    authority = _authority_for_path(lock_path)
+    if authority is not None:
+        descriptor = authority.open_lock_descriptor(lock_path)
+    else:
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(lock_path, flags, 0o600)
+    acquired = False
+    primary_error: BaseException | None = None
+    try:
+        if os.name == "nt" and os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+        deadline = time.monotonic() + CANDIDATE_AUTHORITY_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                _acquire_candidate_lock(descriptor)
+            except OSError as error:
+                if not _candidate_lock_is_contended(error):
+                    raise ReviewError(
+                        f"Could not acquire candidate authority lock: {error}"
+                    ) from error
+                if time.monotonic() >= deadline:
+                    raise ReviewError(
+                        "Timed out acquiring candidate authority lock; no candidate "
+                        "authority was published by this attempt"
+                    ) from error
+                time.sleep(
+                    min(
+                        CANDIDATE_AUTHORITY_LOCK_POLL_SECONDS,
+                        max(0.0, deadline - time.monotonic()),
+                    )
+                )
+                continue
+            acquired = True
+            break
+        yield
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        release_error: BaseException | None = None
+        if acquired:
+            try:
+                _release_candidate_lock(descriptor)
+            except BaseException as error:
+                release_error = error
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if release_error is None:
+                release_error = error
+        if release_error is not None:
+            if primary_error is not None:
+                try:
+                    setattr(
+                        primary_error,
+                        "candidate_lock_release_error",
+                        repr(release_error),
+                    )
+                except BaseException:
+                    pass
+            else:
+                raise ReviewError(
+                    f"Candidate authority committed but lock release failed: {release_error}"
+                ) from release_error
 
 
 def utc_now() -> str:
@@ -210,9 +1508,7 @@ def sha256_bytes(data: bytes) -> str:
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     try:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+        digest.update(artifact_read_bytes(path))
     except FileNotFoundError as exc:
         raise ReviewError(f"Expected artifact file is missing: {path}") from exc
     except OSError as exc:
@@ -221,6 +1517,10 @@ def sha256_file(path: Path) -> str:
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        authority.atomic_write_bytes(path, data)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
@@ -246,7 +1546,7 @@ def atomic_write_json(path: Path, value: Any) -> None:
 
 def load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(artifact_read_text(path, encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ReviewError(f"File not found: {path}") from exc
     except json.JSONDecodeError as exc:
@@ -500,6 +1800,13 @@ def classify_state_contract(
     ):
         return STATE_CONTRACT_SIMPLIFICATION
     if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V4
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4
+    if (
         schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3
         and not profile_present
         and coverage_required is True
@@ -591,6 +1898,7 @@ def enforce_command_compatibility(args: argparse.Namespace) -> None:
     if (
         contract
         in {
+            STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4,
             STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3,
             STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1,
             STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2,
@@ -1153,18 +2461,18 @@ def snapshot_coverage_context(
         max_total_bytes=max_total_bytes,
     )
     destination = run_dir / "coverage-context"
-    if destination.exists():
+    if artifact_exists(destination):
         raise ReviewError(
             "Coverage context artifact exists without a valid state binding; start a new run"
         )
     temporary = run_dir / f".coverage-context.initializing-{uuid.uuid4().hex[:8]}"
-    temporary.mkdir(parents=False, exist_ok=False)
+    artifact_mkdir(temporary, parents=False, exist_ok=False)
     try:
         for path, data in source_bytes.items():
             atomic_write_bytes(temporary / "sources" / path, data)
-        os.replace(temporary, destination)
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
+        artifact_rename(temporary, destination)
+    except BaseException:
+        artifact_remove(temporary, recursive=True, missing_ok=True)
         raise
     context_hash = canonical_hash(context)
     return {**context, "coverage_context_hash": context_hash}
@@ -1324,7 +2632,7 @@ def load_verified_coverage_context(
         expected_size = require_int(source["size"], f"{source_context}.size", minimum=0)
         snapshot = run_dir / snapshot_path
         try:
-            data = snapshot.read_bytes()
+            data = artifact_read_bytes(snapshot)
         except OSError as exc:
             raise ReviewError(f"Could not read frozen coverage context {snapshot}: {exc}") from exc
         if len(data) != expected_size or sha256_bytes(data) != expected_sha:
@@ -1490,6 +2798,16 @@ def validate_normalized_candidates_profile(
                 raise ReviewError(
                     f"{context} has specialist provenance for a non-specialist assignment"
                 )
+        for field in ("required_review_paths", "required_checks"):
+            if reviewer_set.get(field) != assignment[field]:
+                raise ReviewError(
+                    f"{context}.{field} does not match the coverage assignment"
+                )
+        expected_scenarios = scenario_checks_for_assignment(plan, assignment)
+        if reviewer_set.get("scenario_checks") != expected_scenarios:
+            raise ReviewError(
+                f"{context}.scenario_checks do not match the coverage plan"
+            )
         reviewer_coverage_hash = require_sha256(
             reviewer_set.get("coverage_plan_hash"), f"{context}.coverage_plan_hash"
         )
@@ -1734,9 +3052,28 @@ def resolve_run_dir(args: argparse.Namespace, repo: Path) -> tuple[Path, Path]:
     runs_root = artifact_root / "runs"
     raw_run_id = getattr(args, "run_id", None) or os.environ.get("MATERIAL_REVIEW_RUN_ID")
     run_id = normalize_run_id(raw_run_id) if raw_run_id else None
+    active_authority = _ACTIVE_ARTIFACT_AUTHORITY
+    if active_authority is not None:
+        run_dir = runs_root / run_id if run_id else active_authority.root_path
+        if active_authority._relative_parts(run_dir) != ():
+            raise ReviewError(
+                "The active artifact authority does not match the requested run"
+            )
+        state = load_state(run_dir)
+        if Path(state.get("repo_root", "")).resolve() != repo:
+            raise ReviewError(
+                f"Run {state.get('run_id')} belongs to {state.get('repo_root')}, "
+                f"not the requested repository {repo}"
+            )
+        return artifact_root, run_dir
     if run_id:
         run_dir = runs_root / run_id
-        if not state_path(run_dir).exists():
+        try:
+            authority = RunArtifactAuthority(run_dir)
+        except ReviewError as error:
+            raise ReviewError(f"Run not found: {run_id} under {runs_root}") from error
+        _install_active_artifact_authority(authority)
+        if not artifact_exists(state_path(run_dir)):
             raise ReviewError(f"Run not found: {run_id} under {runs_root}")
         state = load_state(run_dir)
         if Path(state.get("repo_root", "")).resolve() != repo:
@@ -1745,35 +3082,45 @@ def resolve_run_dir(args: argparse.Namespace, repo: Path) -> tuple[Path, Path]:
             )
         return artifact_root, run_dir
 
-    if not runs_root.exists():
-        raise ReviewError("No material-code-review runs exist; run init first or pass --run-id")
+    try:
+        runs_authority = RunArtifactAuthority(runs_root)
+    except ReviewError as error:
+        raise ReviewError(
+            "No material-code-review runs exist; run init first or pass --run-id"
+        ) from error
     candidates: list[Path] = []
-    for path in sorted(runs_root.iterdir()):
-        if not state_path(path).exists():
-            continue
-        try:
-            state = load_state(path)
-        except ReviewError:
-            continue
-        if Path(state.get("repo_root", "")).resolve() != repo:
-            continue
-        if state.get("phase") not in {PHASE_COMPLETE, PHASE_ABORTED}:
-            candidates.append(path)
+    all_repo_runs: list[Path] = []
+    with active_artifact_authority(runs_authority):
+        for name in artifact_list_names(runs_root):
+            path = runs_root / name
+            if not artifact_exists(state_path(path)):
+                continue
+            try:
+                state = load_state(path)
+            except ReviewError:
+                continue
+            if Path(state.get("repo_root", "")).resolve() != repo:
+                continue
+            all_repo_runs.append(path)
+            if state.get("phase") not in {PHASE_COMPLETE, PHASE_ABORTED}:
+                candidates.append(path)
+    selected: Path | None = None
     if len(candidates) == 1:
-        return artifact_root, candidates[0]
-    if not candidates:
-        all_repo_runs = [
-            path
-            for path in sorted(runs_root.iterdir())
-            if state_path(path).exists()
-            and Path(load_state(path).get("repo_root", "")).resolve() == repo
-        ]
-        if len(all_repo_runs) == 1:
-            return artifact_root, all_repo_runs[0]
-        raise ReviewError("No unique active run found; pass --run-id or set MATERIAL_REVIEW_RUN_ID")
-    raise ReviewError(
-        "Multiple active runs found: " + ", ".join(path.name for path in candidates) + ". Pass --run-id."
-    )
+        selected = candidates[0]
+    elif not candidates and len(all_repo_runs) == 1:
+        selected = all_repo_runs[0]
+    elif not candidates:
+        raise ReviewError(
+            "No unique active run found; pass --run-id or set MATERIAL_REVIEW_RUN_ID"
+        )
+    else:
+        raise ReviewError(
+            "Multiple active runs found: "
+            + ", ".join(path.name for path in candidates)
+            + ". Pass --run-id."
+        )
+    _install_active_artifact_authority(RunArtifactAuthority(selected))
+    return artifact_root, selected
 
 
 def write_source_bundle_files(run_dir: Path, scope: dict[str, Any], limitations: list[str]) -> None:
@@ -1938,17 +3285,15 @@ def snapshot_copy_path(repo: Path, snapshot_root: Path, path: str, state_info: d
     source = repo_path(repo, path)
     destination = snapshot_root / "content" / path
     if state_info["type"] == "file":
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        atomic_write_bytes(destination, source.read_bytes())
     elif state_info["type"] == "symlink":
-        destination.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(destination.with_suffix(destination.suffix + ".symlink"), state_info["target"])
 
 
 def create_checkpoint(repo: Path, checkpoint_dir: Path, extra_paths: Iterable[str]) -> dict[str, Any]:
-    if checkpoint_dir.exists():
+    if artifact_exists(checkpoint_dir):
         raise ReviewError(f"Checkpoint already exists: {checkpoint_dir}")
-    checkpoint_dir.mkdir(parents=True, exist_ok=False)
+    artifact_mkdir(checkpoint_dir, parents=True, exist_ok=False)
     try:
         authority = repository_authority(repo)
         authority_identity = authority["identity"]
@@ -1965,7 +3310,7 @@ def create_checkpoint(repo: Path, checkpoint_dir: Path, extra_paths: Iterable[st
         index_path = Path(index["path"])
         index_backup = checkpoint_dir / "index.backup"
         if index["present"]:
-            shutil.copyfile(index_path, index_backup)
+            atomic_write_bytes(index_backup, index_path.read_bytes())
             index_backup_sha256 = sha256_file(index_backup)
         else:
             index_backup_sha256 = None
@@ -1999,15 +3344,12 @@ def create_checkpoint(repo: Path, checkpoint_dir: Path, extra_paths: Iterable[st
         atomic_write_json(checkpoint_dir / "checkpoint.json", metadata)
         return metadata
     except BaseException:
-        shutil.rmtree(checkpoint_dir, ignore_errors=True)
+        artifact_remove(checkpoint_dir, recursive=True, missing_ok=True)
         raise
 
 
 def remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink(missing_ok=True)
-    elif path.is_dir():
-        shutil.rmtree(path)
+    artifact_remove(path, recursive=True, missing_ok=True)
 
 
 def restore_one_snapshot_path(repo: Path, checkpoint_dir: Path, path: str, info: dict[str, Any]) -> None:
@@ -2017,24 +3359,27 @@ def restore_one_snapshot_path(repo: Path, checkpoint_dir: Path, path: str, info:
         remove_path(target)
         return
     if kind == "directory":
-        if target.exists() and not target.is_dir():
+        if artifact_exists(target) and not artifact_is_dir(target):
             remove_path(target)
-        target.mkdir(parents=True, exist_ok=True)
+        artifact_mkdir(target, parents=True, exist_ok=True)
         os.chmod(target, info.get("mode", 0o755))
         return
     if kind == "file":
-        if target.exists() or target.is_symlink():
+        if artifact_exists(target) or artifact_is_symlink(target):
             remove_path(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        artifact_mkdir(target.parent, parents=True, exist_ok=True)
         source = checkpoint_dir / "content" / path
-        shutil.copyfile(source, target)
+        target.write_bytes(artifact_read_bytes(source))
         os.chmod(target, info.get("mode", 0o644))
         return
     if kind == "symlink":
-        if target.exists() or target.is_symlink():
+        if artifact_exists(target) or artifact_is_symlink(target):
             remove_path(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        link_target = (checkpoint_dir / "content" / path).with_suffix((checkpoint_dir / "content" / path).suffix + ".symlink").read_text(encoding="utf-8")
+        artifact_mkdir(target.parent, parents=True, exist_ok=True)
+        link_target_path = (checkpoint_dir / "content" / path).with_suffix(
+            (checkpoint_dir / "content" / path).suffix + ".symlink"
+        )
+        link_target = artifact_read_text(link_target_path, encoding="utf-8")
         os.symlink(link_target, target)
         return
     raise ReviewError(f"Cannot restore unsupported file type for {path}: {kind}")
@@ -2187,26 +3532,26 @@ def verify_checkpoint_integrity(
         kind = require_string(info.get("type"), f"checkpoint.path_states.{path}.type")
         if kind == "file":
             source = checkpoint_dir / "content" / path
-            if not source.is_file() or source.is_symlink():
+            if not artifact_is_file(source) or artifact_is_symlink(source):
                 raise ReviewError(f"Checkpoint file snapshot is missing or invalid: {path}")
             if info.get("sha256") and sha256_file(source) != info["sha256"]:
                 raise ReviewError(f"Checkpoint file snapshot failed its hash check: {path}")
-            if info.get("size") is not None and source.stat().st_size != info["size"]:
+            if info.get("size") is not None and len(artifact_read_bytes(source)) != info["size"]:
                 raise ReviewError(f"Checkpoint file snapshot failed its size check: {path}")
         elif kind == "symlink":
             source = (checkpoint_dir / "content" / path).with_suffix(
                 (checkpoint_dir / "content" / path).suffix + ".symlink"
             )
-            if not source.is_file():
+            if not artifact_is_file(source):
                 raise ReviewError(f"Checkpoint symlink snapshot is missing: {path}")
-            if source.read_text(encoding="utf-8") != info.get("target"):
+            if artifact_read_text(source, encoding="utf-8") != info.get("target"):
                 raise ReviewError(f"Checkpoint symlink snapshot failed its target check: {path}")
         elif kind not in {"missing", "directory"}:
             raise ReviewError(f"Checkpoint contains unsupported file type for {path}: {kind}")
 
     if require_bool(metadata.get("index_present"), "checkpoint.index_present"):
         backup = checkpoint_dir / "index.backup"
-        if not backup.is_file():
+        if not artifact_is_file(backup):
             raise ReviewError("Checkpoint Git index backup is missing")
         if sha256_file(backup) != metadata.get("index_sha256"):
             raise ReviewError("Checkpoint Git index backup failed its hash check")
@@ -2234,12 +3579,12 @@ def restore_legacy_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any
 
     index_path = current_index_path
     if metadata["index_present"]:
-        index_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_mkdir(index_path.parent, parents=True, exist_ok=True)
         temp_index = index_path.with_name(f".{index_path.name}.material-review.tmp")
-        shutil.copyfile(checkpoint_dir / "index.backup", temp_index)
-        os.replace(temp_index, index_path)
+        temp_index.write_bytes(artifact_read_bytes(checkpoint_dir / "index.backup"))
+        artifact_rename(temp_index, index_path)
     else:
-        index_path.unlink(missing_ok=True)
+        artifact_remove(index_path, missing_ok=True)
 
     for path, info in path_states.items():
         restore_one_snapshot_path(repo, checkpoint_dir, normalize_repo_path(path), info)
@@ -2566,10 +3911,10 @@ def restore_v4_index(
         lock_path.unlink(missing_ok=True)
         return
     if saved_index["present"]:
-        with os.fdopen(descriptor, "wb") as locked_index, (checkpoint_dir / "index.backup").open(
-            "rb"
-        ) as source:
-            shutil.copyfileobj(source, locked_index)
+        with os.fdopen(descriptor, "wb") as locked_index:
+            locked_index.write(
+                artifact_read_bytes(checkpoint_dir / "index.backup")
+            )
             locked_index.flush()
             os.fsync(locked_index.fileno())
         os.replace(lock_path, index_path)
@@ -2606,10 +3951,10 @@ def execute_v4_worktree_recovery(
                 desired.get("mode", 0o644),
             )
             try:
-                with os.fdopen(descriptor, "wb") as destination, (
-                    checkpoint_dir / "content" / path
-                ).open("rb") as source:
-                    shutil.copyfileobj(source, destination)
+                with os.fdopen(descriptor, "wb") as destination:
+                    destination.write(
+                        artifact_read_bytes(checkpoint_dir / "content" / path)
+                    )
                     destination.flush()
                     os.fsync(destination.fileno())
                 os.chmod(temporary, desired.get("mode", 0o644))
@@ -2812,7 +4157,7 @@ def read_snapshot_source(
         return SNAPSHOT_MATCHED_MISSING, None
     snapshot_path = state_info.get("snapshot_path")
     if snapshot_path:
-        data = (run_dir / snapshot_path).read_bytes()
+        data = artifact_read_bytes(run_dir / snapshot_path)
     elif side == "baseline":
         source_path = entry.get("old_path") or entry["path"]
         data = git_object_bytes(repo, scope_identity["baseline_sha"], source_path)
@@ -2837,7 +4182,7 @@ def read_coverage_context_source(
     for source in coverage_context["sources"]:
         if source["path"] != path:
             continue
-        data = (run_dir / source["snapshot_path"]).read_bytes()
+        data = artifact_read_bytes(run_dir / source["snapshot_path"])
         if len(data) != source["size"] or sha256_bytes(data) != source["sha256"]:
             raise ReviewError(f"Frozen coverage context failed integrity validation: {path}")
         return data
@@ -2856,7 +4201,9 @@ def verify_evidence_quote(
     coverage_context: dict[str, Any] | None = None,
 ) -> None:
     if side == "diff":
-        patch = (run_dir / "scope.patch").read_text(encoding="utf-8", errors="replace")
+        patch = artifact_read_text(
+            run_dir / "scope.patch", encoding="utf-8", errors="replace"
+        )
         stripped = "\n".join(line[1:] if line[:1] in {"+", "-", " "} else line for line in patch.splitlines())
         if quote not in patch and quote not in stripped:
             raise ReviewError(f"Evidence quote for {file}:{line_start} was not found in the frozen diff")
@@ -2890,7 +4237,7 @@ def render_path_diff(checkpoint_dir: Path, repo: Path, path: str, before: dict[s
     if before == after:
         return ""
     if before.get("type") == "file":
-        before_bytes = (checkpoint_dir / "content" / path).read_bytes()
+        before_bytes = artifact_read_bytes(checkpoint_dir / "content" / path)
     elif before.get("type") == "symlink":
         before_bytes = before.get("target", "").encode("utf-8")
     else:
@@ -3085,7 +4432,13 @@ def validate_candidate_set(
             f"{source_file}.coverage.files_reviewed must name at least one frozen-scope path"
         )
     coverage_areas = require_string_array(coverage["areas"], f"{source_file}.coverage.areas")
-    coverage_limitations = require_string_array(coverage["limitations"], f"{source_file}.coverage.limitations")
+    coverage_limitations = (
+        copy.deepcopy(coverage["limitations"])
+        if material_review
+        else require_string_array(
+            coverage["limitations"], f"{source_file}.coverage.limitations"
+        )
+    )
 
     scope_info = load_verified_scope(run_dir, state)
     scope_identity = scope_info["identity"]
@@ -3274,6 +4627,9 @@ def validate_candidate_set(
                 "assignment_kind": assignment_kind,
                 "lens_id": lens_id,
                 "check_results": check_results,
+                "required_review_paths": assignment["required_review_paths"],
+                "required_checks": assignment["required_checks"],
+                "scenario_checks": scenario_checks_for_assignment(plan, assignment),
             }
         )
         if obligation is not None:
@@ -3286,41 +4642,10 @@ def validate_candidate_set(
 
 
 def required_paths_by_assignment(plan: dict[str, Any]) -> dict[str, set[str]]:
-    all_primary = {
-        path for unit in plan["change_units"] for path in unit["primary_paths"]
+    return {
+        assignment["assignment_id"]: set(assignment["required_review_paths"])
+        for assignment in plan["assignments"]
     }
-    units = {unit["unit_id"]: unit for unit in plan["change_units"]}
-    obligations = {
-        obligation["obligation_id"]: obligation
-        for obligation in plan["review_obligations"]
-    }
-    selected_risk_evidence = {
-        (unit["unit_id"], rationale["risk_code"]): set(rationale["evidence_paths"])
-        for unit in plan["change_units"]
-        for rationale in unit["selected_risk_rationale"]
-    }
-    required: dict[str, set[str]] = {}
-    for assignment in plan["assignments"]:
-        if assignment["assignment_kind"] == "core":
-            required[assignment["assignment_id"]] = set(all_primary)
-        elif assignment["assignment_kind"] == "obligation":
-            required[assignment["assignment_id"]] = set(
-                obligations[assignment["obligation_id"]]["evidence_paths"]
-            )
-        elif assignment["assignment_kind"] == "specialist":
-            required[assignment["assignment_id"]] = set(
-                assignment["primary_paths"]
-            )
-        else:
-            required[assignment["assignment_id"]] = set(
-                selected_risk_evidence[
-                    (assignment["unit_id"], assignment["risk_code"])
-                ]
-            )
-            required[assignment["assignment_id"]].update(
-                units[assignment["unit_id"]]["context_paths"]
-            )
-    return required
 
 
 def validate_candidate_wave_against_coverage(
@@ -4200,18 +5525,34 @@ def validate_fix_plan(
 
 
 def render_candidates_markdown(bundle: dict[str, Any], rejections: list[dict[str, Any]]) -> str:
+    material_review_bundle = (
+        bundle.get("schema_version") == NORMALIZED_CANDIDATES_SCHEMA_REVIEW
+    )
+    candidate_count_label = (
+        "candidate_records" if material_review_bundle else "Candidates accepted"
+    )
     lines = [
         "# Candidate ingestion",
         "",
         f"- Scope hash: `{bundle['scope_hash']}`",
         f"- Candidate bundle hash: `{bundle['candidate_bundle_hash']}`",
         f"- Reviewer sets accepted: `{len(bundle['reviewer_sets'])}`",
-        f"- Candidates accepted: `{len(bundle['candidates'])}`",
-        f"- Candidate/input rejections: `{len(rejections)}`",
-        "",
-        "## Accepted candidates",
-        "",
+        f"- {candidate_count_label}: `{len(bundle['candidates'])}`",
     ]
+    if material_review_bundle:
+        completed_atomic_checks = sum(
+            len(reviewer_set["check_results"])
+            for reviewer_set in bundle["reviewer_sets"]
+        )
+        lines.append(f"- completed_atomic_checks: `{completed_atomic_checks}`")
+    lines.extend(
+        [
+            f"- Candidate/input rejections: `{len(rejections)}`",
+            "",
+            "## Candidate records" if material_review_bundle else "## Accepted candidates",
+            "",
+        ]
+    )
     if not bundle["candidates"]:
         lines.append("- none")
     for candidate in bundle["candidates"]:
@@ -4448,8 +5789,6 @@ def command_init(args: argparse.Namespace) -> int:
     run_id = normalize_run_id(args.run_id) if args.run_id else make_run_id()
     runs_root = artifact_root / "runs"
     run_dir = runs_root / run_id
-    if run_dir.exists():
-        raise ReviewError(f"Run already exists: {run_dir}")
 
     # Freeze the Git scope before creating any artifact directory. This avoids
     # contaminating the scope when a caller supplies an invalid in-worktree
@@ -4464,68 +5803,71 @@ def command_init(args: argparse.Namespace) -> int:
     workflow_profile = getattr(args, "_workflow_profile", WORKFLOW_PROFILE_REVIEW)
     if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
         raise ReviewError(f"Unsupported internal workflow profile: {workflow_profile}")
-    runs_root.mkdir(parents=True, exist_ok=True)
     temp_run_dir = runs_root / f".{run_id}.initializing-{uuid.uuid4().hex[:8]}"
-    temp_run_dir.mkdir(parents=False, exist_ok=False)
-    try:
-        limitations = snapshot_sources(
-            repo,
-            temp_run_dir,
-            scope,
-            max_file_bytes=args.max_snapshot_file_bytes,
-            max_total_bytes=args.max_snapshot_total_bytes,
-        )
-        write_source_bundle_files(temp_run_dir, scope, limitations)
-        identity = scope["identity"]
-        state = {
-            "schema_version": (
-                MATERIAL_REVIEW_STATE_SCHEMA
-                if workflow_profile == WORKFLOW_PROFILE_REVIEW
-                else SIMPLIFICATION_STATE_SCHEMA
-            ),
-            "tool_version": TOOL_VERSION,
-            "run_id": run_id,
-            "repo_root": str(repo),
-            "artifact_root": str(artifact_root),
-            "phase": PHASE_CONTEXT,
-            "created_at": utc_now(),
-            "updated_at": utc_now(),
-            "scope_hash": scope["scope_hash"],
-            "scope_params": {
-                "actual_scope": identity["actual_scope"],
-                "base_reference": identity["base_reference"],
-                "head_reference": identity.get("head_reference"),
-                "include_untracked": identity["include_untracked"],
-            },
-            "mutation_allowed": identity["mutable"],
-            "hashes": {},
-            "gates": {},
-            "approved_findings": [],
-            "finding_status": {},
-            "global_test_results": {},
-            "active_finding": None,
-            "repair_round": 0,
-            "repair_targets": [],
-            "expected_workspace_guard_hash": None,
-            "pre_fix_checkpoint": None,
-            "events": [
-                {
-                    "at": utc_now(),
-                    "event": "scope_frozen",
-                    "scope_hash": scope["scope_hash"],
-                }
-            ],
-        }
-        if workflow_profile == WORKFLOW_PROFILE_REVIEW:
-            state["workflow_profile"] = WORKFLOW_PROFILE_REVIEW
-            state["coverage_required"] = True
-        else:
-            state["profile"] = SIMPLIFICATION_PROFILE
-        save_state(temp_run_dir, state)
-        os.replace(temp_run_dir, run_dir)
-    except Exception:
-        shutil.rmtree(temp_run_dir, ignore_errors=True)
-        raise
+    runs_authority = RunArtifactAuthority(runs_root, create=True)
+    with active_artifact_authority(runs_authority):
+        if artifact_exists(run_dir):
+            raise ReviewError(f"Run already exists: {run_dir}")
+        artifact_mkdir(temp_run_dir, parents=False, exist_ok=False)
+        try:
+            limitations = snapshot_sources(
+                repo,
+                temp_run_dir,
+                scope,
+                max_file_bytes=args.max_snapshot_file_bytes,
+                max_total_bytes=args.max_snapshot_total_bytes,
+            )
+            write_source_bundle_files(temp_run_dir, scope, limitations)
+            identity = scope["identity"]
+            state = {
+                "schema_version": (
+                    MATERIAL_REVIEW_STATE_SCHEMA
+                    if workflow_profile == WORKFLOW_PROFILE_REVIEW
+                    else SIMPLIFICATION_STATE_SCHEMA
+                ),
+                "tool_version": TOOL_VERSION,
+                "run_id": run_id,
+                "repo_root": str(repo),
+                "artifact_root": str(artifact_root),
+                "phase": PHASE_CONTEXT,
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
+                "scope_hash": scope["scope_hash"],
+                "scope_params": {
+                    "actual_scope": identity["actual_scope"],
+                    "base_reference": identity["base_reference"],
+                    "head_reference": identity.get("head_reference"),
+                    "include_untracked": identity["include_untracked"],
+                },
+                "mutation_allowed": identity["mutable"],
+                "hashes": {},
+                "gates": {},
+                "approved_findings": [],
+                "finding_status": {},
+                "global_test_results": {},
+                "active_finding": None,
+                "repair_round": 0,
+                "repair_targets": [],
+                "expected_workspace_guard_hash": None,
+                "pre_fix_checkpoint": None,
+                "events": [
+                    {
+                        "at": utc_now(),
+                        "event": "scope_frozen",
+                        "scope_hash": scope["scope_hash"],
+                    }
+                ],
+            }
+            if workflow_profile == WORKFLOW_PROFILE_REVIEW:
+                state["workflow_profile"] = WORKFLOW_PROFILE_REVIEW
+                state["coverage_required"] = True
+            else:
+                state["profile"] = SIMPLIFICATION_PROFILE
+            save_state(temp_run_dir, state)
+            artifact_rename(temp_run_dir, run_dir)
+        except BaseException:
+            artifact_remove(temp_run_dir, recursive=True, missing_ok=True)
+            raise
 
     print(f"[OK] Frozen review scope: {scope['scope_hash']}")
     print(f"Run ID: {run_id}")
@@ -4579,9 +5921,9 @@ def command_record_coverage(args: argparse.Namespace) -> int:
         raise ReviewError("Coverage plan is already recorded; start a new run to change it")
     if (
         "coverage_context_hash" in state["hashes"]
-        or (run_dir / "coverage-plan.json").exists()
-        or (run_dir / "coverage-context.json").exists()
-        or (run_dir / "coverage-context").exists()
+        or artifact_exists(run_dir / "coverage-plan.json")
+        or artifact_exists(run_dir / "coverage-context.json")
+        or artifact_exists(run_dir / "coverage-context")
     ):
         raise ReviewError(
             "Coverage artifacts exist without valid state bindings; start a new run"
@@ -4729,36 +6071,57 @@ def command_ingest_material_review_candidates(
     }
     bundle_hash = canonical_hash(payload)
 
-    if state["phase"] == PHASE_CANDIDATES:
-        existing = require_compatible_existing_candidate_authority(run_dir, state)
-        if existing["candidate_bundle_hash"] == bundle_hash:
-            print(f"[OK] Candidate bundle already captured: {bundle_hash}")
-            print("Exact validated retry made no changes")
-            return 0
-        raise ReviewError(
-            "Candidate bundle is already captured and differs from this complete valid "
-            "wave; start a new run"
+    with candidate_authority_lock(run_dir):
+        state = load_state(run_dir)
+        require_current_material_review_contract(state)
+        if state["phase"] not in {PHASE_CONTEXT, PHASE_CANDIDATES}:
+            raise ReviewError(f"Cannot ingest candidates in phase {state['phase']}")
+        check_scope_fresh(repo, run_dir, state)
+        load_recorded_coverage_plan(run_dir, state)
+        if (
+            state["scope_hash"] != payload["scope_hash"]
+            or state["hashes"]["coverage_plan_hash"]
+            != payload["coverage_plan_hash"]
+            or state["hashes"]["coverage_context_hash"]
+            != payload["coverage_context_hash"]
+        ):
+            raise ReviewError(
+                "Candidate authority inputs changed before publication; rerun validation"
+            )
+
+        if state["phase"] == PHASE_CANDIDATES:
+            existing = require_compatible_existing_candidate_authority(run_dir, state)
+            if existing["candidate_bundle_hash"] == bundle_hash:
+                print(f"[OK] Candidate bundle already captured: {bundle_hash}")
+                print("Exact validated retry made no changes")
+                return 0
+            raise ReviewError(
+                "Candidate bundle is already captured and differs from this complete valid "
+                "wave; start a new run"
+            )
+
+        payload["candidate_bundle_hash"] = bundle_hash
+        payload["generated_at"] = utc_now()
+        atomic_write_json(run_dir / "candidates.json", payload)
+        atomic_write_json(run_dir / "candidate-rejections.json", rejections)
+        atomic_write_text(
+            run_dir / "candidates.md",
+            render_candidates_markdown(payload, rejections),
         )
 
-    payload["candidate_bundle_hash"] = bundle_hash
-    payload["generated_at"] = utc_now()
-    atomic_write_json(run_dir / "candidates.json", payload)
-    atomic_write_json(run_dir / "candidate-rejections.json", rejections)
-    atomic_write_text(run_dir / "candidates.md", render_candidates_markdown(payload, rejections))
-
-    state["phase"] = PHASE_CANDIDATES
-    state["hashes"]["candidate_bundle_hash"] = bundle_hash
-    state["events"].append(
-        {
-            "at": utc_now(),
-            "event": "candidates_ingested",
-            "reviewer_sets": len(reviewer_sets),
-            "candidates": len(candidates),
-            "rejections": len(rejections),
-            "candidate_bundle_hash": bundle_hash,
-        }
-    )
-    save_state(run_dir, state)
+        state["phase"] = PHASE_CANDIDATES
+        state["hashes"]["candidate_bundle_hash"] = bundle_hash
+        state["events"].append(
+            {
+                "at": utc_now(),
+                "event": "candidates_ingested",
+                "reviewer_sets": len(reviewer_sets),
+                "candidates": len(candidates),
+                "rejections": len(rejections),
+                "candidate_bundle_hash": bundle_hash,
+            }
+        )
+        save_state(run_dir, state)
     print(f"[OK] Candidate bundle written: {bundle_hash}")
     print(f"Accepted reviewer sets: {len(reviewer_sets)}")
     print(f"Accepted candidates: {len(candidates)}")
@@ -5074,10 +6437,13 @@ def command_validate_plan(args: argparse.Namespace) -> int:
     atomic_write_json(run_dir / "fix-plan.json", plan)
     atomic_write_text(run_dir / "fix-plan.md", render_plan_markdown(plan))
     old_gate = run_dir / "gates" / "plan.json"
-    if old_gate.exists():
+    if artifact_exists(old_gate):
         archive = run_dir / "gates" / "archive"
-        archive.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(old_gate), str(archive / f"plan-{utc_now().replace(':', '')}.json"))
+        artifact_mkdir(archive, parents=True, exist_ok=True)
+        artifact_rename(
+            old_gate,
+            archive / f"plan-{utc_now().replace(':', '')}.json",
+        )
     state["phase"] = PHASE_PLAN_VALIDATED
     state["hashes"]["plan_hash"] = plan_hash
     state["gates"].pop("plan", None)
@@ -5371,34 +6737,25 @@ def execute_test_command(
 
         finished_at = utc_now()
         log_path = run_dir / log_relative
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=f".{log_path.name}.", dir=str(log_path.parent))
-        try:
-            with os.fdopen(fd, "wb") as log_handle:
-                header = (
-                    f"Command: {command}\n"
-                    f"Working directory: {working_directory}\n"
-                    f"Timeout seconds: {timeout_seconds}\n"
-                    f"Started: {started_at}\n"
-                    f"Finished: {finished_at}\n"
-                    f"Timed out: {str(timed_out).lower()}\n"
-                    f"Exit code: {exit_code if exit_code is not None else 'timeout'}\n"
-                    "\n--- STDOUT ---\n"
-                ).encode("utf-8")
-                log_handle.write(header)
-                stdout_handle.seek(0)
-                shutil.copyfileobj(stdout_handle, log_handle, length=1024 * 1024)
-                log_handle.write(b"\n--- STDERR ---\n")
-                stderr_handle.seek(0)
-                shutil.copyfileobj(stderr_handle, log_handle, length=1024 * 1024)
-                log_handle.flush()
-                os.fsync(log_handle.fileno())
-            os.replace(temp_name, log_path)
-        finally:
-            try:
-                os.unlink(temp_name)
-            except FileNotFoundError:
-                pass
+        header = (
+            f"Command: {command}\n"
+            f"Working directory: {working_directory}\n"
+            f"Timeout seconds: {timeout_seconds}\n"
+            f"Started: {started_at}\n"
+            f"Finished: {finished_at}\n"
+            f"Timed out: {str(timed_out).lower()}\n"
+            f"Exit code: {exit_code if exit_code is not None else 'timeout'}\n"
+            "\n--- STDOUT ---\n"
+        ).encode("utf-8")
+        stdout_handle.seek(0)
+        stderr_handle.seek(0)
+        log_bytes = (
+            header
+            + stdout_handle.read()
+            + b"\n--- STDERR ---\n"
+            + stderr_handle.read()
+        )
+        atomic_write_bytes(log_path, log_bytes)
 
     return {
         "command": command,
@@ -6497,11 +7854,11 @@ def command_begin_repair(args: argparse.Namespace) -> int:
         raise ReviewError("No repair targets were recorded")
     next_round = state["repair_round"] + 1
     history_dir = run_dir / "verification-history" / f"round-{state['repair_round']}"
-    history_dir.mkdir(parents=True, exist_ok=True)
+    artifact_mkdir(history_dir, parents=True, exist_ok=True)
     for name in ("fix-summary.json", "fix-summary.patch", "verification.json", "verification.md", "repair-evaluation.json"):
         source = run_dir / name
-        if source.exists():
-            shutil.copy2(source, history_dir / name)
+        if artifact_exists(source):
+            atomic_write_bytes(history_dir / name, artifact_read_bytes(source))
     for finding_id in targets:
         status = state["finding_status"][finding_id]
         if status["attempts"] >= status["max_attempts"]:
@@ -6741,6 +8098,8 @@ def main(
     except KeyboardInterrupt:
         print("[FAIL] Interrupted", file=sys.stderr)
         return 130
+    finally:
+        _close_active_artifact_authority()
 
 
 if __name__ == "__main__":
