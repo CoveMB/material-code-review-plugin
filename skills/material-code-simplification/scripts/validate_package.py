@@ -27,8 +27,12 @@ sys.path.insert(0, str(STATIC_VERSION_HELPER_DIR))
 from static_version_contract import (  # noqa: E402
     validate_static_version_declaration,
 )
+from package_layout_contract import (  # noqa: E402
+    local_schema_reference_errors,
+    portable_archive_member_key,
+)
 VERSION = "1.3.0"
-CORE_VERSION = "1.5.0"
+CORE_VERSION = "1.5.1"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -54,6 +58,7 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "LICENSE",
     "SECURITY.md",
     "core/obligation_contract.py",
+    "core/package_layout_contract.py",
     "core/static_version_contract.py",
     "core/reviewctl.py",
     "core/schemas/candidate-set.schema.json",
@@ -99,19 +104,6 @@ def normalize_archive_member(name: str) -> str:
     return "/".join(parts)
 
 
-def windows_collision_key(archive_path: str) -> str:
-    """Derive a Windows-safe collision key that accounts for case-insensitive matching
-    and trailing dots or spaces."""
-    parts = archive_path.split("/")
-    normalized_parts = []
-    for part in parts:
-        # Strip trailing dots and spaces (Windows semantics)
-        stripped = part.rstrip(". ")
-        # Convert to lowercase for case-insensitive comparison
-        normalized_parts.append(stripped.lower())
-    return "/".join(normalized_parts)
-
-
 def validate_extracted_archive(
     archive: zipfile.ZipFile,
     members: list[tuple[zipfile.ZipInfo, str]],
@@ -150,7 +142,7 @@ def validate_archive(archive_path: Path) -> list[str]:
             if archive.comment != ARCHIVE_COMMENT:
                 errors.append(f"{archive_path.name}: identifying archive comment mismatch")
             seen: set[str] = set()
-            seen_windows_keys: set[str] = set()
+            portable_names: dict[str, str] = {}
             members: list[tuple[zipfile.ZipInfo, str]] = []
             info_by_name: dict[str, zipfile.ZipInfo] = {}
             cumulative_size = 0
@@ -185,14 +177,16 @@ def validate_archive(archive_path: Path) -> list[str]:
                     errors.append(f"{archive_path.name}: duplicate normalized entry: {normalized_name}")
                     continue
                 seen.add(normalized_name)
-                collision_key = windows_collision_key(normalized_name)
-                if collision_key in seen_windows_keys:
+                collision_key = portable_archive_member_key(normalized_name)
+                prior_name = portable_names.get(collision_key)
+                if prior_name is not None:
                     errors.append(
-                        f"{archive_path.name}: entry {normalized_name} collides with an earlier entry "
-                        f"under Windows case-insensitive/trailing-character semantics"
+                        f"{archive_path.name}: portable archive member collision: "
+                        f"{prior_name} and {normalized_name}; the latter collides with an earlier entry under Windows "
+                        "case-insensitive/Unicode/trailing-character semantics"
                     )
                     continue
-                seen_windows_keys.add(collision_key)
+                portable_names[collision_key] = normalized_name
                 info_by_name[normalized_name] = info
                 members.append((info, normalized_name))
                 relative = Path(normalized_name)
@@ -246,6 +240,27 @@ def validate_archive(archive_path: Path) -> list[str]:
                 )
                 if declaration_error is not None:
                     errors.append(declaration_error)
+
+            for schema_name in sorted(
+                name
+                for name in seen
+                if name.startswith("core/schemas/") and name.endswith(".json")
+            ):
+                try:
+                    schema_document = json.loads(
+                        archive.read(info_by_name[schema_name])
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    errors.append(
+                        f"{archive_path.name}:{schema_name}: invalid schema JSON"
+                    )
+                    continue
+                errors.extend(
+                    local_schema_reference_errors(
+                        schema_document,
+                        f"{archive_path.name}:{schema_name}",
+                    )
+                )
 
             if not errors:
                 errors.extend(validate_extracted_archive(archive, members, archive_path))
@@ -334,6 +349,18 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if not (schema_dir / name).is_file():
                 errors.append(f"missing shared schema: {schema_dir / name}")
+        for schema_path in sorted(schema_dir.glob("*.json")):
+            try:
+                schema_document = json.loads(schema_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                errors.append(f"invalid shared schema {schema_path}: {exc}")
+                continue
+            errors.extend(
+                local_schema_reference_errors(
+                    schema_document,
+                    schema_path.as_posix(),
+                )
+            )
         for name in (
             "remediation-auditor-template.md",
             "remediation-rubric.md",

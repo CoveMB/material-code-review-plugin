@@ -80,13 +80,25 @@ RISK_REQUIREMENTS = {
     "normative_workflow_coherence": {
         "required_lens": "standards_alignment",
         "required_checks": frozenset(
-            {"normative_sequence", "prerequisite_before_dependent_step", "paired_control"}
+            {
+                "normative_sequence",
+                "prerequisite_before_dependent_step",
+                "paired_control",
+                "disabled_mode_dependency_boundary",
+            }
         ),
         "supporting_lenses": frozenset(),
     },
     "user_selectable_output_paths": {
         "required_lens": "reliability",
-        "required_checks": frozenset({"destination_collision", "writer_cleanup_order"}),
+        "required_checks": frozenset(
+            {
+                "destination_collision",
+                "canonical_filesystem_identity",
+                "runtime_writer_target_inventory",
+                "writer_cleanup_order",
+            }
+        ),
         "supporting_lenses": frozenset(),
     },
     "persisted_config_semantics": {

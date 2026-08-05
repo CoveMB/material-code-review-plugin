@@ -19,6 +19,7 @@
 | `pass` lacks evidence | Reject the entire wave. |
 | `finding_emitted` lacks evidence, local IDs, or references an unknown local finding | Reject the entire wave. |
 | Required check is `blocked` | Treat the obligation as incomplete; do not create candidate authority. |
+| An unresolved required-check limitation appears only in `coverage.limitations` or as a finding on another check | Reject the entire wave. Return the affected check as `blocked`, obtain the missing evidence, and submit a new complete wave; the controller must not infer an outcome. |
 | Required assignment paths are incomplete | Reject the entire wave. |
 | Evidence side/path resolves to a changed-path entry frozen as missing | Reject the evidence as missing. Do not fall through to coverage context. |
 | Evidence side/path has no changed-path match | Comparison evidence may use only an exact frozen coverage-context path; baseline evidence has no context fallback. |
@@ -42,6 +43,8 @@
 | Manual rollback or abort observes ref, HEAD, index, or unrelated-path drift | Preserve the repository, record recovery-conflict evidence, and require human reconciliation; do not infer that the drift belongs to the repair. |
 | Repair needs a new path or strategy | Abort and restore the repair layer; require a new plan plus Gate B. |
 | V4 recovery observation no longer matches current HEAD, refs, index, or workspace | Fail before the first repository write, record structured recovery-conflict evidence, and require human reconciliation. |
+| V4 worktree recovery would replace or delete an existing path, or its parent is no longer unchanged | Fail during preflight before recovery authority writes, preserve the path, record recovery-conflict evidence, and require manual reconciliation. Only no-op and exclusive expected-missing creation are automatic. |
+| Required symbolic-ref transactions are unsupported or `index.lock` cannot be acquired with the expected semantic index identity | Fail closed, preserve repository authority, record recovery-conflict evidence, and require manual reconciliation; do not fall back to unconditional writes. |
 | V4 recovery write or final authority verification fails | Record structured recovery evidence and stop for human recovery; do not continue the lifecycle. |
 | Historical checkpoint lacks v4 repository authority | Use only the isolated bounded legacy restore path. Never synthesize missing HEAD/ref/index authority. |
 | Post-fix unrelated issue | Record-only; no repair loop. |

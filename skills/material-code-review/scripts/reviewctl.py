@@ -42,7 +42,7 @@ from obligation_contract import (  # noqa: E402
 )
 
 
-TOOL_VERSION = "1.5.0"
+TOOL_VERSION = "1.5.1"
 MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v4"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3 = "material-review/state/v3"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
@@ -2390,6 +2390,236 @@ def manual_recovery_observation(
     raise ReviewError(reason + "; repository state was preserved for human reconciliation")
 
 
+def plan_v4_worktree_recovery(
+    repo: Path,
+    path_states: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Plan only worktree writes that can prove an expected-missing boundary."""
+
+    snapshot_paths = set(path_states)
+    unexpected_paths = sorted(workspace_status_paths(repo) - snapshot_paths)
+    conflicts = [f"{path}: not present in the checkpoint" for path in unexpected_paths]
+    actions: list[tuple[str, dict[str, Any]]] = []
+    for path, desired in sorted(path_states.items()):
+        target = repo_path(repo, path)
+        current = path_state(target)
+        if current == desired:
+            continue
+        if current["type"] != "missing":
+            conflicts.append(
+                f"{path}: {current['type']} to {desired['type']} requires existing-path replacement or deletion"
+            )
+            continue
+        if desired["type"] == "missing":
+            continue
+        if desired["type"] not in {"file", "directory", "symlink"}:
+            conflicts.append(
+                f"{path}: unsupported checkpoint type {desired['type']}"
+            )
+            continue
+        if path_state(target.parent)["type"] != "directory":
+            conflicts.append(f"{path}: parent directory is not present and unchanged")
+            continue
+        actions.append((path, desired))
+    if conflicts:
+        raise ReviewError(
+            "Automatic worktree recovery cannot conditionally apply: "
+            + "; ".join(conflicts)
+        )
+    return actions
+
+
+def probe_v4_symbolic_ref_transactions(
+    repo: Path,
+    observed_identity: dict[str, Any],
+) -> None:
+    """Verify symbolic-ref transaction support without committing a ref change."""
+
+    observed_attachment = observed_identity["head_attachment"]
+    if observed_attachment is None:
+        command = (
+            "symref-update HEAD refs/heads/material-review-capability-probe "
+            f"oid {observed_identity['head_sha']}"
+        )
+    else:
+        command = (
+            f"symref-update HEAD {observed_attachment} ref {observed_attachment}"
+        )
+    transaction = f"start\noption no-deref\n{command}\nprepare\nabort\n".encode(
+        "utf-8"
+    )
+    try:
+        run_process(
+            ["git", "update-ref", "--stdin"],
+            cwd=repo,
+            input_bytes=transaction,
+        )
+    except BaseException as exc:
+        raise ReviewError(
+            "Git lacks the required conditional symbolic-ref transaction support"
+        ) from exc
+
+
+def v4_ref_transaction(
+    saved_identity: dict[str, Any],
+    observed_identity: dict[str, Any],
+) -> bytes:
+    """Build ordered expected-old transactions for HEAD and the complete ref delta."""
+
+    saved_attachment = saved_identity["head_attachment"]
+    observed_attachment = observed_identity["head_attachment"]
+    saved_refs = saved_identity["refs"]
+    observed_refs = observed_identity["refs"]
+
+    def ref_command(ref: str) -> str | None:
+        saved = saved_refs.get(ref)
+        observed = observed_refs.get(ref)
+        if saved == observed:
+            return None
+        if saved is None:
+            return f"delete {ref} {observed}"
+        if observed is None:
+            return f"create {ref} {saved}"
+        return f"update {ref} {saved} {observed}"
+
+    deferred_ref = (
+        observed_attachment
+        if observed_attachment is not None and observed_attachment != saved_attachment
+        else None
+    )
+    prepared_ref_commands = [
+        command
+        for ref in sorted(set(saved_refs) | set(observed_refs))
+        if ref != deferred_ref
+        if (command := ref_command(ref)) is not None
+    ]
+
+    transaction: list[str] = []
+
+    def append_transaction(commands: list[str]) -> None:
+        if commands:
+            transaction.extend(["start", *commands, "prepare", "commit"])
+
+    append_transaction(prepared_ref_commands)
+    if saved_attachment is None:
+        head_commands = [
+            "option no-deref",
+            (
+                f"update HEAD {saved_identity['head_sha']} "
+                f"{observed_identity['head_sha']}"
+            ),
+        ]
+    else:
+        expected = (
+            f"ref {observed_attachment}"
+            if observed_attachment is not None
+            else f"oid {observed_identity['head_sha']}"
+        )
+        head_commands = [
+            "option no-deref",
+            f"symref-update HEAD {saved_attachment} {expected}",
+        ]
+    append_transaction(head_commands)
+
+    if deferred_ref is not None:
+        deferred_command = ref_command(deferred_ref)
+        if deferred_command is not None:
+            append_transaction([deferred_command])
+
+    return ("\n".join(transaction) + "\n").encode("utf-8")
+
+
+def acquire_v4_index_lock(
+    repo: Path,
+    index_path: Path,
+    expected_index: dict[str, Any],
+) -> tuple[int, Path]:
+    """Acquire Git's cooperative index lock and recheck semantic identity."""
+
+    lock_path = index_path.with_name(f"{index_path.name}.lock")
+    try:
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise ReviewError(f"Git index lock is already held: {lock_path}") from exc
+    try:
+        if index_identity(repo) != expected_index:
+            raise ReviewError("Git index changed before its conditional recovery boundary")
+    except BaseException:
+        os.close(descriptor)
+        lock_path.unlink(missing_ok=True)
+        raise
+    return descriptor, lock_path
+
+
+def restore_v4_index(
+    checkpoint_dir: Path,
+    index_path: Path,
+    saved_index: dict[str, Any],
+    observed_index: dict[str, Any],
+    descriptor: int,
+    lock_path: Path,
+) -> None:
+    """Restore the index while holding the canonical cooperative Git lock."""
+
+    if saved_index == observed_index:
+        os.close(descriptor)
+        lock_path.unlink(missing_ok=True)
+        return
+    if saved_index["present"]:
+        with os.fdopen(descriptor, "wb") as locked_index, (checkpoint_dir / "index.backup").open(
+            "rb"
+        ) as source:
+            shutil.copyfileobj(source, locked_index)
+            locked_index.flush()
+            os.fsync(locked_index.fileno())
+        os.replace(lock_path, index_path)
+        return
+
+    os.close(descriptor)
+    if index_path.exists():
+        index_path.unlink()
+    lock_path.unlink(missing_ok=True)
+
+
+def execute_v4_worktree_recovery(
+    repo: Path,
+    checkpoint_dir: Path,
+    actions: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """Create checkpoint paths only when the destination is still absent."""
+
+    for path, desired in actions:
+        target = repo_path(repo, path)
+        kind = desired["type"]
+        if kind == "directory":
+            target.mkdir(mode=desired.get("mode", 0o755), exist_ok=False)
+            os.chmod(target, desired.get("mode", 0o755))
+        elif kind == "symlink":
+            os.symlink(desired["target"], target)
+        elif kind == "file":
+            temporary = target.with_name(
+                f".{target.name}.material-review-v4-{uuid.uuid4().hex}.tmp"
+            )
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                desired.get("mode", 0o644),
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as destination, (
+                    checkpoint_dir / "content" / path
+                ).open("rb") as source:
+                    shutil.copyfileobj(source, destination)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                os.chmod(temporary, desired.get("mode", 0o644))
+                os.link(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        else:
+            raise ReviewError(f"Unsupported conditional worktree action for {path}: {kind}")
+
+
 def restore_checkpoint_v4(
     repo: Path,
     checkpoint_dir: Path,
@@ -2419,69 +2649,52 @@ def restore_checkpoint_v4(
 
     saved_identity = checkpoint_authority["identity"]
     observed_identity = expected_post["identity"]
-    saved_attachment = saved_identity["head_attachment"]
-    observed_attachment = observed_identity["head_attachment"]
     try:
-        if saved_attachment is None:
-            run_process(
-                [
-                    "git",
-                    "update-ref",
-                    "--no-deref",
-                    "HEAD",
-                    saved_identity["head_sha"],
-                    observed_identity["head_sha"],
-                ],
-                cwd=repo,
-            )
-        elif observed_attachment != saved_attachment:
-            run_process(["git", "symbolic-ref", "HEAD", saved_attachment], cwd=repo)
-
-        saved_refs = saved_identity["refs"]
-        observed_refs = observed_identity["refs"]
-        transaction: list[str] = ["start"]
-        for ref in sorted(set(saved_refs) | set(observed_refs)):
-            saved = saved_refs.get(ref)
-            observed = observed_refs.get(ref)
-            if saved == observed:
-                continue
-            if saved is None:
-                transaction.append(f"delete {ref} {observed}")
-            elif observed is None:
-                transaction.append(f"create {ref} {saved}")
-            else:
-                transaction.append(f"update {ref} {saved} {observed}")
-        if len(transaction) > 1:
-            transaction.extend(["prepare", "commit"])
-            run_process(
-                ["git", "update-ref", "--stdin"],
-                cwd=repo,
-                input_bytes=("\n".join(transaction) + "\n").encode("utf-8"),
-            )
-
-        current_paths = workspace_status_paths(repo)
-        snap_paths = set(path_states)
-        for path in sorted(current_paths - snap_paths):
-            target = repo_path(repo, path)
-            if path_exists_in_head(repo, path):
-                run_process(
-                    ["git", "restore", "--source=HEAD", "--worktree", "--", path],
-                    cwd=repo,
-                )
-            else:
-                remove_path(target)
-        if metadata["index_present"]:
-            index_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_index = index_path.with_name(
-                f".{index_path.name}.material-review-v4.tmp"
-            )
-            shutil.copyfile(checkpoint_dir / "index.backup", temporary_index)
-            os.replace(temporary_index, index_path)
-        else:
-            index_path.unlink(missing_ok=True)
-        for path, info in path_states.items():
-            restore_one_snapshot_path(repo, checkpoint_dir, path, info)
+        worktree_actions = plan_v4_worktree_recovery(repo, path_states)
+        probe_v4_symbolic_ref_transactions(repo, observed_identity)
+        index_descriptor, index_lock_path = acquire_v4_index_lock(
+            repo,
+            index_path,
+            observed_identity["index"],
+        )
     except BaseException as exc:
+        observed_after_conflict = observe_repository_after_recovery_failure(repo, exc)
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-conflict.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=observed_after_conflict,
+            reason=f"Conditional recovery preflight failed: {exc}",
+        )
+        raise ReviewError(
+            f"Conditional recovery preflight failed; repository authority was preserved for human reconciliation: {exc}"
+        ) from exc
+
+    index_lock_owned = True
+    try:
+        run_process(
+            ["git", "update-ref", "--stdin"],
+            cwd=repo,
+            input_bytes=v4_ref_transaction(saved_identity, observed_identity),
+        )
+        restore_v4_index(
+            checkpoint_dir,
+            index_path,
+            saved_identity["index"],
+            observed_identity["index"],
+            index_descriptor,
+            index_lock_path,
+        )
+        index_lock_owned = False
+        execute_v4_worktree_recovery(repo, checkpoint_dir, worktree_actions)
+    except BaseException as exc:
+        if index_lock_owned:
+            try:
+                os.close(index_descriptor)
+            except OSError:
+                pass
+            index_lock_path.unlink(missing_ok=True)
         current_after_failure = observe_repository_after_recovery_failure(repo, exc)
         write_recovery_evidence(
             checkpoint_dir,

@@ -26,6 +26,8 @@ if str(SHARED_SCRIPT_DIRECTORY) not in sys.path:
 
 from package_layout_contract import (  # noqa: E402
     normalize_package_path,
+    portable_archive_member_key,
+    regular_zip_external_attr,
     schema_version_is_supported,
 )
 from package_publication import (  # noqa: E402
@@ -35,7 +37,7 @@ from package_publication import (  # noqa: E402
     publish_staged_outputs as publish_shared_staged_outputs,
 )
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)
 EXCLUDED_PARTS = {
     ".git",
@@ -253,13 +255,14 @@ def write_entry(zf: zipfile.ZipFile, source: Path, archive_name: str) -> None:
     info.create_system = 3
     mode = source.stat().st_mode
     permissions = 0o755 if mode & stat.S_IXUSR else 0o644
-    info.external_attr = permissions << 16
+    info.external_attr = regular_zip_external_attr(permissions)
     info.flag_bits |= 0x800  # UTF-8 names
     zf.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
 def build_archive(output: Path, entries: Iterable[tuple[Path, str]], comment: str) -> str:
     seen: set[str] = set()
+    portable_names: dict[str, str] = {}
     with zipfile.ZipFile(output, "w", allowZip64=True) as zf:
         zf.comment = comment.encode("utf-8")
         for source, archive_name in entries:
@@ -272,6 +275,14 @@ def build_archive(output: Path, entries: Iterable[tuple[Path, str]], comment: st
             if normalized in seen:
                 raise ValueError(f"Unsafe or duplicate archive entry: {archive_name}")
             seen.add(normalized)
+            portable_key = portable_archive_member_key(normalized)
+            prior_name = portable_names.get(portable_key)
+            if prior_name is not None:
+                raise ValueError(
+                    "Portable archive member collision: "
+                    f"{prior_name} and {normalized}"
+                )
+            portable_names[portable_key] = normalized
             write_entry(zf, source, normalized)
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     return digest

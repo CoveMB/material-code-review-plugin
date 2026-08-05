@@ -17,6 +17,7 @@ from obligation_contract import (  # noqa: E402
     CHECK_OUTCOMES,
     CORE_LENS_IDS,
     CONTROLLED_RISK_CODES,
+    IDENTIFIER_PATTERN,
     RISK_REQUIREMENTS,
     ObligationContractError,
     canonical_git_path,
@@ -190,6 +191,28 @@ class ObligationContractTest(unittest.TestCase):
                 }
             ),
         )
+        self.assertEqual(
+            RISK_REQUIREMENTS["normative_workflow_coherence"]["required_checks"],
+            frozenset(
+                {
+                    "normative_sequence",
+                    "prerequisite_before_dependent_step",
+                    "paired_control",
+                    "disabled_mode_dependency_boundary",
+                }
+            ),
+        )
+        self.assertEqual(
+            RISK_REQUIREMENTS["user_selectable_output_paths"]["required_checks"],
+            frozenset(
+                {
+                    "destination_collision",
+                    "canonical_filesystem_identity",
+                    "runtime_writer_target_inventory",
+                    "writer_cleanup_order",
+                }
+            ),
+        )
 
     def test_canonical_git_path_rejects_non_repository_spellings(self) -> None:
         rejected = (
@@ -317,6 +340,29 @@ class ObligationContractTest(unittest.TestCase):
             plan = make_plan()
             mutation(plan)
             with self.subTest(expected=expected), self.assertRaisesRegex(ObligationContractError, expected):
+                validate_coverage_contract(
+                    plan,
+                    changed_paths={"validator.py"},
+                    allowed_context_paths={"runtime.py"},
+                )
+
+    def test_atomic_recall_checks_cannot_be_omitted(self) -> None:
+        cases = (
+            ("normative_workflow_coherence", "disabled_mode_dependency_boundary"),
+            ("user_selectable_output_paths", "canonical_filesystem_identity"),
+            ("user_selectable_output_paths", "runtime_writer_target_inventory"),
+        )
+        for risk_code, check_code in cases:
+            plan = make_plan(risk_code=risk_code)
+            plan["review_obligations"][0]["required_checks"] = [
+                item
+                for item in plan["review_obligations"][0]["required_checks"]
+                if item != check_code
+            ]
+            with self.subTest(check_code=check_code), self.assertRaisesRegex(
+                ObligationContractError,
+                "required checks",
+            ):
                 validate_coverage_contract(
                     plan,
                     changed_paths={"validator.py"},
@@ -575,6 +621,37 @@ class ObligationContractTest(unittest.TestCase):
                 "architecture_simplification",
             },
         )
+        self.assertEqual(candidate["$defs"]["identifier"], coverage["$defs"]["identifier"])
+        identifier_pattern = candidate["$defs"]["identifier"]["pattern"]
+        self.assertEqual(identifier_pattern, IDENTIFIER_PATTERN.pattern)
+        for value in ("a", "a" * 128, "a-1"):
+            self.assertIsNotNone(re.fullmatch(identifier_pattern, value), value)
+        for value in ("", "1a", "A", "a_b", "a" * 129):
+            self.assertIsNone(re.fullmatch(identifier_pattern, value), value)
+
+        specialist_branch = next(
+            branch
+            for clause in coverage["properties"]["assignments"]["items"]["allOf"]
+            for branch in clause.get("oneOf", [])
+            if branch["properties"]["assignment_kind"].get("const") == "specialist"
+        )
+        unit_ids = specialist_branch["properties"]["unit_ids"]
+        self.assertIn("unit_ids", specialist_branch["required"])
+        self.assertEqual(unit_ids["minItems"], 1)
+        self.assertIs(unit_ids["uniqueItems"], True)
+        self.assertEqual(unit_ids["items"]["$ref"], "#/$defs/identifier")
+
+        specialist_condition = next(
+            condition
+            for condition in candidate["allOf"]
+            if condition["if"]["properties"]["assignment_kind"].get("const")
+            == "specialist"
+        )
+        candidate_unit_ids = candidate["properties"]["unit_ids"]
+        self.assertIn("unit_ids", specialist_condition["then"]["required"])
+        self.assertEqual(candidate_unit_ids["minItems"], 1)
+        self.assertIs(candidate_unit_ids["uniqueItems"], True)
+        self.assertEqual(candidate_unit_ids["items"]["$ref"], "#/$defs/identifier")
 
     def test_obligation_corpus_fixture_uses_complete_versioned_contracts(self) -> None:
         corpus = json.loads(

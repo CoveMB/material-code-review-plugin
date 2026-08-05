@@ -919,10 +919,11 @@ class SimplifyCtlTest(unittest.TestCase):
         )
         if exercise_restoration:
             source_before_attempt = (self.repo / "src" / "service.py").read_bytes()
+            conflicting_source = b"def value():\n    return 999\n"
             (self.repo / "src" / "service.py").write_text(
-                "def value():\n    return 999\n", encoding="utf-8"
+                conflicting_source.decode("utf-8"), encoding="utf-8"
             )
-            self.run_tool(
+            _, stderr = self.run_tool(
                 "rollback-finding",
                 "--repo-root",
                 str(self.repo),
@@ -932,6 +933,33 @@ class SimplifyCtlTest(unittest.TestCase):
                 "F001",
                 "--reason",
                 "Exercise state/v1 simplification restoration.",
+                expected=2,
+            )
+            self.assertEqual(
+                (self.repo / "src" / "service.py").read_bytes(), conflicting_source
+            )
+            self.assertIn("Conditional recovery preflight failed", stderr)
+            recovery_conflict = self.load(
+                "checkpoints/F001/attempt-1/recovery-conflict.json"
+            )
+            self.assertIn(
+                "requires existing-path replacement or deletion",
+                recovery_conflict["reason"],
+            )
+
+            # Reconciliation is explicit: the controller never overwrites the
+            # conflicting file, even when the change is inside the fix scope.
+            (self.repo / "src" / "service.py").write_bytes(source_before_attempt)
+            self.run_tool(
+                "rollback-finding",
+                "--repo-root",
+                str(self.repo),
+                "--run-id",
+                self.run_id,
+                "--finding",
+                "F001",
+                "--reason",
+                "Complete explicit state/v1 fixture reconciliation.",
             )
             self.assertEqual(
                 (self.repo / "src" / "service.py").read_bytes(), source_before_attempt

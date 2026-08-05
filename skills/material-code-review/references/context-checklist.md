@@ -44,7 +44,7 @@ Create exactly one specialist assignment per selected lens. Bind it to the exact
 
 ## Dispatch bundle
 
-Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, and its required paths. Include any exact `obligation_id` plus `required_checks`, or for a specialist the exact `unit_ids`, `primary_paths`, and `context_paths`. Supply `schemas/candidate-set-v4.schema.json`. Do not include another assignment's candidate output.
+Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, and its required paths. Include any exact `obligation_id` plus `required_checks` and the canonical definition and `pass`/`finding_emitted`/`blocked` evidence standard for every supplied check code, or for a specialist the exact `unit_ids`, `primary_paths`, and `context_paths`. Supply `schemas/candidate-set-v4.schema.json`. Do not include another assignment's candidate output.
 
 ## Evidence-side identity
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
 import importlib.util
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -430,7 +432,10 @@ class StandalonePackagingTests(unittest.TestCase):
             if entry in archive.namelist():
                 return
         with zipfile.ZipFile(archive_path, "a") as archive:
-            archive.writestr(entry, contents)
+            member = zipfile.ZipInfo(entry)
+            member.create_system = 3
+            member.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(member, contents)
 
     def run_review_archive_validator(
         self,
@@ -483,6 +488,137 @@ class StandalonePackagingTests(unittest.TestCase):
             manifest_bytes,
         )
         return manifest, full_archive, standalone_archive
+
+    def copy_archive_with_member_metadata(
+        self,
+        source: Path,
+        destination: Path,
+        entry: str,
+        *,
+        create_system: int,
+        mode: int,
+    ) -> None:
+        with zipfile.ZipFile(source) as source_archive:
+            members = source_archive.infolist()
+            self.assertEqual([member.filename for member in members].count(entry), 1)
+            comment = source_archive.comment
+            payloads = {
+                member.filename: source_archive.read(member)
+                for member in members
+            }
+        with zipfile.ZipFile(destination, "w") as destination_archive:
+            destination_archive.comment = comment
+            for member in members:
+                copied_member = copy.copy(member)
+                if copied_member.filename == entry:
+                    copied_member.create_system = create_system
+                    copied_member.external_attr = mode << 16
+                destination_archive.writestr(
+                    copied_member,
+                    payloads[member.filename],
+                )
+
+    def test_review_archives_require_regular_unix_member_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            _, full_archive, standalone_archive = self.build_review_archives(
+                temp_root,
+                fixture_root,
+            )
+
+            second_full = temp_root / "second-full-plugin.zip"
+            second_standalone = temp_root / "second-material-review.zip"
+            second_result = self.run_full_packager(
+                fixture_root,
+                second_full,
+                standalone_output=second_standalone,
+            )
+            self.assertEqual(second_result.returncode, 0, second_result.stderr)
+            self.assertEqual(full_archive.read_bytes(), second_full.read_bytes())
+            self.assertEqual(standalone_archive.read_bytes(), second_standalone.read_bytes())
+
+            for archive_path, standalone in (
+                (full_archive, False),
+                (standalone_archive, True),
+            ):
+                with zipfile.ZipFile(archive_path) as archive:
+                    members = archive.infolist()
+                    self.assertTrue(members)
+                    permissions = set()
+                    for member in members:
+                        mode = (member.external_attr >> 16) & 0xFFFF
+                        self.assertEqual(member.create_system, 3, member.filename)
+                        self.assertTrue(stat.S_ISREG(mode), member.filename)
+                        permissions.add(stat.S_IMODE(mode))
+                    self.assertIn(0o644, permissions)
+                    self.assertIn(0o755, permissions)
+                    target = members[0].filename
+
+                valid_result = self.run_review_archive_validator(
+                    fixture_root,
+                    archive_path,
+                    standalone=standalone,
+                )
+                self.assertEqual(valid_result.returncode, 0, valid_result.stderr)
+
+                rejected_modes = (
+                    stat.S_IFLNK | 0o777,
+                    stat.S_IFDIR | 0o755,
+                    stat.S_IFCHR | 0o600,
+                    stat.S_IFBLK | 0o600,
+                    stat.S_IFIFO | 0o600,
+                    stat.S_IFSOCK | 0o600,
+                )
+                for index, mode in enumerate(rejected_modes):
+                    mutated = temp_root / f"{archive_path.stem}-nonregular-{index}.zip"
+                    self.copy_archive_with_member_metadata(
+                        archive_path,
+                        mutated,
+                        target,
+                        create_system=3,
+                        mode=mode,
+                    )
+                    result = self.run_review_archive_validator(
+                        fixture_root,
+                        mutated,
+                        standalone=standalone,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"archive member {target}", result.stderr)
+                    self.assertIn("non-regular Unix member type", result.stderr)
+
+                legacy = temp_root / f"{archive_path.stem}-legacy-zero-type.zip"
+                self.copy_archive_with_member_metadata(
+                    archive_path,
+                    legacy,
+                    target,
+                    create_system=3,
+                    mode=0o644,
+                )
+                legacy_result = self.run_review_archive_validator(
+                    fixture_root,
+                    legacy,
+                    standalone=standalone,
+                )
+                self.assertNotEqual(legacy_result.returncode, 0)
+                self.assertIn("unsupported legacy Unix zero-type metadata", legacy_result.stderr)
+
+                non_unix = temp_root / f"{archive_path.stem}-non-unix.zip"
+                self.copy_archive_with_member_metadata(
+                    archive_path,
+                    non_unix,
+                    target,
+                    create_system=0,
+                    mode=stat.S_IFREG | 0o644,
+                )
+                non_unix_result = self.run_review_archive_validator(
+                    fixture_root,
+                    non_unix,
+                    standalone=standalone,
+                )
+                self.assertNotEqual(non_unix_result.returncode, 0)
+                self.assertIn("unsupported non-Unix creator system 0", non_unix_result.stderr)
 
     def run_simplification_archive_validator(self, archive: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -581,12 +717,12 @@ class StandalonePackagingTests(unittest.TestCase):
             with zipfile.ZipFile(full_output) as archive:
                 self.assertEqual(
                     archive.comment,
-                    b"material-code-review Codex plugin 1.5.0",
+                    b"material-code-review Codex plugin 1.5.1",
                 )
             with zipfile.ZipFile(standalone_output) as archive:
                 self.assertEqual(
                     archive.comment,
-                    b"material-code-review standalone Codex skill 1.5.0",
+                    b"material-code-review standalone Codex skill 1.5.1",
                 )
             for output in (full_output, standalone_output):
                 checksum = output.with_suffix(output.suffix + ".sha256")
@@ -3756,12 +3892,11 @@ class StandalonePackagingTests(unittest.TestCase):
 
                 binary_archive = temp_root / f"{layout_name}-binary.zip"
                 shutil.copy2(source_archive, binary_archive)
-                with zipfile.ZipFile(binary_archive, "a") as archive:
-                    archive.writestr(
-                        "ancillary/random.bin",
-                        b"\xff\x00\xfe\x01" * 64,
-                        compress_type=zipfile.ZIP_STORED,
-                    )
+                self.ensure_archive_entry(
+                    binary_archive,
+                    "ancillary/random.bin",
+                    b"\xff\x00\xfe\x01" * 64,
+                )
                 with self.subTest(layout=layout_name, state="binary-in-limit"):
                     result = self.run_review_archive_validator(
                         fixture_root,
@@ -4420,7 +4555,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertIn(
-                "material-code-review package 1.5.0 is structurally valid",
+                "material-code-review package 1.5.1 is structurally valid",
                 validation_result.stdout,
             )
             targeted_test_result = subprocess.run(
@@ -4651,7 +4786,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertTrue(
-                (distribution_directory / "material-code-review-plugin-1.5.0.zip").is_file()
+                (distribution_directory / "material-code-review-plugin-1.5.1.zip").is_file()
             )
 
     @unittest.skipIf(
@@ -5089,7 +5224,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 }.issubset(names)
             )
             self.assertIn(
-                'TOOL_VERSION = "1.5.0"',
+                'TOOL_VERSION = "1.5.1"',
                 controller,
             )
             self.assertIn(
@@ -5128,8 +5263,8 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"missing archive entry: {member}", result.stderr)
 
-    def test_release_1_5_0_and_simplification_1_3_0_are_aligned(self) -> None:
-        full_version = "1.5.0"
+    def test_release_1_5_1_and_simplification_1_3_0_are_aligned(self) -> None:
+        full_version = "1.5.1"
         simplification_version = "1.3.0"
 
         for relative in (
@@ -5326,8 +5461,8 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertIn(expected_cause, results[0])
 
         for relative, constant_name, expected_value in (
-            ("scripts/package_plugin.py", "VERSION", "1.5.0"),
-            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.5.0"),
+            ("scripts/package_plugin.py", "VERSION", "1.5.1"),
+            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.5.1"),
             ("skills/material-code-simplification/scripts/simplifyctl.py", "ADAPTER_VERSION", "1.3.0"),
         ):
             for helper in helpers:
@@ -5487,8 +5622,8 @@ class StandalonePackagingTests(unittest.TestCase):
             controller = fixture_root / "skills/material-code-review/scripts/reviewctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.5.0"',
-                '# TOOL_VERSION = "1.5.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.5.1"',
+                '# TOOL_VERSION = "1.5.1"\nTOOL_VERSION = "0.0.0"',
             )
             root_result = self.run_package_validator(fixture_root)
             review_result = self.run_review_validator(fixture_root)
@@ -5504,8 +5639,8 @@ class StandalonePackagingTests(unittest.TestCase):
             packager = fixture_root / "scripts/package_plugin.py"
             self.replace_once(
                 packager,
-                'VERSION = "1.5.0"',
-                'VERSION = "1.5.0"\nif True:\n    VERSION = "1.5.0"',
+                'VERSION = "1.5.1"',
+                'VERSION = "1.5.1"\nif True:\n    VERSION = "1.5.1"',
             )
             result = self.run_package_validator(fixture_root)
             self.assertNotEqual(result.returncode, 0)
@@ -5520,8 +5655,8 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.5.0"',
-                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.5.0"',
+                'TOOL_VERSION = "1.5.1"',
+                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.5.1"',
             )
             self.replace_once(
                 adapter,
@@ -5545,8 +5680,8 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.5.0"',
-                '# TOOL_VERSION = "1.5.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.5.1"',
+                '# TOOL_VERSION = "1.5.1"\nTOOL_VERSION = "0.0.0"',
             )
             self.replace_once(
                 adapter,
@@ -5655,6 +5790,308 @@ class StandalonePackagingTests(unittest.TestCase):
                 f"{incomplete_review_archive.name}: missing archive entry {missing_contract}",
                 incomplete_review_result.stderr,
             )
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "case-only collision is a source-checkout packaging fixture",
+    )
+    def test_archive_member_collisions_use_one_portable_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            review_packager = self.load_fixture_module(
+                fixture_root / "scripts/package_plugin.py",
+                "portable_review_packager",
+            )
+            simplification_packager = self.load_fixture_module(
+                fixture_root / "scripts/package_simplification_skill.py",
+                "portable_simplification_packager",
+            )
+            source = fixture_root / "README.md"
+            alias_pairs = (
+                ("Aliases/Readme.txt", "aliases/readme.txt"),
+                ("aliases/Caf\u00e9.txt", "aliases/Cafe\u0301.TXT"),
+                ("aliases/name.txt", "aliases/name.txt. "),
+                ("nested./File.txt", "nested/file.txt"),
+            )
+
+            for index, (first, second) in enumerate(alias_pairs):
+                with self.subTest(builder="review", first=first, second=second):
+                    output = temp_root / f"review-collision-{index}.zip"
+                    with self.assertRaisesRegex(
+                        ValueError, "Portable archive member collision"
+                    ):
+                        review_packager.build_archive(
+                            output,
+                            [(source, first), (source, second)],
+                            "portable collision test",
+                        )
+
+                    single = temp_root / f"review-single-{index}.zip"
+                    review_packager.build_archive(
+                        single,
+                        [(source, first)],
+                        "portable single-name control",
+                    )
+                    with zipfile.ZipFile(single) as archive:
+                        self.assertEqual(archive.namelist(), [first])
+
+                with self.subTest(builder="simplification", first=first, second=second):
+                    output = temp_root / f"simplification-collision-{index}.zip"
+                    checksum = output.with_suffix(".zip.sha256")
+                    output.write_bytes(b"archive sentinel")
+                    checksum.write_bytes(b"checksum sentinel")
+                    with mock.patch.object(
+                        simplification_packager,
+                        "iter_files",
+                        return_value=[(source, first), (source, second)],
+                    ), mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "package_simplification_skill.py",
+                            "--root",
+                            str(fixture_root),
+                            "--output",
+                            str(output),
+                        ],
+                    ):
+                        with self.assertRaisesRegex(
+                            SystemExit, "portable archive member collision"
+                        ):
+                            simplification_packager.main()
+                    self.assertEqual(output.read_bytes(), b"archive sentinel")
+                    self.assertEqual(checksum.read_bytes(), b"checksum sentinel")
+
+            distinct_first = temp_root / "distinct-first.zip"
+            distinct_second = temp_root / "distinct-second.zip"
+            distinct_entries = [
+                (source, "nested/alpha.txt"),
+                (source, "nested/beta.txt"),
+            ]
+            review_packager.build_archive(
+                distinct_first,
+                distinct_entries,
+                "portable distinct control",
+            )
+            review_packager.build_archive(
+                distinct_second,
+                distinct_entries,
+                "portable distinct control",
+            )
+            self.assertEqual(distinct_first.read_bytes(), distinct_second.read_bytes())
+
+            _, full_archive, standalone_archive = self.build_review_archives(
+                temp_root,
+                fixture_root,
+            )
+            simplification_archive = temp_root / "material-simplification.zip"
+            simplification_result = self.run_packager(
+                fixture_root,
+                simplification_archive,
+            )
+            self.assertEqual(
+                simplification_result.returncode,
+                0,
+                simplification_result.stderr,
+            )
+            with zipfile.ZipFile(simplification_archive) as archive:
+                self.assertIn("core/package_layout_contract.py", archive.namelist())
+            self.assertEqual(
+                self.run_simplification_archive_validator(
+                    simplification_archive
+                ).returncode,
+                0,
+            )
+
+            def archive_with_alias_pair(
+                source_archive: Path,
+                destination_archive: Path,
+                first: str,
+                second: str,
+            ) -> None:
+                with zipfile.ZipFile(source_archive) as archive:
+                    members = archive.infolist()
+                    comment = archive.comment
+                    payloads = {
+                        member.filename: archive.read(member)
+                        for member in members
+                    }
+                with zipfile.ZipFile(destination_archive, "w") as archive:
+                    archive.comment = comment
+                    for member in members:
+                        archive.writestr(member, payloads[member.filename])
+                    for name in (first, second):
+                        info = zipfile.ZipInfo(name, date_time=(2026, 7, 30, 0, 0, 0))
+                        info.create_system = 3
+                        info.external_attr = (stat.S_IFREG | 0o644) << 16
+                        archive.writestr(info, b"alias collision\n")
+
+            validator_cases = (
+                (full_archive, False, "review-full"),
+                (standalone_archive, True, "review-standalone"),
+            )
+            for source_archive, standalone, label in validator_cases:
+                first, second = alias_pairs[1]
+                mutated = temp_root / f"{label}-alias.zip"
+                archive_with_alias_pair(source_archive, mutated, first, second)
+                result = self.run_review_archive_validator(
+                    fixture_root,
+                    mutated,
+                    standalone=standalone,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("portable archive member collision", result.stderr)
+                self.assertIn(first, result.stderr)
+                self.assertIn(second, result.stderr)
+
+            first, second = alias_pairs[1]
+            mutated_simplification = temp_root / "simplification-alias.zip"
+            archive_with_alias_pair(
+                simplification_archive,
+                mutated_simplification,
+                first,
+                second,
+            )
+            result = self.run_simplification_archive_validator(
+                mutated_simplification
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("portable archive member collision", result.stderr)
+            self.assertIn(first, result.stderr)
+            self.assertIn(second, result.stderr)
+
+    def test_schema_local_reference_closure_uses_source_and_archived_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            contract = self.load_fixture_module(
+                fixture_root
+                / "skills/material-code-review/scripts/package_layout_contract.py",
+                "schema_reference_contract",
+            )
+
+            closed_document = {
+                "$defs": {"a/b": {"~key": [{"type": "string"}]}},
+                "allOf": [
+                    {"$ref": "#"},
+                    {"$ref": "#/$defs/a~1b/~0key/0"},
+                    {"$ref": "#/$defs/a~1b/~0key/0"},
+                ],
+                "nonsemantic": {"accepted": True},
+            }
+            self.assertEqual(
+                contract.local_schema_reference_errors(closed_document, "closed.json"),
+                [],
+            )
+
+            invalid_documents = (
+                ({"$ref": "#/$defs/missing"}, "missing object key"),
+                ({"$defs": {}, "$ref": "#/$defs/bad~2token"}, "invalid JSON Pointer escape"),
+                ({"items": [], "$ref": "#/items/not-an-index"}, "invalid array index"),
+                ({"items": [], "$ref": "#/items/0"}, "array index out of range"),
+                ({"value": 1, "$ref": "#/value/child"}, "cannot traverse scalar"),
+                ({"$ref": "#/%24defs/item"}, "malformed percent-free local JSON Pointer"),
+                ({"$ref": "https://example.invalid/schema"}, "nonlocal references are unsupported"),
+                ({"$ref": "file:///tmp/schema.json"}, "nonlocal references are unsupported"),
+                ({"$ref": "other.schema.json#/$defs/item"}, "nonlocal references are unsupported"),
+                ({"$ref": 7}, "reference must be a string"),
+            )
+            for document, expected_error in invalid_documents:
+                with self.subTest(expected_error=expected_error):
+                    errors = contract.local_schema_reference_errors(
+                        document,
+                        "invalid.json",
+                    )
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("invalid.json: #/$ref", errors[0])
+                    self.assertIn(expected_error, errors[0])
+
+            candidate_path = (
+                fixture_root
+                / "skills/material-code-review/schemas/candidate-set-v4.schema.json"
+            )
+            candidate_document = json.loads(candidate_path.read_text(encoding="utf-8"))
+            candidate_document["$defs"].pop("identifier")
+            candidate_path.write_text(
+                json.dumps(candidate_document, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            source_result = self.run_package_validator(fixture_root)
+            self.assertNotEqual(source_result.returncode, 0)
+            self.assertIn("candidate-set-v4.schema.json", source_result.stderr)
+            self.assertIn("#/$defs/identifier", source_result.stderr)
+            self.assertIn("missing object key 'identifier'", source_result.stderr)
+
+            fixture_root = self.create_full_plugin_fixture(temp_root / "archive-fixture")
+            _, full_archive, standalone_archive = self.build_review_archives(
+                temp_root / "archive-fixture",
+                fixture_root,
+            )
+            simplification_archive = temp_root / "schema-simplification.zip"
+            package_result = self.run_packager(
+                fixture_root,
+                simplification_archive,
+            )
+            self.assertEqual(package_result.returncode, 0, package_result.stderr)
+
+            valid_candidate = json.loads(
+                (
+                    fixture_root
+                    / "skills/material-code-review/schemas/candidate-set-v4.schema.json"
+                ).read_text(encoding="utf-8")
+            )
+            valid_candidate["$defs"].pop("identifier")
+            invalid_candidate_bytes = (
+                json.dumps(valid_candidate, indent=2) + "\n"
+            ).encode("utf-8")
+
+            review_archive_cases = (
+                (
+                    full_archive,
+                    "skills/material-code-review/schemas/candidate-set-v4.schema.json",
+                    False,
+                    "mutated-full-schema.zip",
+                ),
+                (
+                    standalone_archive,
+                    "schemas/candidate-set-v4.schema.json",
+                    True,
+                    "mutated-standalone-schema.zip",
+                ),
+            )
+            for source_archive, entry, standalone, name in review_archive_cases:
+                mutated = temp_root / name
+                self.rewrite_archive_entry(
+                    source_archive,
+                    mutated,
+                    entry,
+                    invalid_candidate_bytes,
+                )
+                result = self.run_review_archive_validator(
+                    fixture_root,
+                    mutated,
+                    standalone=standalone,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(entry, result.stderr)
+                self.assertIn("#/$defs/identifier", result.stderr)
+                self.assertIn("missing object key 'identifier'", result.stderr)
+
+            mutated_simplification = temp_root / "mutated-simplification-schema.zip"
+            self.rewrite_archive_entry(
+                simplification_archive,
+                mutated_simplification,
+                "core/schemas/candidate-set-v4.schema.json",
+                invalid_candidate_bytes,
+            )
+            result = self.run_simplification_archive_validator(
+                mutated_simplification
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("core/schemas/candidate-set-v4.schema.json", result.stderr)
+            self.assertIn("#/$defs/identifier", result.stderr)
+            self.assertIn("missing object key 'identifier'", result.stderr)
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,

@@ -52,27 +52,33 @@ A `pass` cites the manifest-to-archive closure and the remove-one negative contr
 
 ## `normative_workflow_coherence`
 
-**Positive trigger:** changed procedures, command sequences, lifecycle states, prerequisites, or canonical workflow prose can change the permitted order of operations.
+**Positive trigger:** changed procedures, command sequences, lifecycle states, prerequisites, mode-selection branches, configuration or client dependencies, or canonical workflow prose can change the permitted order of operations or make a disabled subsystem block otherwise permitted behavior.
 
-**Non-trigger evidence:** every named step exists, prerequisites precede dependent steps, paired controls preserve mandatory gates, and repeated canonical wording agrees.
+**Non-trigger evidence:** every named step exists, prerequisites precede dependent steps, paired controls preserve mandatory gates, repeated canonical wording agrees, and either no optional or disabled subsystem boundary exists or disabled-subsystem configuration and client setup remain behind the applicable mode branch.
 
 **Required lens:** `standards_alignment`.
 
-**Required checks:** `normative_sequence`, `prerequisite_before_dependent_step`, `paired_control`.
+**Required checks:** `normative_sequence`, `prerequisite_before_dependent_step`, `paired_control`, `disabled_mode_dependency_boundary`.
 
 A `pass` cites the complete ordered sequence and its prerequisite control. `finding_emitted` points to the local omission or ordering finding. `blocked` identifies the missing canonical owner or conflicting authority.
 
+`disabled_mode_dependency_boundary` traces configuration loading, parsing, validation, and external-client setup on every path before and after the mode-selection branch. A `pass` cites the branch and a malformed-or-missing disabled-subsystem configuration control that still permits unrelated local behavior, or cites an explicit canonical contract requiring global validation. If the reviewed workflow has no optional or disabled subsystem boundary, a `pass` names the inspected entry points and explains why the check is not applicable. `finding_emitted` identifies the disabled-subsystem dependency that blocks an otherwise permitted path. `blocked` names the unavailable mode branch, configuration owner, or negative control.
+
 ## `user_selectable_output_paths`
 
-**Positive trigger:** changed behavior writes authoritative or auxiliary artifacts to a user-selectable destination, including a pre-existing destination that gains a writer, cleanup target, or write-order dependency.
+**Positive trigger:** changed behavior writes authoritative or auxiliary artifacts to a user-selectable local destination or selects a local or remote logical target at runtime, including a pre-existing destination or target that gains a writer, cleanup target, or write-order dependency.
 
-**Non-trigger evidence:** resolved destinations, aliases, writers, cleanup behavior, and success/failure ordering show no new collision or data-loss opportunity.
+**Non-trigger evidence:** resolved local and remote targets, applicable filesystem aliases, every runtime writer and cleanup target, ownership or precedence, cleanup behavior, and success/failure ordering show no new collision, retargeting, or data-loss opportunity.
 
 **Required lens:** `reliability`.
 
-**Required checks:** `destination_collision`, `writer_cleanup_order`.
+**Required checks:** `destination_collision`, `canonical_filesystem_identity`, `runtime_writer_target_inventory`, `writer_cleanup_order`.
 
-A `pass` cites resolved destination identities and both ordering paths. `finding_emitted` points to the local collision or cleanup finding. `blocked` names the unresolved platform alias or unavailable writer path.
+`destination_collision` covers direct configured or resolved collisions. `writer_cleanup_order` covers write, delete, success, and failure sequencing. A `pass` cites resolved destination identities and both ordering paths. `finding_emitted` points to the local collision or cleanup finding. `blocked` names the unresolved direct destination or unavailable ordering path.
+
+`canonical_filesystem_identity` compares every applicable local destination using exact spelling, platform case folding, Unicode normalization, symlink or same-file resolution, and parent-child containment. A `pass` identifies the applicable identity classes and cites accepted and rejected alias controls. If no local destination is selected, a `pass` names the inspected runtime target selection and explains why no filesystem identity class applies. An applicable class that cannot be inspected or simulated is `blocked`, even when another destination collision has already emitted a finding.
+
+`runtime_writer_target_inventory` enumerates every authoritative and auxiliary writer, cleanup target, retained or discovered artifact that can become an input or writer, and local or remote logical target selected at runtime. A `pass` cites the complete runtime inventory and proves unique ownership or explicit precedence for every target. `finding_emitted` identifies the conflicting runtime writers or target owners. `blocked` names the unresolved runtime selection or retained-artifact path.
 
 ## `persisted_config_semantics`
 

@@ -395,6 +395,7 @@
         "SKILL.md"
       ],
       "expected_checks": [
+        "disabled_mode_dependency_boundary",
         "normative_sequence",
         "paired_control",
         "prerequisite_before_dependent_step"
@@ -533,6 +534,7 @@
             ],
             "required_lens": "standards_alignment",
             "required_checks": [
+              "disabled_mode_dependency_boundary",
               "normative_sequence",
               "paired_control",
               "prerequisite_before_dependent_step"
@@ -661,6 +663,14 @@
           "review_mode": "subagent",
           "check_results": [
             {
+              "check_code": "disabled_mode_dependency_boundary",
+              "outcome": "pass",
+              "evidence": [
+                "The inspected workflow has no optional or disabled subsystem boundary."
+              ],
+              "finding_local_ids": []
+            },
+            {
               "check_code": "normative_sequence",
               "outcome": "finding_emitted",
               "evidence": [
@@ -741,6 +751,7 @@
           "name": "omitted-check",
           "target_assignment_id": "assignment-obligation-unit-001-normative-workflow-coherence",
           "mutation": "omitted_check",
+          "check_code": "disabled_mode_dependency_boundary",
           "expected_error": "required checks must equal"
         },
         {
@@ -1937,6 +1948,403 @@
           "name": "closure-bypass",
           "target_assignment_id": "assignment-obligation-unit-001-distribution-contract-integrity",
           "mutation": "semantic_bypass",
+          "expected_error": "requires evidence"
+        }
+      ]
+    },
+    {
+      "case_id": "output-target-identity-and-runtime-ownership",
+      "risk_code": "user_selectable_output_paths",
+      "changed_paths": [
+        "writers.py"
+      ],
+      "context_paths": [
+        "runtime_config.py"
+      ],
+      "expected_checks": [
+        "canonical_filesystem_identity",
+        "destination_collision",
+        "runtime_writer_target_inventory",
+        "writer_cleanup_order"
+      ],
+      "expected_defect": "Resolved destination identity and runtime writer selection do not preserve unique target ownership.",
+      "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+      "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v3",
+        "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Review runtime writer selection and output-target ownership.",
+            "primary_paths": [
+              "writers.py"
+            ],
+            "context_paths": [
+              "runtime_config.py"
+            ],
+            "risk_codes": [
+              "user_selectable_output_paths"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The changed writer selects local and remote logical targets from frozen runtime configuration.",
+                "evidence_paths": [
+                  "writers.py"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The frozen case does not alter package composition or shipped references."
+              },
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The frozen case consumes an established runtime configuration contract."
+              },
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The frozen case does not alter workflow ordering or mode dependencies."
+              },
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The frozen case does not alter accepted persisted shapes or migration behavior."
+              },
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The frozen case does not alter a validator, parser, or enforcement mechanism."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ]
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The controlled obligation provides the bounded reliability review."
+                ]
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ]
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ]
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ]
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ]
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ]
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ]
+              }
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-user-selectable-output-paths",
+            "unit_id": "unit-001",
+            "risk_code": "user_selectable_output_paths",
+            "canonical_owner": "writers.py",
+            "affected_consumers": [
+              "runtime_config.py"
+            ],
+            "evidence_paths": [
+              "runtime_config.py",
+              "writers.py"
+            ],
+            "required_lens": "reliability",
+            "required_checks": [
+              "canonical_filesystem_identity",
+              "destination_collision",
+              "runtime_writer_target_inventory",
+              "writer_cleanup_order"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-user-selectable-output-paths",
+            "unit_id": "unit-001",
+            "risk_code": "user_selectable_output_paths",
+            "lens_id": "reliability",
+            "reviewer_id": "reviewer-output-targets",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent"
+          }
+        ],
+        "depth": "auto"
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v4",
+          "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "writers.py"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v4",
+          "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "writers.py"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v4",
+          "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "writers.py"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v4",
+          "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "assignment_kind": "obligation",
+          "lens_id": "reliability",
+          "reviewer_id": "reviewer-output-targets",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "canonical_filesystem_identity",
+              "outcome": "pass",
+              "evidence": [
+                "Accepted and rejected filesystem aliases were compared against the frozen writer boundary."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "destination_collision",
+              "outcome": "pass",
+              "evidence": [
+                "Direct configured and resolved destinations are distinct."
+              ],
+              "finding_local_ids": []
+            },
+            {
+              "check_code": "runtime_writer_target_inventory",
+              "outcome": "finding_emitted",
+              "evidence": [
+                "Two runtime-selected writers claim the same resolved logical target without precedence."
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "writer_cleanup_order",
+              "outcome": "pass",
+              "evidence": [
+                "Success and failure cleanup ordering preserves each independently owned target."
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "Runtime writers do not preserve unique target ownership.",
+              "nature": "defect",
+              "category": "api_contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "writers.py",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "writers.py"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "A later writer can replace an authoritative artifact or retarget a remote logical output.",
+              "trigger_conditions": "Select two runtime writers whose resolved target ownership overlaps.",
+              "counterevidence_checked": [
+                "Distinct-target controls preserve independent outputs."
+              ],
+              "why_not_preference": "Unique target ownership is required to prevent overwrite or retargeting.",
+              "proposed_resolution": "Inventory runtime targets and enforce unique ownership or explicit precedence.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "runtime_config.py",
+              "writers.py"
+            ],
+            "areas": [
+              "reliability"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-user-selectable-output-paths"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-canonical-filesystem-identity",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "omitted_check",
+          "check_code": "canonical_filesystem_identity",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-runtime-writer-target-inventory",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "blocked_result",
+          "check_code": "runtime_writer_target_inventory",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "empty-destination-evidence",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "semantic_bypass",
+          "check_code": "destination_collision",
           "expected_error": "requires evidence"
         }
       ]

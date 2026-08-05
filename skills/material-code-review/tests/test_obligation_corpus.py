@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from obligation_contract import (  # noqa: E402
     ObligationContractError,
+    RISK_REQUIREMENTS,
     validate_assignment_result,
     validate_coverage_contract,
 )
@@ -138,19 +139,38 @@ class ObligationCorpusTest(unittest.TestCase):
             if item["assignment_id"] == mutation["target_assignment_id"]
         )
         mutation_type = mutation["mutation"]
+        check_code = mutation.get("check_code")
+
+        def selected_check() -> dict:
+            if check_code is None:
+                return target["check_results"][0]
+            return next(
+                item
+                for item in target["check_results"]
+                if item["check_code"] == check_code
+            )
+
         if mutation_type == "wrong_lens":
             target["lens_id"] = "correctness"
         elif mutation_type == "omitted_check":
-            target["check_results"].pop()
+            if check_code is None:
+                target["check_results"].pop()
+            else:
+                target["check_results"] = [
+                    item
+                    for item in target["check_results"]
+                    if item["check_code"] != check_code
+                ]
         elif mutation_type == "compound_assignment":
             target["obligation_id"] = [target["obligation_id"], "another-obligation"]
         elif mutation_type == "blocked_result":
-            target["check_results"][0]["outcome"] = "blocked"
-            target["check_results"][0]["finding_local_ids"] = []
+            check = selected_check()
+            check["outcome"] = "blocked"
+            check["finding_local_ids"] = []
         elif mutation_type == "stale_context":
             target["coverage_context_hash"] = "0" * 64
         elif mutation_type == "semantic_bypass":
-            target["check_results"][0]["evidence"] = []
+            selected_check()["evidence"] = []
         else:
             self.fail(f"Unknown corpus mutation: {mutation_type}")
 
@@ -185,6 +205,7 @@ class ObligationCorpusTest(unittest.TestCase):
                 "path-schema-runtime-disagreement",
                 "duplicate-required-risk-code",
                 "archive-missing-contract",
+                "output-target-identity-and-runtime-ownership",
             },
         )
         for case in self.cases:
@@ -206,6 +227,22 @@ class ObligationCorpusTest(unittest.TestCase):
                     set(case["expected_checks"]),
                 )
                 self.assertTrue(case["expected_defect"])
+
+    def test_changed_risk_contracts_have_exact_corpus_coverage(self) -> None:
+        cases_by_risk = {
+            case["risk_code"]: case
+            for case in self.corpus["cases"]
+        }
+        for risk_code in (
+            "normative_workflow_coherence",
+            "user_selectable_output_paths",
+        ):
+            with self.subTest(risk_code=risk_code):
+                self.assertIn(risk_code, cases_by_risk)
+                self.assertEqual(
+                    set(cases_by_risk[risk_code]["expected_checks"]),
+                    set(RISK_REQUIREMENTS[risk_code]["required_checks"]),
+                )
 
     def test_positive_corpus_uses_complete_v4_candidate_contract(self) -> None:
         schema = json.loads(

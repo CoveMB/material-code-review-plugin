@@ -133,11 +133,17 @@ class DiscoveryContractTests(unittest.TestCase):
                 "normative_sequence",
                 "prerequisite_before_dependent_step",
                 "paired_control",
+                "disabled_mode_dependency_boundary",
+                "no optional or disabled subsystem boundary",
             ),
             "user_selectable_output_paths": (
                 "reliability",
                 "destination_collision",
+                "canonical_filesystem_identity",
+                "runtime_writer_target_inventory",
                 "writer_cleanup_order",
+                "local or remote logical target selected at runtime",
+                "no local destination is selected",
             ),
             "persisted_config_semantics": (
                 "migration_data_safety",
@@ -156,6 +162,13 @@ class DiscoveryContractTests(unittest.TestCase):
 
         self.assertIn("Filenames are discovery hints only", guidance)
         self.assertIn("does not prove reviewer cognition", guidance)
+
+        skill = self.read("SKILL.md")
+        reviewer = self.read("references/reviewer-template.md")
+        for text in (skill, reviewer):
+            self.assertIn("Each outcome accounts only for its named check", text)
+            self.assertIn("A finding on one check does not complete another required check", text)
+            self.assertIn("coverage.limitations", text)
 
     def test_reviewer_template_requires_assignment_matched_v4_output(self) -> None:
         reviewer = self.read("references/reviewer-template.md")

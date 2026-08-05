@@ -14,10 +14,11 @@ from static_version_contract import (  # noqa: E402
     validate_static_version_declaration,
 )
 from package_layout_contract import (  # noqa: E402
+    local_schema_reference_errors,
     normalize_package_path,
     schema_version_is_supported,
 )
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -324,6 +325,7 @@ def main() -> int:
             continue
         if data.get("type") != "object" or data.get("additionalProperties") is not False:
             errors.append(f"schema must be object and fail closed: {path.name}")
+        errors.extend(local_schema_reference_errors(data, path.name))
     yaml = ROOT / "agents/openai.yaml"
     if yaml.is_file():
         text = yaml.read_text(encoding="utf-8")

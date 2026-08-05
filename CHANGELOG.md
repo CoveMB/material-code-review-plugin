@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1 — 2026-08-04
+
+- Corrected checkpoint/v4 recovery to use conditional symbolic-HEAD/ref transactions and the canonical index lock; existing-path worktree replacement or deletion now fails closed for manual reconciliation instead of relying on an observation followed by unconditional writes.
+- Required full-plugin and standalone material-review ZIP members to declare Unix regular-file metadata; validators now reject non-Unix, legacy permission-only, symlink, directory, and special-file member metadata.
+- Added the required `disabled_mode_dependency_boundary`, `canonical_filesystem_identity`, and `runtime_writer_target_inventory` checks under their existing controlled risks.
+- Required each outcome to account only for its named check; unresolved applicable evidence must be `blocked` and cannot be hidden only in `coverage.limitations` or another check's finding.
+- Kept material-review state/v4, coverage-plan/v3, candidate-set/v4, candidates-normalized/v4, adjudication/v4, and ledger/v4 unchanged; recorded 1.5.0 plans missing the exact new check set are not backfilled and must restart for forward work.
+- Kept standalone material simplification at adapter/archive 1.3.0 while updating its embedded shared-controller/helper provenance to 1.5.1.
+- Added deterministic controller and corpus regressions for omitted atomic checks; these enforce routing and accounting but do not prove live reviewer cognition or superiority.
+
 ## 1.5.0 — 2026-08-03
 
 - Added state/v4, coverage-plan/v3, candidate-set/v4, and candidates-normalized/v4 with exhaustive selected-or-rejected classification and assignment-bound dispatch for eight controlled specialist lenses.

@@ -28,10 +28,13 @@ from static_version_contract import (  # noqa: E402
 )
 from package_layout_contract import (  # noqa: E402
     is_safe_relative_package_path,
+    local_schema_reference_errors,
     normalize_package_path,
+    portable_archive_member_key,
+    regular_zip_member_metadata_error,
     schema_version_is_supported,
 )
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -1576,6 +1579,11 @@ def check_source_package(
                 fail(errors, f"{path.relative_to(root)} schema root must be object")
             if data.get("additionalProperties") is not False:
                 fail(errors, f"{path.relative_to(root)} must set additionalProperties=false")
+            for reference_error in local_schema_reference_errors(
+                data,
+                path.relative_to(root).as_posix(),
+            ):
+                fail(errors, reference_error)
 
     for path in iter_files(root):
         relative_path = path.relative_to(root).as_posix()
@@ -1661,29 +1669,47 @@ def check_zip(
             if resource_error is not None:
                 fail(errors, resource_error)
                 return errors
-            raw_names = [
-                member.filename
-                for member in members
-                if not member.filename.endswith("/")
-            ]
             archive_entries = []
             archive_paths_safe = True
-            for raw_name in raw_names:
+            for member in members:
+                raw_name = member.filename
                 canonical_name = PurePosixPath(raw_name.replace("\\", "/")).as_posix()
-                archive_entries.append((raw_name, canonical_name))
+                archive_entries.append((member, raw_name, canonical_name))
                 if raw_name != canonical_name:
                     archive_paths_safe = False
                     fail(errors, f"{path.name}: noncanonical archive path {raw_name}")
 
-            canonical_names = [canonical for _, canonical in archive_entries]
+            canonical_names = [canonical for _, _, canonical in archive_entries]
             if len(canonical_names) != len(set(canonical_names)):
                 archive_paths_safe = False
                 fail(errors, f"{path.name}: duplicate archive entries")
-            for raw_name, canonical_name in archive_entries:
+            portable_names: dict[str, str] = {}
+            for member, raw_name, canonical_name in archive_entries:
                 rel = PurePosixPath(canonical_name)
                 if not is_safe_relative_package_path(raw_name):
                     archive_paths_safe = False
                     fail(errors, f"{path.name}: unsafe archive path {raw_name}")
+                metadata_error = regular_zip_member_metadata_error(
+                    member.create_system,
+                    member.external_attr,
+                )
+                if metadata_error is not None:
+                    archive_paths_safe = False
+                    fail(
+                        errors,
+                        f"{path.name}: archive member {raw_name}: {metadata_error}",
+                    )
+                portable_key = portable_archive_member_key(canonical_name)
+                prior_name = portable_names.get(portable_key)
+                if prior_name is not None and prior_name != canonical_name:
+                    archive_paths_safe = False
+                    fail(
+                        errors,
+                        f"{path.name}: portable archive member collision: "
+                        f"{prior_name} and {canonical_name}",
+                    )
+                else:
+                    portable_names[portable_key] = canonical_name
                 if any(part in FORBIDDEN_PARTS for part in rel.parts) or rel.suffix in FORBIDDEN_SUFFIXES:
                     archive_paths_safe = False
                     fail(errors, f"{path.name}: forbidden archive entry {raw_name}")
@@ -1695,7 +1721,7 @@ def check_zip(
                     )
             names = {
                 canonical_name
-                for raw_name, canonical_name in archive_entries
+                for _, raw_name, canonical_name in archive_entries
                 if raw_name == canonical_name
             }
             required = (
@@ -1789,6 +1815,37 @@ def check_zip(
                 )
                 if workflow_error is not None:
                     fail(errors, workflow_error)
+            if layout is not None and archive_paths_safe:
+                schema_destinations = sorted(
+                    mapping["destination"]
+                    for mapping in layout["required_mappings"]
+                    if mapping["source"].startswith(
+                        "skills/material-code-review/schemas/"
+                    )
+                    and mapping["source"].endswith(".json")
+                )
+                for schema_destination in schema_destinations:
+                    if schema_destination not in names:
+                        continue
+                    try:
+                        schema_document = json.loads(
+                            read_bounded_archive_member(
+                                zf,
+                                schema_destination,
+                                path.name,
+                            )
+                        )
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        fail(
+                            errors,
+                            f"{path.name}:{schema_destination}: invalid schema JSON",
+                        )
+                        continue
+                    for reference_error in local_schema_reference_errors(
+                        schema_document,
+                        f"{path.name}:{schema_destination}",
+                    ):
+                        fail(errors, reference_error)
             bad_prefixes = {name.split("/", 1)[0] for name in names if name.startswith("material-code-review-plugin/")}
             if bad_prefixes:
                 fail(errors, f"{path.name}: archive has an unwanted wrapper directory")

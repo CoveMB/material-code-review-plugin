@@ -22,6 +22,8 @@ The Codex plugin is skill-only: it does not require an app, MCP server, OAuth co
 
 The artifact version split is deliberate: current material review state/v4 uses coverage-plan/v3, candidate-set/v4, candidates-normalized/v4, adjudication/v4, and ledger/v4. Material-review state/v1 through state/v3 are historical bounded contracts; they are not inferred, backfilled, renumbered, rehashed, or rewritten, and remain observation/restoration-only. Explicitly profiled material simplification state/v1 remains on candidates-normalized/v1, adjudication/v3, and ledger/v3 and never selects obligation or specialist semantics.
 
+Version 1.5.1 requires independent evidence for `disabled_mode_dependency_boundary`, `canonical_filesystem_identity`, and `runtime_writer_target_inventory` under their existing controlled risks. A recorded 1.5.0 coverage plan that lacks the exact new check set is not backfilled or granted new authority; forward work must restart in a fresh 1.5.1 run. Existing bounded observation and checkpointed restoration remain available.
+
 ## Invocation and activation boundary
 
 Explicit invocation with `$material-code-review` is always available and remains the most deterministic option. It supports the existing uncommitted, branch, local ref-range, and locally aligned PR scopes. If the skill is explicitly invoked for an unsupported non-Git object, it reports the mismatch and stops instead of silently becoming a document-review, output-diagnosis, architecture, or planning workflow.
@@ -69,7 +71,7 @@ The controller uses only the Python standard library.
 Extract the archive first:
 
 ```bash
-unzip material-code-review-plugin-1.5.0.zip -d material-code-review-plugin
+unzip material-code-review-plugin-1.5.1.zip -d material-code-review-plugin
 ```
 
 Register the extracted directory as a local Codex marketplace:
@@ -97,7 +99,7 @@ Use the smaller archive for direct Codex skill installation:
 
 ```bash
 mkdir -p "$HOME/.agents/skills/material-code-review"
-unzip material-code-review-codex-skill-1.5.0.zip \
+unzip material-code-review-codex-skill-1.5.1.zip \
   -d "$HOME/.agents/skills/material-code-review"
 ```
 
@@ -128,7 +130,7 @@ unzip material-code-simplification-codex-skill-1.3.0.zip \
   -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-Its `core/` directory embeds shared controller and obligation helper 1.5.0 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v4, coverage-plan/v3, candidate-set/v4, assignments, check results, obligations, and specialist policy do not apply to simplification.
+Its `core/` directory embeds shared controller and obligation helper 1.5.1 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v4, coverage-plan/v3, candidate-set/v4, assignments, check results, obligations, and specialist policy do not apply to simplification.
 
 ## Optional project-scoped Codex reviewers
 
@@ -251,6 +253,8 @@ python3 -m unittest discover -s skills/material-code-review/tests -p 'test_*.py'
 
 The package includes lifecycle, boundary, restoration, direction-audit, plan-handoff, simplification, and artifact-integrity tests. Packaging validation also checks the Codex and Claude manifests, skill frontmatter, activation contract, referenced support files, JSON schemas, generated-file hygiene, Python compilation, the Bash wrapper, and all extracted ZIP layouts. These static checks prove that the intended activation contract is packaged and cannot silently drift; they do not prove model-selection behavior. This repository has no behavioral skill-selection evaluation harness, so implicit selection remains model-mediated. A live local install was also validated with **Codex CLI 0.144.5** in an isolated `CODEX_HOME`: marketplace registration, plugin installation, enablement, cache population, and skill-resource discovery all succeeded. The ChatGPT desktop UI was not available in this environment, so desktop-side invocation was not exercised.
 
+Material-review ZIP validation requires every member to use Unix regular-file metadata. Archives from older permission-only writers, non-Unix creator systems, symlinks, directories, and special-file member types are rejected rather than treated as regular files.
+
 ## Maintainer-only version evaluation
 
 From a fresh Codex task opened at this repository root, invoke the repository-local evaluator skill with two distinct material-review refs:
@@ -282,10 +286,10 @@ Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may co
 Packaging produces:
 
 ```text
-material-code-review-plugin-1.5.0.zip
-material-code-review-plugin-1.5.0.zip.sha256
-material-code-review-codex-skill-1.5.0.zip
-material-code-review-codex-skill-1.5.0.zip.sha256
+material-code-review-plugin-1.5.1.zip
+material-code-review-plugin-1.5.1.zip.sha256
+material-code-review-codex-skill-1.5.1.zip
+material-code-review-codex-skill-1.5.1.zip.sha256
 material-code-simplification-codex-skill-1.3.0.zip
 material-code-simplification-codex-skill-1.3.0.zip.sha256
 ```

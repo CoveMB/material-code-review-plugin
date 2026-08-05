@@ -39,4 +39,6 @@ For an obligation assignment, echo its single `obligation_id` and return every r
 - `finding_emitted`: non-empty evidence plus one or more `finding_local_ids` present in this result;
 - `blocked`: non-empty evidence identifying what could not be established. A blocked assignment does not complete the wave.
 
+Each outcome accounts only for its named check. A finding on one check does not complete another required check. If a stated limitation leaves an applicable part of a required check unresolved, that check must be `blocked`; do not record `pass` or hide the unresolved evidence only in `coverage.limitations`.
+
 Core and supplemental assignments return an empty `check_results` array and no `obligation_id`. Specialist assignments also return an empty `check_results` array, echo their exact `unit_ids`, `primary_paths`, and `context_paths`, and name every assigned primary path in `coverage.files_reviewed`. Specialist assignments cannot satisfy core assignments or controlled obligations. An empty `findings` array is valid when the assignment is complete. Never manufacture a finding to demonstrate effort.

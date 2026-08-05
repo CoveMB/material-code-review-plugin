@@ -73,7 +73,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" --help
 
 The control tool requires Python 3.10 or newer and uses only the standard library. It writes runs below `git rev-parse --git-path material-code-review` unless `--artifact-root` is explicitly supplied. A custom artifact root must be outside the worktree or inside the active Git directory.
 
-New material-review runs use `material-review/state/v4` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v3`, `material-review/candidate-set/v4`, and `material-review/candidates-normalized/v4` during discovery. Material-review `state/v1`, `state/v2`, and `state/v3` runs are never migrated or backfilled into this lifecycle. They retain only bounded inspection and checkpointed restoration commands; all forward progress requires a new run. Unsupported or contradictory state/profile combinations fail before command dispatch.
+New material-review runs use `material-review/state/v4` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v3`, `material-review/candidate-set/v4`, and `material-review/candidates-normalized/v4` during discovery. A recorded 1.5.0 coverage plan that lacks the exact 1.5.1 required-check set is never migrated or backfilled; it retains bounded inspection and checkpointed restoration, but forward work requires a fresh run. Material-review `state/v1`, `state/v2`, and `state/v3` runs are likewise never migrated or backfilled into this lifecycle. Unsupported or contradictory state/profile combinations fail before command dispatch.
 
 After `init`, preserve the printed run ID in working memory and in `MATERIAL_REVIEW_RUN_ID` when the shell permits:
 
@@ -226,6 +226,8 @@ Each assignment returns one object conforming exactly to `schemas/candidate-set-
 - `pass` requires concrete evidence and no finding IDs;
 - `finding_emitted` requires concrete evidence and one or more local IDs present in the same result;
 - `blocked` identifies missing evidence and leaves the obligation incomplete.
+
+Each outcome accounts only for its named check. A finding on one check does not complete another required check. If a stated limitation leaves an applicable part of a required check unresolved, that check must be `blocked`; do not record `pass` or hide the unresolved evidence only in `coverage.limitations`.
 
 Core, supplemental, and specialist assignments return an empty `check_results` array. Specialist results also echo the assigned `unit_ids`, `primary_paths`, and `context_paths` and must review every assigned primary path. Every result names at least one required path in `coverage.files_reviewed`, even when `findings` is empty. A reviewer may not combine assignments, substitute a lens, or report another assignment's obligation.
 
@@ -447,7 +449,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" start-finding --repo-root . --finding 
 
 Then make only the approved changes. Prefer the smallest root-cause correction, but do not preserve a broken architecture merely to minimize line count. Do not perform opportunistic cleanup.
 
-Execute each approved required test through the control tool so the command, output, timeout, and exit code are durable. Tests are evidence, not edit steps: any workspace, index, HEAD, or refs mutation caused by a test is rejected and restored when safe. Every v4 recovery caller captures the complete observed post-command repository authority and the common recovery engine compares it again before its first repository write. Concurrent drift fails closed with structured recovery evidence for human handling. The tool is not a sandbox; a command runs with the current user's host permissions, so Gate B must review commands for filesystem, network, credential, process, and Git effects:
+Execute each approved required test through the control tool so the command, output, timeout, and exit code are durable. Tests are evidence, not edit steps: any workspace, index, HEAD, or refs mutation caused by a test is rejected and restored only when a proven conditional component boundary is available. V4 recovery uses ordered expected-old transactions for symbolic HEAD and the complete changed-ref set, holds the canonical Git index lock while rechecking semantic index identity, and permits worktree writes only for exclusive creation from an expected-missing path. Git forbids changing symbolic `HEAD` and its current referent in one transaction, so that overlapping referent is conditionally handled after `HEAD`; a later failure may leave extra authority for reconciliation but never overwrites concurrent authority. Existing-path replacement or deletion fails before recovery authority writes and requires manual reconciliation. The tool is not a sandbox; a command runs with the current user's host permissions, so Gate B must review commands for filesystem, network, credential, process, and Git effects:
 
 ```bash
 python3 "$SKILL_DIR/scripts/reviewctl.py" run-test \
@@ -483,7 +485,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" rollback-finding \
   --reason "Targeted test exposed a contract regression."
 ```
 
-Automatic rollback is limited to deltas on the finding's approved paths. If HEAD, refs, the index, or an unrelated path differs from the checkpoint, the controller preserves the repository, writes recovery-conflict evidence, and stops for human reconciliation instead of inferring that the drift belongs to the repair attempt. Do not manually undo a failed attempt when the checkpoint tool can restore it; manual partial reversal is harder to audit.
+Automatic rollback is limited to deltas on the finding's approved paths and to component transitions with a proven conditional primitive. HEAD/ref transactions, cooperative index-lock restoration, and expected-missing worktree creation may proceed; replacing or deleting an existing worktree path does not. Unsupported transitions, unrelated drift, lock contention, or an expected-old mismatch preserve the repository, write recovery evidence, and stop for human reconciliation.
 
 If the workflow must be abandoned or the plan must expand, restore the entire repair layer:
 
@@ -493,7 +495,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" abort-fixes \
   --reason "Repair requires an unapproved schema path."
 ```
 
-This returns the complete saved repository authority to the frozen pre-fix state when the intervening workspace delta is limited to paths authorized anywhere in the approved plan. Ref, HEAD, index, or unrelated-path drift fails closed without a recovery write. Current v4 recovery uses expected-old ref updates and verifies the restored authority afterward. Historical checkpoints remain on their narrower bounded restoration path; missing v4 metadata is never fabricated. Replan and repeat Gate B rather than editing around the boundary.
+This returns the complete saved repository authority only when every required component transition has its approved conditional boundary. Current v4 recovery prepares all worktree actions before authority writes, commits symbolic HEAD and changed refs through ordered expected-old transactions, and holds `index.lock` across semantic verification and index restoration. The current symbolic-HEAD referent is deferred when Git's transaction overlap rule requires it; no global transaction across independently accepted components is claimed. Worktree no-ops and exclusive creation from expected missing are supported; existing-path replacement or deletion fails closed for manual reconciliation. Historical checkpoints remain on their narrower bounded restoration path; missing v4 metadata is never fabricated. Replan and repeat Gate B rather than editing around the boundary.
 
 #### 4.3 Global tests
 
