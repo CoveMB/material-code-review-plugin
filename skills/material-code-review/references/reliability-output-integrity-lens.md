@@ -2,6 +2,8 @@
 
 Use only when the verified root-owned coverage plan assigns `reliability` for a present `user_selectable_output_paths` assessment.
 
+Use the controller-derived obligation `check_contracts`. Return every named `evidence_item` exactly once. In particular, `resolved_identity_matrix`, `writer_inventory`, and `derivation_trace` have `all_required_review_paths` scope: each must cite the complete assignment path set, not merely the files that contain the first apparent writer.
+
 ## Destination inventory
 
 Enumerate authoritative outputs, metadata, splits, reports, debug logs, temporary files, cleanup targets, and publisher artifacts. Trace defaults and every user-selectable override on success and failure paths.

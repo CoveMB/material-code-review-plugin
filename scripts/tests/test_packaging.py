@@ -2663,6 +2663,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 "change-units",
                 "risk-decisions",
                 "obligations",
+                "obligation-check-contracts",
                 "assignments",
                 "limitations",
             },

@@ -32,7 +32,7 @@ For every unit, classify every controlled code in `references/review-obligations
 
 A positive rationale names concrete `evidence_paths` within the unit's primary and frozen context paths. A negative rationale states the checked non-trigger evidence. Filenames are hints only and cannot establish either decision.
 
-Every positive `(unit_id, risk_code)` pair creates exactly one `review_obligation` with the controlled lens and checks. It also creates exactly one obligation assignment. Add the three mandatory core assignments in every plan. Add only the controlled supporting assignments required by a selected risk. Ordinary low-risk plans have three core assignments and no obligations.
+Every positive `(unit_id, risk_code)` pair creates exactly one `review_obligation` with the controlled lens and checks. It also creates exactly one obligation assignment. The controller derives that assignment's `check_contracts`; do not author, weaken, or infer them from filenames. Add the three mandatory core assignments in every plan. Add only the controlled supporting assignments required by a selected risk. Ordinary low-risk plans have three core assignments and no obligations.
 
 ## Exhaustive specialist decisions
 
@@ -46,7 +46,7 @@ Create exactly one specialist assignment per selected lens. Bind it to the exact
 
 ## Dispatch bundle
 
-Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, exact `required_review_paths`, and exact `required_checks`. Include any exact `obligation_id` plus the canonical check definitions, or for a specialist the exact `unit_ids`, paths, and scenario definitions. Supply `schemas/candidate-set-v5.schema.json`. Do not include another assignment's candidate output.
+Give each assignment the frozen scope and context identities, `coverage_plan_hash`, `coverage_context_hash`, exact `assignment_id` and `assignment_kind`, assigned lens and process identity, exact `required_review_paths`, and exact `required_checks`. Include any exact `obligation_id` plus the result of `check_contracts_for_assignment`, or for a specialist the exact `unit_ids`, paths, and scenario definitions. Every obligation contract includes its bounded claim, exact evidence-item codes and path scopes, and countercontrol. Supply `schemas/candidate-set-v5.schema.json`. Do not include another assignment's candidate output.
 
 ## Evidence-side identity
 

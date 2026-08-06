@@ -346,7 +346,26 @@ class ObligationCorpusTest(unittest.TestCase):
         elif mutation_type == "stale_context":
             target["coverage_context_hash"] = "0" * 64
         elif mutation_type == "semantic_bypass":
-            selected_check()["evidence"] = []
+            check = selected_check()
+            if "evidence_items" in check:
+                check["evidence_items"][0]["evidence"] = []
+            else:
+                check["evidence"] = []
+        elif mutation_type == "missing_obligation_evidence_item":
+            check = selected_check()
+            check["evidence_items"] = [
+                item
+                for item in check["evidence_items"]
+                if item["item_code"] != mutation["item_code"]
+            ]
+        elif mutation_type == "shallow_obligation_evidence_paths":
+            check = selected_check()
+            evidence_item = next(
+                item
+                for item in check["evidence_items"]
+                if item["item_code"] == mutation["item_code"]
+            )
+            evidence_item["evidence_paths"] = evidence_item["evidence_paths"][:1]
         elif mutation_type == "omitted_atomic_check":
             target["check_results"] = [
                 item
@@ -421,8 +440,8 @@ class ObligationCorpusTest(unittest.TestCase):
             self.fail(f"Unknown corpus mutation: {mutation_type}")
 
     def assert_negative_mutations_fail_for_case(self, case: dict) -> None:
-        expected_mutations = (
-            {
+        if case.get("mutation_profile") == "atomic_specialist":
+            expected_mutations = {
                 "omitted_atomic_check",
                 "unreviewed_context",
                 "missing_countercontrol_evidence",
@@ -430,8 +449,19 @@ class ObligationCorpusTest(unittest.TestCase):
                 "stale_hashes",
                 "broad_finding_saturation",
             }
-            if case.get("mutation_profile") == "atomic_specialist"
-            else {
+        elif case.get("mutation_profile") == "atomic_obligation":
+            expected_mutations = {
+                "wrong_lens",
+                "omitted_check",
+                "compound_assignment",
+                "blocked_result",
+                "stale_context",
+                "semantic_bypass",
+                "missing_obligation_evidence_item",
+                "shallow_obligation_evidence_paths",
+            }
+        else:
+            expected_mutations = {
                 "wrong_lens",
                 "omitted_check",
                 "compound_assignment",
@@ -439,7 +469,6 @@ class ObligationCorpusTest(unittest.TestCase):
                 "stale_context",
                 "semantic_bypass",
             }
-        )
         self.assertEqual(
             {mutation["mutation"] for mutation in case["negative_mutations"]},
             expected_mutations,

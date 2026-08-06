@@ -318,40 +318,105 @@
             {
               "check_code": "authoritative_parsing",
               "outcome": "finding_emitted",
-              "evidence": [
-                "Observed authoritative_parsing against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "authoritative_source",
+                  "evidence": [
+                    "Observed authoritative_parsing against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                },
+                {
+                  "item_code": "malformed_source_control",
+                  "evidence": [
+                    "Observed authoritative_parsing against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                },
+                {
+                  "item_code": "semantic_parse",
+                  "evidence": [
+                    "Observed authoritative_parsing against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                }
               ],
               "finding_local_ids": [
                 "observed-defect"
-              ],
-              "evidence_paths": [
-                "scripts/package.py",
-                "scripts/validate_version.py"
               ]
             },
             {
               "check_code": "decoy_duplicate_resistance",
               "outcome": "pass",
-              "evidence": [
-                "Observed decoy_duplicate_resistance against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "authoritative_source",
+                  "evidence": [
+                    "Observed decoy_duplicate_resistance against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                },
+                {
+                  "item_code": "decoy_control",
+                  "evidence": [
+                    "Observed decoy_duplicate_resistance against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                },
+                {
+                  "item_code": "decoy_duplicate",
+                  "evidence": [
+                    "Observed decoy_duplicate_resistance against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "scripts/package.py",
-                "scripts/validate_version.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "paired_control",
               "outcome": "pass",
-              "evidence": [
-                "Observed paired_control against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "negative_control",
+                  "evidence": [
+                    "Observed paired_control against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                },
+                {
+                  "item_code": "positive_control",
+                  "evidence": [
+                    "Observed paired_control against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "scripts/package.py",
+                    "scripts/validate_version.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "scripts/package.py",
-                "scripts/validate_version.py"
-              ]
+              "finding_local_ids": []
             }
           ],
           "findings": [
@@ -756,52 +821,132 @@
             {
               "check_code": "disabled_mode_dependency_boundary",
               "outcome": "pass",
-              "evidence": [
-                "The inspected workflow has no optional or disabled subsystem boundary."
+              "evidence_items": [
+                {
+                  "item_code": "configuration_boundary",
+                  "evidence": [
+                    "The inspected workflow has no optional or disabled subsystem boundary."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                },
+                {
+                  "item_code": "disabled_mode_control",
+                  "evidence": [
+                    "The inspected workflow has no optional or disabled subsystem boundary."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                },
+                {
+                  "item_code": "mode_branch",
+                  "evidence": [
+                    "The inspected workflow has no optional or disabled subsystem boundary."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "SKILL.md",
-                "references/workflow.md"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "normative_sequence",
               "outcome": "finding_emitted",
-              "evidence": [
-                "Observed normative_sequence against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "consumer_alignment",
+                  "evidence": [
+                    "Observed normative_sequence against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                },
+                {
+                  "item_code": "ordered_steps",
+                  "evidence": [
+                    "Observed normative_sequence against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                }
               ],
               "finding_local_ids": [
                 "observed-defect"
-              ],
-              "evidence_paths": [
-                "SKILL.md",
-                "references/workflow.md"
               ]
             },
             {
               "check_code": "paired_control",
               "outcome": "pass",
-              "evidence": [
-                "Observed paired_control against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "negative_control",
+                  "evidence": [
+                    "Observed paired_control against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                },
+                {
+                  "item_code": "positive_control",
+                  "evidence": [
+                    "Observed paired_control against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "SKILL.md",
-                "references/workflow.md"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "prerequisite_before_dependent_step",
               "outcome": "pass",
-              "evidence": [
-                "Observed prerequisite_before_dependent_step against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "dependent_step",
+                  "evidence": [
+                    "Observed prerequisite_before_dependent_step against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                },
+                {
+                  "item_code": "missing_prerequisite_control",
+                  "evidence": [
+                    "Observed prerequisite_before_dependent_step against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                },
+                {
+                  "item_code": "prerequisite",
+                  "evidence": [
+                    "Observed prerequisite_before_dependent_step against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "SKILL.md",
+                    "references/workflow.md"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "SKILL.md",
-                "references/workflow.md"
-              ]
+              "finding_local_ids": []
             }
           ],
           "findings": [
@@ -1207,52 +1352,122 @@
             {
               "check_code": "canonical_git_path_language",
               "outcome": "finding_emitted",
-              "evidence": [
-                "Observed canonical_git_path_language against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "accepted_path_control",
+                  "evidence": [
+                    "Observed canonical_git_path_language against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                },
+                {
+                  "item_code": "rejected_path_control",
+                  "evidence": [
+                    "Observed canonical_git_path_language against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                }
               ],
               "finding_local_ids": [
                 "observed-defect"
-              ],
-              "evidence_paths": [
-                "schemas/path.schema.json",
-                "scripts/runtime_validator.py"
               ]
             },
             {
               "check_code": "privileged_field_type_exactness",
               "outcome": "pass",
-              "evidence": [
-                "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "accepted_type_control",
+                  "evidence": [
+                    "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                },
+                {
+                  "item_code": "wrong_type_control",
+                  "evidence": [
+                    "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "schemas/path.schema.json",
-                "scripts/runtime_validator.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "required_value_cardinality",
               "outcome": "pass",
-              "evidence": [
-                "Observed required_value_cardinality against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "missing_or_duplicate_control",
+                  "evidence": [
+                    "Observed required_value_cardinality against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                },
+                {
+                  "item_code": "required_values",
+                  "evidence": [
+                    "Observed required_value_cardinality against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "schemas/path.schema.json",
-                "scripts/runtime_validator.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "schema_runtime_parity",
               "outcome": "pass",
-              "evidence": [
-                "Observed schema_runtime_parity against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "parity_control",
+                  "evidence": [
+                    "Observed schema_runtime_parity against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                },
+                {
+                  "item_code": "runtime_acceptance",
+                  "evidence": [
+                    "Observed schema_runtime_parity against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                },
+                {
+                  "item_code": "schema_acceptance",
+                  "evidence": [
+                    "Observed schema_runtime_parity against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/path.schema.json",
+                    "scripts/runtime_validator.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "schemas/path.schema.json",
-                "scripts/runtime_validator.py"
-              ]
+              "finding_local_ids": []
             }
           ],
           "findings": [
@@ -1657,52 +1872,122 @@
             {
               "check_code": "canonical_git_path_language",
               "outcome": "finding_emitted",
-              "evidence": [
-                "Observed canonical_git_path_language against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "accepted_path_control",
+                  "evidence": [
+                    "Observed canonical_git_path_language against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                },
+                {
+                  "item_code": "rejected_path_control",
+                  "evidence": [
+                    "Observed canonical_git_path_language against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                }
               ],
               "finding_local_ids": [
                 "observed-defect"
-              ],
-              "evidence_paths": [
-                "schemas/coverage.json",
-                "scripts/coverage.py"
               ]
             },
             {
               "check_code": "privileged_field_type_exactness",
               "outcome": "pass",
-              "evidence": [
-                "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "accepted_type_control",
+                  "evidence": [
+                    "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                },
+                {
+                  "item_code": "wrong_type_control",
+                  "evidence": [
+                    "Observed privileged_field_type_exactness against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "schemas/coverage.json",
-                "scripts/coverage.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "required_value_cardinality",
               "outcome": "pass",
-              "evidence": [
-                "Observed required_value_cardinality against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "missing_or_duplicate_control",
+                  "evidence": [
+                    "Observed required_value_cardinality against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                },
+                {
+                  "item_code": "required_values",
+                  "evidence": [
+                    "Observed required_value_cardinality against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "schemas/coverage.json",
-                "scripts/coverage.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "schema_runtime_parity",
               "outcome": "pass",
-              "evidence": [
-                "Observed schema_runtime_parity against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "parity_control",
+                  "evidence": [
+                    "Observed schema_runtime_parity against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                },
+                {
+                  "item_code": "runtime_acceptance",
+                  "evidence": [
+                    "Observed schema_runtime_parity against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                },
+                {
+                  "item_code": "schema_acceptance",
+                  "evidence": [
+                    "Observed schema_runtime_parity against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "schemas/coverage.json",
+                    "scripts/coverage.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "schemas/coverage.json",
-                "scripts/coverage.py"
-              ]
+              "finding_local_ids": []
             }
           ],
           "findings": [
@@ -2104,40 +2389,85 @@
             {
               "check_code": "manifest_reference_closure",
               "outcome": "finding_emitted",
-              "evidence": [
-                "Observed manifest_reference_closure against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "declared_references",
+                  "evidence": [
+                    "Observed manifest_reference_closure against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "package-layouts.json",
+                    "scripts/validate_archive.py"
+                  ]
+                },
+                {
+                  "item_code": "shipped_files",
+                  "evidence": [
+                    "Observed manifest_reference_closure against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "package-layouts.json",
+                    "scripts/validate_archive.py"
+                  ]
+                }
               ],
               "finding_local_ids": [
                 "observed-defect"
-              ],
-              "evidence_paths": [
-                "package-layouts.json",
-                "scripts/validate_archive.py"
               ]
             },
             {
               "check_code": "paired_control",
               "outcome": "pass",
-              "evidence": [
-                "Observed paired_control against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "negative_control",
+                  "evidence": [
+                    "Observed paired_control against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "package-layouts.json",
+                    "scripts/validate_archive.py"
+                  ]
+                },
+                {
+                  "item_code": "positive_control",
+                  "evidence": [
+                    "Observed paired_control against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "package-layouts.json",
+                    "scripts/validate_archive.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "package-layouts.json",
-                "scripts/validate_archive.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "remove_one_required_entry",
               "outcome": "pass",
-              "evidence": [
-                "Observed remove_one_required_entry against the frozen positive and negative controls."
+              "evidence_items": [
+                {
+                  "item_code": "complete_layout_control",
+                  "evidence": [
+                    "Observed remove_one_required_entry against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "package-layouts.json",
+                    "scripts/validate_archive.py"
+                  ]
+                },
+                {
+                  "item_code": "missing_entry_control",
+                  "evidence": [
+                    "Observed remove_one_required_entry against the frozen positive and negative controls."
+                  ],
+                  "evidence_paths": [
+                    "package-layouts.json",
+                    "scripts/validate_archive.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "package-layouts.json",
-                "scripts/validate_archive.py"
-              ]
+              "finding_local_ids": []
             }
           ],
           "findings": [
@@ -2548,74 +2878,204 @@
             {
               "check_code": "canonical_filesystem_identity",
               "outcome": "pass",
-              "evidence": [
-                "Accepted and rejected filesystem aliases were compared against the frozen writer boundary."
+              "evidence_items": [
+                {
+                  "item_code": "accepted_alias_control",
+                  "evidence": [
+                    "Accepted and rejected filesystem aliases were compared against the frozen writer boundary."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "applicable_identity_classes",
+                  "evidence": [
+                    "Accepted and rejected filesystem aliases were compared against the frozen writer boundary."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "rejected_alias_control",
+                  "evidence": [
+                    "Accepted and rejected filesystem aliases were compared against the frozen writer boundary."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "runtime_config.py",
-                "writers.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "destination_collision",
               "outcome": "pass",
-              "evidence": [
-                "Direct configured and resolved destinations are distinct."
+              "evidence_items": [
+                {
+                  "item_code": "collision_control",
+                  "evidence": [
+                    "Direct configured and resolved destinations are distinct."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "resolved_identity_matrix",
+                  "evidence": [
+                    "Direct configured and resolved destinations are distinct."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "runtime_config.py",
-                "writers.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "runtime_writer_target_inventory",
               "outcome": "finding_emitted",
-              "evidence": [
-                "Two runtime-selected writers claim the same resolved logical target without precedence."
+              "evidence_items": [
+                {
+                  "item_code": "target_ownership",
+                  "evidence": [
+                    "Two runtime-selected writers claim the same resolved logical target without precedence."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "writer_inventory",
+                  "evidence": [
+                    "Two runtime-selected writers claim the same resolved logical target without precedence."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                }
               ],
               "finding_local_ids": [
                 "observed-defect"
-              ],
-              "evidence_paths": [
-                "runtime_config.py",
-                "writers.py"
               ]
             },
             {
               "check_code": "writer_cleanup_order",
               "outcome": "pass",
-              "evidence": [
-                "Success and failure cleanup ordering preserves each independently owned target."
+              "evidence_items": [
+                {
+                  "item_code": "failure_order",
+                  "evidence": [
+                    "Success and failure cleanup ordering preserves each independently owned target."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "success_order",
+                  "evidence": [
+                    "Success and failure cleanup ordering preserves each independently owned target."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                }
               ],
-              "finding_local_ids": [],
-              "evidence_paths": [
-                "runtime_config.py",
-                "writers.py"
-              ]
+              "finding_local_ids": []
             },
             {
               "check_code": "runtime_target_derivation_parity",
               "outcome": "pass",
-              "evidence": [
-                "Validation and execution derive the same collision-adjusted target identity, and the distinct-target control remains accepted."
-              ],
-              "evidence_paths": [
-                "runtime_config.py",
-                "writers.py"
+              "evidence_items": [
+                {
+                  "item_code": "collision_control",
+                  "evidence": [
+                    "Validation and execution derive the same collision-adjusted target identity, and the distinct-target control remains accepted."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "derivation_trace",
+                  "evidence": [
+                    "Validation and execution derive the same collision-adjusted target identity, and the distinct-target control remains accepted."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "equal_identity_control",
+                  "evidence": [
+                    "Validation and execution derive the same collision-adjusted target identity, and the distinct-target control remains accepted."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                }
               ],
               "finding_local_ids": []
             },
             {
               "check_code": "validation_to_mutation_identity_stability",
               "outcome": "pass",
-              "evidence": [
-                "The frozen writer binds the validated identity through mutation and rejects replacement before the final write."
-              ],
-              "evidence_paths": [
-                "runtime_config.py",
-                "writers.py"
+              "evidence_items": [
+                {
+                  "item_code": "identity_binding",
+                  "evidence": [
+                    "The frozen writer binds the validated identity through mutation and rejects replacement before the final write."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "last_validation_boundary",
+                  "evidence": [
+                    "The frozen writer binds the validated identity through mutation and rejects replacement before the final write."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "mutation_sequence",
+                  "evidence": [
+                    "The frozen writer binds the validated identity through mutation and rejects replacement before the final write."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                },
+                {
+                  "item_code": "replacement_control",
+                  "evidence": [
+                    "The frozen writer binds the validated identity through mutation and rejects replacement before the final write."
+                  ],
+                  "evidence_paths": [
+                    "runtime_config.py",
+                    "writers.py"
+                  ]
+                }
               ],
               "finding_local_ids": []
             }
@@ -2702,8 +3162,41 @@
           "mutation": "semantic_bypass",
           "check_code": "destination_collision",
           "expected_error": "requires evidence"
+        },
+        {
+          "name": "omit-destination-collision-control",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "missing_obligation_evidence_item",
+          "check_code": "destination_collision",
+          "item_code": "collision_control",
+          "expected_error": "required evidence items"
+        },
+        {
+          "name": "shallow-destination-identity-matrix",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "shallow_obligation_evidence_paths",
+          "check_code": "destination_collision",
+          "item_code": "resolved_identity_matrix",
+          "expected_error": "all required_review_paths"
+        },
+        {
+          "name": "shallow-runtime-writer-inventory",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "shallow_obligation_evidence_paths",
+          "check_code": "runtime_writer_target_inventory",
+          "item_code": "writer_inventory",
+          "expected_error": "all required_review_paths"
+        },
+        {
+          "name": "shallow-runtime-target-derivation",
+          "target_assignment_id": "assignment-obligation-unit-001-user-selectable-output-paths",
+          "mutation": "shallow_obligation_evidence_paths",
+          "check_code": "runtime_target_derivation_parity",
+          "item_code": "derivation_trace",
+          "expected_error": "all required_review_paths"
         }
-      ]
+      ],
+      "mutation_profile": "atomic_obligation"
     }
   ],
   "low_risk_case": {

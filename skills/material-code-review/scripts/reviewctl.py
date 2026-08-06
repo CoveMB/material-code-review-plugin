@@ -40,6 +40,7 @@ from obligation_contract import (  # noqa: E402
     COVERAGE_PLAN_SCHEMA as OBLIGATION_COVERAGE_PLAN_SCHEMA,
     ObligationContractError,
     canonical_git_path,
+    check_contracts_for_assignment,
     required_assignment_ids,
     scenario_checks_for_assignment,
     validate_assignment_result,
@@ -2808,6 +2809,11 @@ def validate_normalized_candidates_profile(
             raise ReviewError(
                 f"{context}.scenario_checks do not match the coverage plan"
             )
+        expected_check_contracts = check_contracts_for_assignment(plan, assignment)
+        if reviewer_set.get("check_contracts") != expected_check_contracts:
+            raise ReviewError(
+                f"{context}.check_contracts do not match the machine-owned obligation contracts"
+            )
         reviewer_coverage_hash = require_sha256(
             reviewer_set.get("coverage_plan_hash"), f"{context}.coverage_plan_hash"
         )
@@ -4630,6 +4636,7 @@ def validate_candidate_set(
                 "required_review_paths": assignment["required_review_paths"],
                 "required_checks": assignment["required_checks"],
                 "scenario_checks": scenario_checks_for_assignment(plan, assignment),
+                "check_contracts": check_contracts_for_assignment(plan, assignment),
             }
         )
         if obligation is not None:

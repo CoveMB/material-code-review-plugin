@@ -59,6 +59,9 @@ CONTROLLED_WORKFLOW_MARKERS = (
     "scenario_checks",
     "required_review_paths",
     "required_checks",
+    "check_contracts",
+    "evidence_items",
+    "all_required_review_paths",
     "change_units",
     "review_obligations",
     "assignment_id",
@@ -322,7 +325,7 @@ MISSED_CONTRACT_ATTEMPT_POLICY = {
 }
 EVALUATOR_CHALLENGER_CONTRACT = {
     "case": "missed-contracts",
-    "challenger_inputs": "frozen-source,change-units,risk-decisions,obligations,assignments,limitations",
+    "challenger_inputs": "frozen-source,change-units,risk-decisions,obligations,obligation-check-contracts,assignments,limitations",
     "challenger_forbidden": "candidates,candidate-sets,check-results,adjudication,ledgers,plans,expected-roots,variant-identities,refs,private-mapping,other-variant,prior-output",
     "challenger_claim": "declarative-coverage-only",
     "challenger_outcomes": "NO_COVERAGE_GAP,COVERAGE_GAP",
@@ -1192,7 +1195,7 @@ def validate_maintainer_evaluator_challenger(root: Path, errors: list[str]) -> N
             "remains an independent prerequisite",
         ),
         "evaluations/material-code-review/rubric.md": (
-            "audits only the declarative change-unit, risk, obligation, assignment, and limitation bundle",
+            "audits only the declarative change-unit, risk, obligation, obligation-check-contract, assignment, and limitation bundle",
             "independently of the challenger",
         ),
         "EVALUATION.md": (

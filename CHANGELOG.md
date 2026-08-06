@@ -3,7 +3,8 @@
 ## 1.6.0 — 2026-08-05
 
 - Added state/v5, coverage-plan/v4, candidate-set/v5, and candidates-normalized/v5 with explicit change-unit owners/consumers and controller-derived assignment path/check authority.
-- Required every selected specialist to define unique atomic scenario claims, in-unit evidence paths, and countercontrols; specialist and obligation results now return every assigned check exactly once with path-bound evidence, and one finding ID cannot discharge multiple atomic checks.
+- Required every obligation check to use a machine-owned claim, exact evidence items with path scopes, and a countercontrol; output-path collision, writer-inventory, and derivation evidence must cover every required review path.
+- Required every selected specialist to define unique atomic scenario claims, in-unit evidence paths, and countercontrols; specialist and obligation results now return every assigned check exactly once, and one finding ID cannot discharge multiple atomic checks.
 - Replaced free-form material-review limitations with description/check-link objects and made every linked limitation block its named check and the complete write-once candidate wave.
 - Added independent `runtime_target_derivation_parity` and `validation_to_mutation_identity_stability` controls plus repository-neutral causal cases and negative mutations.
 - Bound controller artifact validation and atomic writes to retained no-follow directory identities on supported POSIX and Windows hosts, preserving custom roots and Windows mutation commands while failing before mutation when the complete platform capability is unavailable.

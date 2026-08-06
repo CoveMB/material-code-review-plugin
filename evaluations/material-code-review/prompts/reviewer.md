@@ -26,11 +26,11 @@ Before Gate A in the missed-contracts case, return only:
 
 1. `Frozen context` — scope/context hashes, the exact changed-path/change-unit partition, and change-unit owners and affected consumers when the supplied contract defines them.
 2. `Coverage` — risk decisions, specialist scenario decisions when present, and review obligations with required lenses and checks.
-3. `Assignments` — assignment IDs, kinds, lenses, exact assignment paths and checks, obligation bindings, and declared scenarios when present, without candidate findings or `check_results`.
+3. `Assignments` — assignment IDs, kinds, lenses, exact assignment paths and checks, obligation bindings and machine-owned check contracts, and declared specialist scenarios when present, without candidate findings or `check_results`.
 4. `Limitations` — incomplete, degraded, or unsafe evidence.
 5. `No-mutation attestation` — state that no product edit, repair, or repository mutation was authorized or performed.
 
-Do not include candidate findings, candidate sets, check results, expected roots, variant identity, refs, the other variant, prior output, or any private mapping data. The coverage challenger is root-controlled and its response must never be used as candidate-generation guidance. Its declarative result never replaces later native controller and evaluator-root validation of assignments, obligations, `check_results`, or Gate-A evidence.
+Do not include candidate findings, candidate sets, check results, expected roots, variant identity, refs, the other variant, prior output, or any private mapping data. The coverage challenger is root-controlled and its response must never be used as candidate-generation guidance. Its declarative result never replaces later native controller and evaluator-root validation of assignments, obligations, obligation check contracts, `check_results`, or Gate-A evidence.
 
 ### Gate-A pre-disposition return
 

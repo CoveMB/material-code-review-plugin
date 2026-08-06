@@ -34,6 +34,38 @@ CORE_ASSIGNMENTS = (
 )
 
 
+OUTPUT_PATH_EVIDENCE_ITEMS = {
+    "canonical_filesystem_identity": (
+        "applicable_identity_classes",
+        "accepted_alias_control",
+        "rejected_alias_control",
+    ),
+    "destination_collision": (
+        "resolved_identity_matrix",
+        "collision_control",
+    ),
+    "runtime_target_derivation_parity": (
+        "derivation_trace",
+        "equal_identity_control",
+        "collision_control",
+    ),
+    "runtime_writer_target_inventory": (
+        "writer_inventory",
+        "target_ownership",
+    ),
+    "validation_to_mutation_identity_stability": (
+        "last_validation_boundary",
+        "mutation_sequence",
+        "identity_binding",
+        "replacement_control",
+    ),
+    "writer_cleanup_order": (
+        "success_order",
+        "failure_order",
+    ),
+}
+
+
 def reviewer_identity(name: str) -> dict[str, str]:
     return {
         "reviewer_id": name,
@@ -227,6 +259,71 @@ def make_v4_specialist_plan() -> dict:
         }
     )
     return plan
+
+
+def output_path_candidate(plan: dict) -> tuple[dict, dict, dict]:
+    assignment = next(
+        item for item in plan["assignments"] if item["assignment_kind"] == "obligation"
+    )
+    obligation = plan["review_obligations"][0]
+    required_paths = assignment["required_review_paths"]
+    result = {
+        "schema_version": "material-review/candidate-set/v5",
+        "scope_hash": "a" * 64,
+        "coverage_plan_hash": "b" * 64,
+        "coverage_context_hash": "c" * 64,
+        "assignment_id": assignment["assignment_id"],
+        "assignment_kind": "obligation",
+        "obligation_id": obligation["obligation_id"],
+        "lens_id": assignment["lens_id"],
+        "reviewer_id": assignment["reviewer_id"],
+        "independence_group": assignment["independence_group"],
+        "review_mode": assignment["review_mode"],
+        "check_results": [
+            {
+                "check_code": check_code,
+                "outcome": "pass",
+                "evidence_items": [
+                    {
+                        "item_code": item_code,
+                        "evidence": [
+                            f"Observed {item_code} across the frozen output-target contract."
+                        ],
+                        "evidence_paths": required_paths,
+                    }
+                    for item_code in sorted(item_codes)
+                ],
+                "finding_local_ids": [],
+            }
+            for check_code, item_codes in sorted(OUTPUT_PATH_EVIDENCE_ITEMS.items())
+        ],
+        "findings": [],
+        "coverage": {
+            "files_reviewed": required_paths,
+            "areas": [assignment["lens_id"]],
+            "limitations": [],
+        },
+    }
+    return assignment, obligation, result
+
+
+def obligation_evidence_items(
+    risk_code: str,
+    check_code: str,
+    required_paths: list[str],
+    evidence: str,
+) -> list[dict]:
+    contract = RISK_REQUIREMENTS[risk_code]["check_contracts"][check_code]
+    return [
+        {
+            "item_code": item["item_code"],
+            "evidence": [evidence],
+            "evidence_paths": required_paths,
+        }
+        for item in sorted(
+            contract["evidence_items"], key=lambda item: item["item_code"]
+        )
+    ]
 
 
 def specialist_candidate(plan: dict) -> tuple[dict, dict]:
@@ -460,6 +557,37 @@ class ObligationContractTest(unittest.TestCase):
         for requirement in RISK_REQUIREMENTS.values():
             self.assertTrue(requirement["required_lens"])
             self.assertTrue(requirement["required_checks"])
+            self.assertEqual(
+                set(requirement["check_contracts"]),
+                set(requirement["required_checks"]),
+            )
+            for check_code, contract in requirement["check_contracts"].items():
+                with self.subTest(check_code=check_code):
+                    self.assertEqual(
+                        set(contract),
+                        {"claim", "evidence_items", "countercontrol"},
+                    )
+                    self.assertTrue(contract["claim"])
+                    self.assertTrue(contract["countercontrol"])
+                    self.assertTrue(contract["evidence_items"])
+                    self.assertEqual(
+                        len(contract["evidence_items"]),
+                        len(
+                            {
+                                item["item_code"]
+                                for item in contract["evidence_items"]
+                            }
+                        ),
+                    )
+                    for evidence_item in contract["evidence_items"]:
+                        self.assertEqual(
+                            set(evidence_item),
+                            {"item_code", "path_scope"},
+                        )
+                        self.assertIn(
+                            evidence_item["path_scope"],
+                            {"any_required_review_path", "all_required_review_paths"},
+                        )
         self.assertEqual(
             RISK_REQUIREMENTS["machine_contract_semantics"]["required_checks"],
             frozenset(
@@ -662,6 +790,67 @@ class ObligationContractTest(unittest.TestCase):
                     allowed_context_paths={"runtime.py"},
                 )
 
+    def test_output_path_obligation_accepts_complete_machine_owned_evidence_items(
+        self,
+    ) -> None:
+        plan = validate_coverage_contract(
+            make_plan(
+                risk_code="user_selectable_output_paths",
+                primary_paths=("config.py", "writer.py"),
+                context_paths=("publisher.py", "test_paths.py"),
+            ),
+            changed_paths={"config.py", "writer.py"},
+            allowed_context_paths={"publisher.py", "test_paths.py"},
+        )
+        assignment, obligation, result = output_path_candidate(plan)
+
+        normalized = validate_assignment_result(
+            result,
+            assignment=assignment,
+            obligation=obligation,
+        )
+
+        self.assertEqual(normalized["check_results"], result["check_results"])
+
+    def test_output_path_obligation_rejects_shallow_cross_writer_passes(self) -> None:
+        plan = validate_coverage_contract(
+            make_plan(
+                risk_code="user_selectable_output_paths",
+                primary_paths=("config.py", "writer.py"),
+                context_paths=("publisher.py", "test_paths.py"),
+            ),
+            changed_paths={"config.py", "writer.py"},
+            allowed_context_paths={"publisher.py", "test_paths.py"},
+        )
+        assignment, obligation, result = output_path_candidate(plan)
+
+        for check_code, item_code in (
+            ("destination_collision", "resolved_identity_matrix"),
+            ("runtime_writer_target_inventory", "writer_inventory"),
+            ("runtime_target_derivation_parity", "derivation_trace"),
+        ):
+            invalid = copy.deepcopy(result)
+            check = next(
+                item
+                for item in invalid["check_results"]
+                if item["check_code"] == check_code
+            )
+            evidence_item = next(
+                item
+                for item in check["evidence_items"]
+                if item["item_code"] == item_code
+            )
+            evidence_item["evidence_paths"] = ["config.py"]
+            with self.subTest(check_code=check_code), self.assertRaisesRegex(
+                ObligationContractError,
+                "all required_review_paths",
+            ):
+                validate_assignment_result(
+                    invalid,
+                    assignment=assignment,
+                    obligation=obligation,
+                )
+
     def test_assignment_results_enforce_identity_and_check_outcomes(self) -> None:
         plan = validate_coverage_contract(
             make_plan(),
@@ -688,8 +877,12 @@ class ObligationContractTest(unittest.TestCase):
                 {
                     "check_code": check_code,
                     "outcome": "pass",
-                    "evidence": [f"Observed {check_code} against the frozen contract."],
-                    "evidence_paths": assignment["required_review_paths"],
+                    "evidence_items": obligation_evidence_items(
+                        obligation["risk_code"],
+                        check_code,
+                        assignment["required_review_paths"],
+                        f"Observed {check_code} against the frozen contract.",
+                    ),
                     "finding_local_ids": [],
                 }
                 for check_code in obligation["required_checks"]
@@ -714,7 +907,9 @@ class ObligationContractTest(unittest.TestCase):
         mutations = {
             "assignment identity": lambda value: value.update(reviewer_id="other"),
             "required checks": lambda value: value["check_results"].pop(),
-            "pass requires evidence": lambda value: value["check_results"][0].update(evidence=[]),
+            "pass requires evidence": lambda value: value["check_results"][0][
+                "evidence_items"
+            ][0].update(evidence=[]),
             "finding_emitted requires finding_local_ids": lambda value: value["check_results"][0].update(
                 outcome="finding_emitted", finding_local_ids=[]
             ),
@@ -749,7 +944,6 @@ class ObligationContractTest(unittest.TestCase):
         blocked = copy.deepcopy(result)
         blocked["check_results"][0].update(
             outcome="blocked",
-            evidence=["The comparison-tree schema could not be loaded."],
         )
         self.assertEqual(
             validate_assignment_result(
@@ -800,8 +994,12 @@ class ObligationContractTest(unittest.TestCase):
                         "outcome": (
                             "finding_emitted" if index == 0 else "pass"
                         ),
-                        "evidence": ["The frozen comparison contains a material defect."],
-                        "evidence_paths": assignment["required_review_paths"],
+                        "evidence_items": obligation_evidence_items(
+                            obligation["risk_code"],
+                            check_code,
+                            assignment["required_review_paths"],
+                            "The frozen comparison contains a material defect.",
+                        ),
                         "finding_local_ids": [local_id] if index == 0 else [],
                     }
                     for index, check_code in enumerate(obligation["required_checks"])
@@ -982,6 +1180,21 @@ class ObligationContractTest(unittest.TestCase):
             == "obligation"
         )
         self.assertNotIn("properties", obligation_condition["else"])
+        self.assertEqual(
+            obligation_condition["then"]["properties"]["check_results"]["items"][
+                "$ref"
+            ],
+            "#/$defs/obligationCheckResult",
+        )
+        evidence_item = candidate["$defs"]["evidenceItem"]
+        self.assertEqual(
+            set(evidence_item["required"]),
+            {"item_code", "evidence", "evidence_paths"},
+        )
+        self.assertEqual(
+            set(candidate["$defs"]["obligationCheckResult"]["required"]),
+            {"check_code", "outcome", "evidence_items", "finding_local_ids"},
+        )
         self.assertEqual(candidate_unit_ids["minItems"], 1)
         self.assertIs(candidate_unit_ids["uniqueItems"], True)
         self.assertEqual(candidate_unit_ids["items"]["$ref"], "#/$defs/identifier")
@@ -1030,19 +1243,37 @@ class ObligationContractTest(unittest.TestCase):
                         "material-review/candidate-set/v5",
                     )
                     for check in candidate["check_results"]:
-                        self.assertTrue(check["evidence_paths"])
-                        for evidence in check["evidence"]:
-                            self.assertNotIn(case["expected_defect"], evidence)
+                        self.assertEqual(
+                            set(check),
+                            {
+                                "check_code",
+                                "outcome",
+                                "evidence_items",
+                                "finding_local_ids",
+                            },
+                        )
+                        for evidence_item in check["evidence_items"]:
+                            self.assertTrue(evidence_item["evidence_paths"])
+                            for evidence in evidence_item["evidence"]:
+                                self.assertNotIn(case["expected_defect"], evidence)
+                expected_mutations = {
+                    "wrong_lens",
+                    "omitted_check",
+                    "compound_assignment",
+                    "blocked_result",
+                    "stale_context",
+                    "semantic_bypass",
+                }
+                if case.get("mutation_profile") == "atomic_obligation":
+                    expected_mutations.update(
+                        {
+                            "missing_obligation_evidence_item",
+                            "shallow_obligation_evidence_paths",
+                        }
+                    )
                 self.assertEqual(
                     {item["mutation"] for item in case["negative_mutations"]},
-                    {
-                        "wrong_lens",
-                        "omitted_check",
-                        "compound_assignment",
-                        "blocked_result",
-                        "stale_context",
-                        "semantic_bypass",
-                    },
+                    expected_mutations,
                 )
 
     def test_auto_specialists_bind_selected_units_and_exact_primary_path_union(self) -> None:

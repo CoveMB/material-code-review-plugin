@@ -34,6 +34,8 @@ assert SPEC and SPEC.loader
 reviewctl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reviewctl)
 
+from obligation_contract import RISK_REQUIREMENTS  # noqa: E402
+
 SIMULTANEOUS_INGEST_HARNESS = r"""
 import importlib.util
 import sys
@@ -596,8 +598,21 @@ class ReviewCtlTest(unittest.TestCase):
                 {
                     "check_code": check_code,
                     "outcome": "pass",
-                    "evidence": [f"Observed {check_code} against frozen evidence."],
-                    "evidence_paths": assignment["required_review_paths"],
+                    "evidence_items": [
+                        {
+                            "item_code": item["item_code"],
+                            "evidence": [
+                                f"Observed {item['item_code']} against frozen evidence."
+                            ],
+                            "evidence_paths": assignment["required_review_paths"],
+                        }
+                        for item in sorted(
+                            RISK_REQUIREMENTS[obligation["risk_code"]][
+                                "check_contracts"
+                            ][check_code]["evidence_items"],
+                            key=lambda item: item["item_code"],
+                        )
+                    ],
                     "finding_local_ids": [],
                 }
                 for check_code in obligation["required_checks"]
@@ -4297,7 +4312,7 @@ class ReviewCtlTest(unittest.TestCase):
             payload["check_results"].append(copy.deepcopy(payload["check_results"][0]))
 
         def pass_without_evidence(payload: dict) -> None:
-            payload["check_results"][0]["evidence"] = []
+            payload["check_results"][0]["evidence_items"][0]["evidence"] = []
 
         def finding_without_local_id(payload: dict) -> None:
             payload["check_results"][0].update(
@@ -4312,7 +4327,6 @@ class ReviewCtlTest(unittest.TestCase):
         def blocked(payload: dict) -> None:
             payload["check_results"][0].update(
                 outcome="blocked",
-                evidence=["The required comparison evidence was unavailable."],
             )
 
         mutations = {
@@ -4355,9 +4369,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         collision.update(
             outcome="finding_emitted",
-            evidence=["The configured report path aliases the authoritative output."],
             finding_local_ids=[finding["local_id"]],
         )
+        collision["evidence_items"][0]["evidence"] = [
+            "The configured report path aliases the authoritative output."
+        ]
         obligation_payload["check_results"] = [
             result
             for result in obligation_payload["check_results"]
@@ -5542,6 +5558,70 @@ class ReviewCtlTest(unittest.TestCase):
             [item["check_code"] for item in reviewer_set["scenario_checks"]],
             ["trust-boundary-dispatch-stability"],
         )
+
+    def test_obligation_check_contracts_survive_normalization(self) -> None:
+        scope_hash = self.init()
+        plan = self.coverage_plan_v2(
+            scope_hash,
+            risk_code="user_selectable_output_paths",
+        )
+        self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(self.write_json("output-path-coverage.json", plan)),
+        )
+
+        self.ingest_candidate_paths(self.candidate_paths_for_coverage_v3(scope_hash))
+
+        bundle = self.load("candidates.json")
+        reviewer_set = next(
+            item
+            for item in bundle["reviewer_sets"]
+            if item["assignment_kind"] == "obligation"
+        )
+        self.assertEqual(
+            [item["check_code"] for item in reviewer_set["check_contracts"]],
+            sorted(
+                RISK_REQUIREMENTS["user_selectable_output_paths"][
+                    "required_checks"
+                ]
+            ),
+        )
+        destination_collision = next(
+            item
+            for item in reviewer_set["check_contracts"]
+            if item["check_code"] == "destination_collision"
+        )
+        resolved_matrix = next(
+            item
+            for item in destination_collision["evidence_items"]
+            if item["item_code"] == "resolved_identity_matrix"
+        )
+        self.assertEqual(
+            resolved_matrix["path_scope"],
+            "all_required_review_paths",
+        )
+
+        tampered = copy.deepcopy(bundle)
+        tampered_reviewer_set = next(
+            item
+            for item in tampered["reviewer_sets"]
+            if item["assignment_kind"] == "obligation"
+        )
+        tampered_reviewer_set["check_contracts"][0]["claim"] = "Weakened claim."
+        with self.assertRaisesRegex(
+            reviewctl.ReviewError,
+            "do not match the machine-owned obligation contracts",
+        ):
+            reviewctl.validate_normalized_candidates_profile(
+                tampered,
+                state=self.load("state.json"),
+                plan=self.load("coverage-plan.json"),
+            )
 
     def test_blocked_specialist_result_prevents_candidate_wave_write(self) -> None:
         scope_hash = self.init()

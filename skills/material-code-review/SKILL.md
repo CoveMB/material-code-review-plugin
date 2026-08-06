@@ -176,7 +176,7 @@ For every unit, make exactly one positive or negative decision for all six contr
 - `user_selectable_output_paths`;
 - `persisted_config_semantics`.
 
-Positive decisions appear in `risk_codes` and `selected_risk_rationale` with concrete evidence paths. Negative decisions appear in `rejected_risk_rationale` with checked non-trigger evidence. Filenames are hints only. Every positive `(unit_id, risk_code)` pair creates exactly one item in `review_obligations` and exactly one obligation assignment with the controlled required lens and `required_checks`.
+Positive decisions appear in `risk_codes` and `selected_risk_rationale` with concrete evidence paths. Negative decisions appear in `rejected_risk_rationale` with checked non-trigger evidence. Filenames are hints only. Every positive `(unit_id, risk_code)` pair creates exactly one item in `review_obligations` and exactly one obligation assignment with the controlled required lens and `required_checks`. Before dispatch, derive that obligation assignment's machine-owned `check_contracts` with `check_contracts_for_assignment`; each contract fixes one bounded claim, the exact required evidence-item codes and path scope, and one countercontrol.
 
 The `user_selectable_output_paths` obligation includes independent `runtime_target_derivation_parity` and `validation_to_mutation_identity_stability` checks. Use `references/review-obligations.md` for their repository-neutral derivation and last-validation-to-mutation controls; neither may be discharged by another output-path finding.
 
@@ -200,7 +200,7 @@ The controller validates the exact primary partition, exhaustive risk decisions,
 
 Candidate generation is one bounded read-only assignment-matched wave. In Codex, use a bounded read-only `explorer` subagent or installed project-scoped reviewer when permitted. On another host, use the closest read-only primitive. When subagents are unavailable, run the same assignments sequentially.
 
-Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, `required_review_paths`, `required_checks`, repository constraints, and `schemas/candidate-set-v5.schema.json`. For an obligation assignment, also provide its single `obligation_id` and risk code. For a specialist assignment, provide its exact `unit_ids`, `primary_paths`, `context_paths`, and scenario definitions. Reviewers must echo those assigned values unchanged.
+Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, `required_review_paths`, `required_checks`, repository constraints, and `schemas/candidate-set-v5.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and controller-derived `check_contracts`. For a specialist assignment, provide its exact `unit_ids`, `primary_paths`, `context_paths`, and scenario definitions. Reviewers must echo those assigned values unchanged and must not weaken or reconstruct machine-owned check contracts.
 
 The three core assignments always cover correctness and edge cases, test adequacy for fragile changed behavior, and repository standards plus explicit requirement alignment. Every positive controlled risk adds its obligation assignment. Add supplemental assignments only when the plan's controlled mapping requires them. Specialist assignments remain separate broad lenses and never replace these authorities.
 
@@ -229,7 +229,9 @@ Each assignment returns one object conforming exactly to `schemas/candidate-set-
 - `finding_emitted` requires concrete evidence and one or more local IDs present in the same result;
 - `blocked` identifies missing evidence and leaves the obligation incomplete.
 
-Each outcome accounts only for its named check and includes non-empty `evidence_paths` drawn from its assignment authority and reviewed coverage. A `finding_local_id` may appear in only one required check result. A finding on one check does not complete another required check. Candidate limitations are objects with a description and `related_check_codes`; every linked result must be `blocked`. Do not record `pass` or hide unresolved evidence in a general limitation.
+For an obligation result, replace the old check-level evidence fields with the exact machine-owned `evidence_items`. Every evidence item appears exactly once and contains non-empty `evidence` plus non-empty `evidence_paths` drawn from both assignment authority and reviewed coverage. An item with `path_scope: all_required_review_paths` must cite the complete assignment path set; assignment-wide `coverage.files_reviewed` alone cannot satisfy that per-check item. Specialist check results retain check-level `evidence` and `evidence_paths` bound to their scenario.
+
+Each outcome accounts only for its named check. A `finding_local_id` may appear in only one required check result. A finding on one check does not complete another required check or evidence item. Candidate limitations are objects with a description and `related_check_codes`; every linked result must be `blocked`. Do not record `pass` or hide unresolved evidence in a general limitation.
 
 Core and supplemental assignments return an empty `check_results` array. Specialist results echo the assigned `unit_ids`, `primary_paths`, and `context_paths`. Every result must name every `required_review_path` in `coverage.files_reviewed`, including context paths, even when `findings` is empty. A reviewer may not combine assignments, substitute a lens, or report another assignment's obligation.
 
@@ -250,7 +252,7 @@ The controller validates all results in memory. It rejects missing or duplicate 
 
 The first accepted wave is write-once authority. An exact canonical retry is no-write. A different complete wave requires a new run. Invalid or unavailable retry input may update only `candidate-ingestion-failure.json`; it cannot replace accepted candidates or state.
 
-After deterministic candidate IDs are assigned, the controller resolves each check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v5`. Reviewer sets retain assignment identity, obligation identity when applicable, exact required paths and checks, specialist unit/path/scenario provenance, check results, and coverage. Reports label raw findings as `candidate_records` and count completed atomic checks separately; neither count proves breadth, recall, independence, cognition, or semantic quality. Temporary input filenames and order are excluded from authority.
+After deterministic candidate IDs are assigned, the controller resolves each check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v5`. Reviewer sets retain assignment identity, obligation identity when applicable, exact required paths and checks, machine-owned obligation check contracts, specialist unit/path/scenario provenance, check results, and coverage. Reports label raw findings as `candidate_records` and count completed atomic checks separately; neither count proves breadth, recall, independence, cognition, or semantic quality. Temporary input filenames and order are excluded from authority.
 ### Phase 2 — Validate and adjudicate
 
 #### 2.1 Independent per-finding validation

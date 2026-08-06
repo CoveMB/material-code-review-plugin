@@ -20,6 +20,8 @@
 | Malformed candidate-set/v5 JSON | Reject the entire wave. Do not repair it by guessing. |
 | Missing, duplicate, stale, unassigned, or identity-mismatched assignment result | Reject the entire wave without authoritative candidates. |
 | Required check is absent or duplicated | Reject the entire wave. |
+| Obligation evidence item is absent, duplicated, unknown, or reconstructed instead of using its machine-owned check contract | Reject the entire wave. Every required evidence item must occur exactly once. |
+| An `all_required_review_paths` evidence item omits any assignment path | Reject the entire wave. Assignment-wide `coverage.files_reviewed` cannot substitute for the check-specific all-path trace. |
 | `pass` lacks evidence | Reject the entire wave. |
 | `finding_emitted` lacks evidence, local IDs, or references an unknown local finding | Reject the entire wave. |
 | Required obligation or specialist check is `blocked` | Treat the wave as incomplete; do not create candidate authority. |

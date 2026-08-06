@@ -49,65 +49,207 @@ SPECIALIST_DECISIONS = frozenset({"selected", "rejected"})
 SPECIALIST_SELECTION_BASES = frozenset(
     {"behavior_evidence", "ambiguous", "unknown", "high_risk_mandate", "full_depth"}
 )
+EVIDENCE_PATH_SCOPES = frozenset(
+    {"any_required_review_path", "all_required_review_paths"}
+)
+
+
+def _check_contract(
+    claim: str,
+    evidence_items: tuple[str | tuple[str, str], ...],
+    countercontrol: str,
+) -> dict[str, Any]:
+    return {
+        "claim": claim,
+        "evidence_items": tuple(
+            {
+                "item_code": item if isinstance(item, str) else item[0],
+                "path_scope": (
+                    "any_required_review_path"
+                    if isinstance(item, str)
+                    else item[1]
+                ),
+            }
+            for item in evidence_items
+        ),
+        "countercontrol": countercontrol,
+    }
+
+
+def _risk_requirement(
+    required_lens: str,
+    check_contracts: dict[str, dict[str, Any]],
+    *,
+    supporting_lenses: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    return {
+        "required_lens": required_lens,
+        "required_checks": frozenset(check_contracts),
+        "check_contracts": check_contracts,
+        "supporting_lenses": supporting_lenses,
+    }
 
 RISK_REQUIREMENTS = {
-    "verification_mechanism_semantics": {
-        "required_lens": "adversarial_verification",
-        "required_checks": frozenset(
-            {"authoritative_parsing", "decoy_duplicate_resistance", "paired_control"}
-        ),
-        "supporting_lenses": frozenset(),
-    },
-    "machine_contract_semantics": {
-        "required_lens": "api_config_compatibility",
-        "required_checks": frozenset(
-            {
-                "schema_runtime_parity",
-                "canonical_git_path_language",
-                "required_value_cardinality",
-                "privileged_field_type_exactness",
-            }
-        ),
-        "supporting_lenses": frozenset(),
-    },
-    "distribution_contract_integrity": {
-        "required_lens": "reliability",
-        "required_checks": frozenset(
-            {"manifest_reference_closure", "remove_one_required_entry", "paired_control"}
-        ),
-        "supporting_lenses": frozenset(),
-    },
-    "normative_workflow_coherence": {
-        "required_lens": "standards_alignment",
-        "required_checks": frozenset(
-            {
-                "normative_sequence",
-                "prerequisite_before_dependent_step",
-                "paired_control",
-                "disabled_mode_dependency_boundary",
-            }
-        ),
-        "supporting_lenses": frozenset(),
-    },
-    "user_selectable_output_paths": {
-        "required_lens": "reliability",
-        "required_checks": frozenset(
-            {
-                "destination_collision",
-                "canonical_filesystem_identity",
-                "runtime_writer_target_inventory",
-                "runtime_target_derivation_parity",
-                "validation_to_mutation_identity_stability",
-                "writer_cleanup_order",
-            }
-        ),
-        "supporting_lenses": frozenset(),
-    },
-    "persisted_config_semantics": {
-        "required_lens": "migration_data_safety",
-        "required_checks": frozenset({"accepted_shape_and_default", "migration_and_identity"}),
-        "supporting_lenses": frozenset({"api_config_compatibility"}),
-    },
+    "verification_mechanism_semantics": _risk_requirement(
+        "adversarial_verification",
+        {
+            "authoritative_parsing": _check_contract(
+                "The verifier parses the authoritative artifact and evaluates its semantic result.",
+                ("authoritative_source", "semantic_parse", "malformed_source_control"),
+                "Alter or malform only the authoritative source and confirm verification fails.",
+            ),
+            "decoy_duplicate_resistance": _check_contract(
+                "Duplicate or decoy text cannot satisfy verification in place of the authoritative source.",
+                ("authoritative_source", "decoy_duplicate", "decoy_control"),
+                "Keep a passing decoy while breaking the authoritative source and confirm failure.",
+            ),
+            "paired_control": _check_contract(
+                "The verification mechanism distinguishes one valid control from one causal invalid control.",
+                ("positive_control", "negative_control"),
+                "Break only the protected property while holding unrelated inputs constant.",
+            ),
+        },
+    ),
+    "machine_contract_semantics": _risk_requirement(
+        "api_config_compatibility",
+        {
+            "schema_runtime_parity": _check_contract(
+                "Schema acceptance and runtime acceptance describe the same supported values.",
+                ("schema_acceptance", "runtime_acceptance", "parity_control"),
+                "Exercise a boundary value that one side could accept while the other rejects.",
+            ),
+            "canonical_git_path_language": _check_contract(
+                "Every machine-facing path uses the canonical repository-relative Git path language.",
+                ("accepted_path_control", "rejected_path_control"),
+                "Try traversal, absolute, backslash, drive-prefixed, and non-canonical spellings.",
+            ),
+            "required_value_cardinality": _check_contract(
+                "Required values occur with the exact cardinality consumed at runtime.",
+                ("required_values", "missing_or_duplicate_control"),
+                "Remove or duplicate one required value without changing unrelated values.",
+            ),
+            "privileged_field_type_exactness": _check_contract(
+                "Privileged fields require their exact declared runtime type and value.",
+                ("accepted_type_control", "wrong_type_control"),
+                "Substitute an equality-compatible wrong type such as a boolean or integral float.",
+            ),
+        },
+    ),
+    "distribution_contract_integrity": _risk_requirement(
+        "reliability",
+        {
+            "manifest_reference_closure": _check_contract(
+                "Every referenced required file is present in each affected distribution layout.",
+                ("declared_references", "shipped_files"),
+                "Resolve every declared reference inside each packaged layout.",
+            ),
+            "remove_one_required_entry": _check_contract(
+                "Distribution validation fails when any one required manifest entry is absent.",
+                ("complete_layout_control", "missing_entry_control"),
+                "Remove one required entry while leaving the rest of the archive valid.",
+            ),
+            "paired_control": _check_contract(
+                "The distribution validator distinguishes complete and causally incomplete layouts.",
+                ("positive_control", "negative_control"),
+                "Hold archive structure constant while removing only the protected contract file.",
+            ),
+        },
+    ),
+    "normative_workflow_coherence": _risk_requirement(
+        "standards_alignment",
+        {
+            "normative_sequence": _check_contract(
+                "Canonical workflow steps and their consumers preserve one executable sequence.",
+                ("ordered_steps", "consumer_alignment"),
+                "Compare every normative consumer against the canonical ordered sequence.",
+            ),
+            "prerequisite_before_dependent_step": _check_contract(
+                "Every prerequisite executes before the first dependent operation.",
+                ("prerequisite", "dependent_step", "missing_prerequisite_control"),
+                "Remove or delay the prerequisite while preserving the dependent step.",
+            ),
+            "paired_control": _check_contract(
+                "The workflow distinguishes one allowed sequence from one causally invalid sequence.",
+                ("positive_control", "negative_control"),
+                "Change only the protected ordering or prerequisite relationship.",
+            ),
+            "disabled_mode_dependency_boundary": _check_contract(
+                "Disabled subsystems do not require configuration or external setup for unrelated behavior.",
+                ("mode_branch", "configuration_boundary", "disabled_mode_control"),
+                "Use missing or malformed disabled-subsystem configuration on an unrelated enabled path.",
+            ),
+        },
+    ),
+    "user_selectable_output_paths": _risk_requirement(
+        "reliability",
+        {
+            "destination_collision": _check_contract(
+                "Every configured and resolved destination has unique ownership or explicit precedence.",
+                (
+                    ("resolved_identity_matrix", "all_required_review_paths"),
+                    "collision_control",
+                ),
+                "Make distinct configured values resolve to one final destination identity.",
+            ),
+            "canonical_filesystem_identity": _check_contract(
+                "Applicable filesystem aliases are compared using their canonical platform identities.",
+                (
+                    "applicable_identity_classes",
+                    "accepted_alias_control",
+                    "rejected_alias_control",
+                ),
+                "Exercise case, Unicode, symlink or same-file, and containment aliases as applicable.",
+            ),
+            "runtime_writer_target_inventory": _check_contract(
+                "Every runtime writer, cleanup target, retained input, and logical target has one owner or precedence rule.",
+                (
+                    ("writer_inventory", "all_required_review_paths"),
+                    "target_ownership",
+                ),
+                "Introduce a second writer or retained target with the same final identity.",
+            ),
+            "runtime_target_derivation_parity": _check_contract(
+                "Validation and execution use one authoritative final-target derivation.",
+                (
+                    ("derivation_trace", "all_required_review_paths"),
+                    "equal_identity_control",
+                    "collision_control",
+                ),
+                "Compare equal raw values that diverge and distinct raw values that collide after derivation.",
+            ),
+            "validation_to_mutation_identity_stability": _check_contract(
+                "The last accepted validation remains bound to the identity consumed by every later mutation.",
+                (
+                    "last_validation_boundary",
+                    "mutation_sequence",
+                    "identity_binding",
+                    "replacement_control",
+                ),
+                "Replace or rebind the target or parent after validation and before mutation.",
+            ),
+            "writer_cleanup_order": _check_contract(
+                "Authoritative writes, auxiliary writes, cleanup, success, and failure preserve the required order.",
+                ("success_order", "failure_order"),
+                "Fail between authoritative output and cleanup or auxiliary mutation.",
+            ),
+        },
+    ),
+    "persisted_config_semantics": _risk_requirement(
+        "migration_data_safety",
+        {
+            "accepted_shape_and_default": _check_contract(
+                "Persisted accepted shapes, explicit values, missing values, and defaults retain their documented meaning.",
+                ("accepted_shapes", "missing_value_default", "explicit_value_control"),
+                "Compare an omitted value with explicit default, empty, and custom values.",
+            ),
+            "migration_and_identity": _check_contract(
+                "Migration preserves or explicitly changes every downstream durable and external identity.",
+                ("baseline_identity", "comparison_identity", "migration_control"),
+                "Load a baseline-valid persisted value through the comparison runtime and compare final identity.",
+            ),
+        },
+        supporting_lenses=frozenset({"api_config_compatibility"}),
+    ),
 }
 
 CORE_ASSIGNMENT_LENSES = {
@@ -950,6 +1092,36 @@ def scenario_checks_for_assignment(
     return sorted(scenarios, key=lambda item: item["check_code"])
 
 
+def check_contracts_for_assignment(
+    plan: dict[str, Any], assignment: dict[str, Any]
+) -> list[dict[str, Any]]:
+    if assignment.get("assignment_kind") != "obligation":
+        return []
+    obligation_id = assignment.get("obligation_id")
+    obligation = next(
+        (
+            item
+            for item in plan["review_obligations"]
+            if item["obligation_id"] == obligation_id
+        ),
+        None,
+    )
+    if obligation is None or obligation["risk_code"] != assignment.get("risk_code"):
+        raise ObligationContractError(
+            "obligation assignment does not match a review obligation"
+        )
+    contracts = RISK_REQUIREMENTS[obligation["risk_code"]]["check_contracts"]
+    return [
+        {
+            "check_code": check_code,
+            "claim": contract["claim"],
+            "evidence_items": [dict(item) for item in contract["evidence_items"]],
+            "countercontrol": contract["countercontrol"],
+        }
+        for check_code, contract in sorted(contracts.items())
+    ]
+
+
 def _normalize_coverage(raw: object) -> dict[str, Any]:
     coverage = _object(raw, "assignment result.coverage")
     _exact_keys(coverage, {"files_reviewed", "areas", "limitations"}, "assignment result.coverage")
@@ -1015,6 +1187,79 @@ def _finding_local_ids(raw_findings: object) -> tuple[list[dict[str, Any]], set[
     return findings, local_ids
 
 
+def _normalize_check_evidence_items(
+    raw: object,
+    *,
+    contract: dict[str, Any],
+    context: str,
+    outcome: str,
+    required_review_paths: set[str],
+    files_reviewed: set[str],
+) -> list[dict[str, Any]]:
+    expected = {
+        item["item_code"]: item["path_scope"]
+        for item in contract["evidence_items"]
+    }
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw_item in enumerate(_array(raw, f"{context}.evidence_items")):
+        item_context = f"{context}.evidence_items[{index}]"
+        item = _object(raw_item, item_context)
+        _exact_keys(
+            item,
+            {"item_code", "evidence", "evidence_paths"},
+            item_context,
+        )
+        item_code = _check_code(item["item_code"], f"{item_context}.item_code")
+        if item_code in seen:
+            raise ObligationContractError(
+                f"{context}.evidence_items must contain each required evidence item exactly once"
+            )
+        seen.add(item_code)
+        evidence = _unique_strings(item["evidence"], f"{item_context}.evidence")
+        if not evidence:
+            raise ObligationContractError(
+                f"{item_context} {outcome} requires evidence"
+            )
+        evidence_paths = _path_array(
+            item["evidence_paths"],
+            f"{item_context}.evidence_paths",
+            allow_empty=False,
+        )
+        outside_authority = sorted(set(evidence_paths) - required_review_paths)
+        if outside_authority:
+            raise ObligationContractError(
+                f"{item_context}.evidence_paths are outside required_review_paths: "
+                + ", ".join(outside_authority)
+            )
+        unreviewed = sorted(set(evidence_paths) - files_reviewed)
+        if unreviewed:
+            raise ObligationContractError(
+                f"{item_context}.evidence_paths are absent from coverage.files_reviewed: "
+                + ", ".join(unreviewed)
+            )
+        if (
+            expected.get(item_code) == "all_required_review_paths"
+            and set(evidence_paths) != required_review_paths
+        ):
+            raise ObligationContractError(
+                f"{item_context}.evidence_paths must cover all required_review_paths"
+            )
+        normalized.append(
+            {
+                "item_code": item_code,
+                "evidence": evidence,
+                "evidence_paths": evidence_paths,
+            }
+        )
+    if seen != set(expected) or len(normalized) != len(expected):
+        raise ObligationContractError(
+            f"{context}.evidence_items must equal the machine-owned required evidence items "
+            f"{sorted(expected)}"
+        )
+    return sorted(normalized, key=lambda item: item["item_code"])
+
+
 def _normalize_check_results(
     raw: object,
     *,
@@ -1022,6 +1267,7 @@ def _normalize_check_results(
     required_review_paths: set[str],
     files_reviewed: set[str],
     finding_local_ids: set[str],
+    check_contracts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1029,17 +1275,16 @@ def _normalize_check_results(
     for index, check_raw in enumerate(_array(raw, "assignment result.check_results")):
         context = f"assignment result.check_results[{index}]"
         check = _object(check_raw, context)
-        _exact_keys(
-            check,
-            {
-                "check_code",
-                "outcome",
-                "evidence",
-                "evidence_paths",
-                "finding_local_ids",
-            },
-            context,
-        )
+        detailed = check_contracts is not None
+        expected_keys = {
+            "check_code",
+            "outcome",
+            "evidence_items" if detailed else "evidence",
+            "finding_local_ids",
+        }
+        if not detailed:
+            expected_keys.add("evidence_paths")
+        _exact_keys(check, expected_keys, context)
         check_code = _check_code(check["check_code"], f"{context}.check_code")
         if check_code in seen:
             raise ObligationContractError("assignment result required checks must occur exactly once")
@@ -1049,26 +1294,48 @@ def _normalize_check_results(
             raise ObligationContractError(
                 f"{context}.outcome must be one of {sorted(CHECK_OUTCOMES)}"
             )
-        evidence = _unique_strings(check["evidence"], f"{context}.evidence")
-        if not evidence:
-            raise ObligationContractError(f"{context} {outcome} requires evidence")
-        evidence_paths = _path_array(
-            check["evidence_paths"],
-            f"{context}.evidence_paths",
-            allow_empty=False,
-        )
-        outside_authority = sorted(set(evidence_paths) - required_review_paths)
-        if outside_authority:
-            raise ObligationContractError(
-                f"{context}.evidence_paths are outside required_review_paths: "
-                + ", ".join(outside_authority)
+        normalized_evidence: dict[str, Any]
+        if detailed:
+            contract = check_contracts.get(check_code) if check_contracts else None
+            if contract is None:
+                raise ObligationContractError(
+                    f"{context}.check_code has no machine-owned check contract"
+                )
+            normalized_evidence = {
+                "evidence_items": _normalize_check_evidence_items(
+                    check["evidence_items"],
+                    contract=contract,
+                    context=context,
+                    outcome=outcome,
+                    required_review_paths=required_review_paths,
+                    files_reviewed=files_reviewed,
+                )
+            }
+        else:
+            evidence = _unique_strings(check["evidence"], f"{context}.evidence")
+            if not evidence:
+                raise ObligationContractError(f"{context} {outcome} requires evidence")
+            evidence_paths = _path_array(
+                check["evidence_paths"],
+                f"{context}.evidence_paths",
+                allow_empty=False,
             )
-        unreviewed = sorted(set(evidence_paths) - files_reviewed)
-        if unreviewed:
-            raise ObligationContractError(
-                f"{context}.evidence_paths are absent from coverage.files_reviewed: "
-                + ", ".join(unreviewed)
-            )
+            outside_authority = sorted(set(evidence_paths) - required_review_paths)
+            if outside_authority:
+                raise ObligationContractError(
+                    f"{context}.evidence_paths are outside required_review_paths: "
+                    + ", ".join(outside_authority)
+                )
+            unreviewed = sorted(set(evidence_paths) - files_reviewed)
+            if unreviewed:
+                raise ObligationContractError(
+                    f"{context}.evidence_paths are absent from coverage.files_reviewed: "
+                    + ", ".join(unreviewed)
+                )
+            normalized_evidence = {
+                "evidence": evidence,
+                "evidence_paths": evidence_paths,
+            }
         referenced_ids = _unique_strings(
             check["finding_local_ids"], f"{context}.finding_local_ids"
         )
@@ -1097,8 +1364,7 @@ def _normalize_check_results(
             {
                 "check_code": check_code,
                 "outcome": outcome,
-                "evidence": evidence,
-                "evidence_paths": evidence_paths,
+                **normalized_evidence,
                 "finding_local_ids": referenced_ids,
             }
         )
@@ -1188,6 +1454,9 @@ def validate_assignment_result(
             required_review_paths=required_review_paths,
             files_reviewed=set(coverage["files_reviewed"]),
             finding_local_ids=local_ids,
+            check_contracts=RISK_REQUIREMENTS[obligation["risk_code"]][
+                "check_contracts"
+            ],
         )
     elif assignment_kind == "specialist":
         if obligation is not None:

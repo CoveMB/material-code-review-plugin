@@ -7,7 +7,7 @@ Before candidate synthesis or Gate A, report:
 - frozen scope mode, baseline, comparison, changed paths, untracked policy, and `scope_hash`;
 - every change unit's purpose, primary paths, frozen context paths, and `coverage_context_hash`;
 - every controlled risk's positive or negative decision and evidence;
-- each obligation's risk, required lens, required checks, evidence paths, and exact assignment;
+- each obligation's risk, required lens, required checks, machine-owned check contracts, completed evidence items and path scopes, and exact assignment;
 - each selected specialist's atomic scenario claims, countercontrols, required review paths, and exact completed outcomes;
 - completion status for every assignment and any blocked, missing, stale, or degraded evidence.
 
