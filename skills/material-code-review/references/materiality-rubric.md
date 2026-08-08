@@ -24,6 +24,8 @@ Keep a defect, risk, documentation gap, or coverage gap only when all are true:
 
 A serious defect is not discarded merely because the correct repair is substantial. Repair risk affects planning, not factual validity.
 
+For a claim that a stricter guard is defective, require affirmative supported-state authority before treating it as a defect. Discard an unsupported medium/low claim as `CONSEQUENCE_UNSUPPORTED`; retain a plausible blocker/high claim with genuinely unknown support only as `nature="risk"`, with a user decision and exact pre-fix verification. It does not authorize relaxing the guard until support is established and the plan is revalidated.
+
 ## Optional improvement materiality
 
 An optional simplification, DRY, or architecture improvement must pass every defect-level gate and both additional gates:

@@ -16,7 +16,23 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.1.0"
+STATIC_VERSION_HELPER_CANDIDATES = (
+    ROOT / "core",
+    ROOT.parent / "material-code-review/scripts",
+)
+STATIC_VERSION_HELPER_DIR = next(
+    path for path in STATIC_VERSION_HELPER_CANDIDATES if (path / "static_version_contract.py").is_file()
+)
+sys.path.insert(0, str(STATIC_VERSION_HELPER_DIR))
+from static_version_contract import (  # noqa: E402
+    validate_static_version_declaration,
+)
+from package_layout_contract import (  # noqa: E402
+    local_schema_reference_errors,
+    portable_archive_member_key,
+)
+VERSION = "1.3.0"
+CORE_VERSION = "1.7.0"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -41,9 +57,23 @@ BASE_REQUIRED = {
 ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "LICENSE",
     "SECURITY.md",
+    "core/obligation_contract.py",
+    "core/package_layout_contract.py",
+    "core/static_version_contract.py",
     "core/reviewctl.py",
     "core/schemas/candidate-set.schema.json",
+    "core/schemas/candidate-set-v2.schema.json",
+    "core/schemas/candidate-set-v3.schema.json",
+    "core/schemas/candidate-set-v4.schema.json",
+    "core/schemas/candidate-set-v5.schema.json",
+    "core/schemas/candidate-set-v6.schema.json",
+    "core/schemas/coverage-plan.schema.json",
+    "core/schemas/coverage-plan-v2.schema.json",
+    "core/schemas/coverage-plan-v3.schema.json",
+    "core/schemas/coverage-plan-v4.schema.json",
+    "core/schemas/coverage-plan-v5.schema.json",
     "core/schemas/adjudication.schema.json",
+    "core/schemas/adjudication-v4.schema.json",
     "core/schemas/fix-plan.schema.json",
     "core/schemas/verification.schema.json",
     "core/references/remediation-auditor-template.md",
@@ -76,19 +106,6 @@ def normalize_archive_member(name: str) -> str:
     if any(part in {"", ".", ".."} for part in parts):
         raise ValueError(f"unsafe archive path: {name}")
     return "/".join(parts)
-
-
-def windows_collision_key(archive_path: str) -> str:
-    """Derive a Windows-safe collision key that accounts for case-insensitive matching
-    and trailing dots or spaces."""
-    parts = archive_path.split("/")
-    normalized_parts = []
-    for part in parts:
-        # Strip trailing dots and spaces (Windows semantics)
-        stripped = part.rstrip(". ")
-        # Convert to lowercase for case-insensitive comparison
-        normalized_parts.append(stripped.lower())
-    return "/".join(normalized_parts)
 
 
 def validate_extracted_archive(
@@ -129,7 +146,7 @@ def validate_archive(archive_path: Path) -> list[str]:
             if archive.comment != ARCHIVE_COMMENT:
                 errors.append(f"{archive_path.name}: identifying archive comment mismatch")
             seen: set[str] = set()
-            seen_windows_keys: set[str] = set()
+            portable_names: dict[str, str] = {}
             members: list[tuple[zipfile.ZipInfo, str]] = []
             info_by_name: dict[str, zipfile.ZipInfo] = {}
             cumulative_size = 0
@@ -164,14 +181,16 @@ def validate_archive(archive_path: Path) -> list[str]:
                     errors.append(f"{archive_path.name}: duplicate normalized entry: {normalized_name}")
                     continue
                 seen.add(normalized_name)
-                collision_key = windows_collision_key(normalized_name)
-                if collision_key in seen_windows_keys:
+                collision_key = portable_archive_member_key(normalized_name)
+                prior_name = portable_names.get(collision_key)
+                if prior_name is not None:
                     errors.append(
-                        f"{archive_path.name}: entry {normalized_name} collides with an earlier entry "
-                        f"under Windows case-insensitive/trailing-character semantics"
+                        f"{archive_path.name}: portable archive member collision: "
+                        f"{prior_name} and {normalized_name}; the latter collides with an earlier entry under Windows "
+                        "case-insensitive/Unicode/trailing-character semantics"
                     )
                     continue
-                seen_windows_keys.add(collision_key)
+                portable_names[collision_key] = normalized_name
                 info_by_name[normalized_name] = info
                 members.append((info, normalized_name))
                 relative = Path(normalized_name)
@@ -194,6 +213,9 @@ def validate_archive(archive_path: Path) -> list[str]:
                 if info.create_system != 3 or not ((info.external_attr >> 16) & stat.S_IXUSR):
                     errors.append(f"{archive_path.name}: executable mode missing: {name}")
 
+            if errors:
+                return errors
+
             if "SKILL.md" in seen:
                 skill_text = archive.read(info_by_name["SKILL.md"]).decode("utf-8", errors="replace")
                 if not skill_text.startswith("---\n") or "name: material-code-simplification" not in skill_text.split("---", 2)[1]:
@@ -204,6 +226,45 @@ def validate_archive(archive_path: Path) -> list[str]:
                 )
                 if "$material-code-simplification" not in yaml_text:
                     errors.append(f"{archive_path.name}: openai.yaml invocation mismatch")
+            if "core/reviewctl.py" in seen:
+                declaration_error = validate_static_version_declaration(
+                    archive.read(info_by_name["core/reviewctl.py"]),
+                    "TOOL_VERSION",
+                    CORE_VERSION,
+                    f"{archive_path.name}: core/reviewctl.py",
+                )
+                if declaration_error is not None:
+                    errors.append(declaration_error)
+            if "scripts/simplifyctl.py" in seen:
+                declaration_error = validate_static_version_declaration(
+                    archive.read(info_by_name["scripts/simplifyctl.py"]),
+                    "ADAPTER_VERSION",
+                    VERSION,
+                    f"{archive_path.name}: scripts/simplifyctl.py",
+                )
+                if declaration_error is not None:
+                    errors.append(declaration_error)
+
+            for schema_name in sorted(
+                name
+                for name in seen
+                if name.startswith("core/schemas/") and name.endswith(".json")
+            ):
+                try:
+                    schema_document = json.loads(
+                        archive.read(info_by_name[schema_name])
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    errors.append(
+                        f"{archive_path.name}:{schema_name}: invalid schema JSON"
+                    )
+                    continue
+                errors.extend(
+                    local_schema_reference_errors(
+                        schema_document,
+                        f"{archive_path.name}:{schema_name}",
+                    )
+                )
 
             if not errors:
                 errors.extend(validate_extracted_archive(archive, members, archive_path))
@@ -212,13 +273,25 @@ def validate_archive(archive_path: Path) -> list[str]:
     return errors
 
 
-def resolve_core() -> tuple[str, Path, Path, Path] | None:
+def resolve_core() -> tuple[str, Path, Path, Path, Path] | None:
     full = ROOT.parent / "material-code-review"
     standalone = ROOT / "core"
     if (standalone / "reviewctl.py").is_file():
-        return "standalone", standalone / "reviewctl.py", standalone / "schemas", standalone / "references"
+        return (
+            "standalone",
+            standalone / "reviewctl.py",
+            standalone / "obligation_contract.py",
+            standalone / "schemas",
+            standalone / "references",
+        )
     if (full / "scripts" / "reviewctl.py").is_file():
-        return "full-plugin", full / "scripts" / "reviewctl.py", full / "schemas", full / "references"
+        return (
+            "full-plugin",
+            full / "scripts" / "reviewctl.py",
+            full / "scripts" / "obligation_contract.py",
+            full / "schemas",
+            full / "references",
+        )
     return None
 
 
@@ -254,22 +327,48 @@ def main(argv: list[str] | None = None) -> int:
     core_layout = resolve_core()
     if core_layout is None:
         errors.append("missing shared controller: expected sibling material-code-review or standalone core/")
-        layout, controller, schema_dir, core_reference_dir = (
+        layout, controller, obligation_contract, schema_dir, core_reference_dir = (
             "missing",
+            ROOT / "missing",
             ROOT / "missing",
             ROOT / "missing",
             ROOT / "missing",
         )
     else:
-        layout, controller, schema_dir, core_reference_dir = core_layout
+        layout, controller, obligation_contract, schema_dir, core_reference_dir = core_layout
+        if not obligation_contract.is_file():
+            errors.append(f"missing shared obligation contract: {obligation_contract}")
         for name in (
             "candidate-set.schema.json",
+            "candidate-set-v2.schema.json",
+            "candidate-set-v3.schema.json",
+            "candidate-set-v4.schema.json",
+            "candidate-set-v5.schema.json",
+            "candidate-set-v6.schema.json",
+            "coverage-plan.schema.json",
+            "coverage-plan-v2.schema.json",
+            "coverage-plan-v3.schema.json",
+            "coverage-plan-v4.schema.json",
+            "coverage-plan-v5.schema.json",
             "adjudication.schema.json",
+            "adjudication-v4.schema.json",
             "fix-plan.schema.json",
             "verification.schema.json",
         ):
             if not (schema_dir / name).is_file():
                 errors.append(f"missing shared schema: {schema_dir / name}")
+        for schema_path in sorted(schema_dir.glob("*.json")):
+            try:
+                schema_document = json.loads(schema_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                errors.append(f"invalid shared schema {schema_path}: {exc}")
+                continue
+            errors.extend(
+                local_schema_reference_errors(
+                    schema_document,
+                    schema_path.as_posix(),
+                )
+            )
         for name in (
             "remediation-auditor-template.md",
             "remediation-rubric.md",
@@ -277,6 +376,19 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if not (core_reference_dir / name).is_file():
                 errors.append(f"missing shared repair-direction reference: {core_reference_dir / name}")
+        if controller.is_file():
+            if "from obligation_contract import" not in controller.read_text(
+                encoding="utf-8"
+            ):
+                errors.append("shared controller does not import obligation_contract")
+            declaration_error = validate_static_version_declaration(
+                controller.read_bytes(),
+                "TOOL_VERSION",
+                CORE_VERSION,
+                controller.as_posix(),
+            )
+            if declaration_error is not None:
+                errors.append(declaration_error)
 
     skill = ROOT / "SKILL.md"
     if skill.is_file():
@@ -286,6 +398,17 @@ def main(argv: list[str] | None = None) -> int:
         for rel in sorted(set(re.findall(r"`((?:references|examples)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")
+
+    adapter = ROOT / "scripts" / "simplifyctl.py"
+    if adapter.is_file():
+        declaration_error = validate_static_version_declaration(
+            adapter.read_bytes(),
+            "ADAPTER_VERSION",
+            VERSION,
+            adapter.relative_to(ROOT).as_posix(),
+        )
+        if declaration_error is not None:
+            errors.append(declaration_error)
 
     if schema_dir.is_dir():
         for path in schema_dir.glob("*.json"):

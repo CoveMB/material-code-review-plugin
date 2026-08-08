@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+import hashlib
 import json
 import os
 import re
@@ -19,7 +21,20 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.2.0"
+STATIC_VERSION_HELPER_DIR = ROOT / "skills/material-code-review/scripts"
+sys.path.insert(0, str(STATIC_VERSION_HELPER_DIR))
+from static_version_contract import (  # noqa: E402
+    validate_static_version_declaration,
+)
+from package_layout_contract import (  # noqa: E402
+    is_safe_relative_package_path,
+    local_schema_reference_errors,
+    normalize_package_path,
+    portable_archive_member_key,
+    regular_zip_member_metadata_error,
+    schema_version_is_supported,
+)
+VERSION = "1.7.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -34,58 +49,85 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Context cannot create eligibility.**",
     "**Fail closed before initialization.**",
 )
+CONTROLLED_WORKFLOW_MARKERS = (
+    "material-review/state/v6",
+    "material-review/coverage-plan/v5",
+    "material-review/candidate-set/v6",
+    "material-review/candidates-normalized/v6",
+    "canonical_owner",
+    "affected_consumers",
+    "scenario_checks",
+    "required_review_paths",
+    "required_checks",
+    "change_units",
+    "review_obligations",
+    "assignment_id",
+    "check_results",
+    "record-coverage",
+    "user_selectable_output_paths",
+    "persisted_config_semantics",
+    "runtime_target_derivation_parity",
+    "validation_to_mutation_identity_stability",
+    "Missing required assignment coverage",
+    "CONSEQUENCE_UNSUPPORTED",
+    "plausibly blocker/high",
+)
+OBLIGATION_WORKFLOW_BLOCK_START = (
+    "<!-- material-review-obligation-workflow-contract:start -->"
+)
+OBLIGATION_WORKFLOW_BLOCK_END = (
+    "<!-- material-review-obligation-workflow-contract:end -->"
+)
+OBLIGATION_WORKFLOW_CONTRACT_LINES = (
+    "check_contracts=controller-derived",
+    "obligation_check_results=evidence_items",
+    "obligation_evidence_paths=all_required_review_paths",
+)
 
-DISTRIBUTABLE_REQUIRED = {
-    ".codex-plugin/plugin.json",
-    ".agents/plugins/marketplace.json",
-    ".claude-plugin/plugin.json",
-    ".claude-plugin/marketplace.json",
-    "SKILL.md",
-    "AGENTS.md",
-    "README.md",
-    "CODEX.md",
-    "LICENSE",
-    "THIRD_PARTY.md",
-    "CHANGELOG.md",
-    "Makefile",
-    "bin/material-reviewctl",
-    "bin/material-reviewctl.cmd",
-    "bin/material-reviewctl.ps1",
-    "scripts/package_plugin.py",
-    "scripts/validate_package.py",
-    "skills/material-code-review/SKILL.md",
-    "skills/material-code-review/agents/openai.yaml",
-    "skills/material-code-review/scripts/reviewctl.py",
-    "skills/material-code-review/tests/test_reviewctl.py",
-    "skills/material-code-review/schemas/candidate-set.schema.json",
-    "skills/material-code-review/schemas/adjudication.schema.json",
-    "skills/material-code-review/schemas/fix-plan.schema.json",
-    "skills/material-code-review/schemas/verification.schema.json",
-    "skills/material-code-review/references/remediation-rubric.md",
-    "skills/material-code-review/references/test-evidence-rubric.md",
-    "skills/material-code-review/references/remediation-auditor-template.md",
-    "examples/codex-project-config/.codex/config.toml",
-    "examples/codex-project-config/.codex/agents/material_candidate.toml",
-    "examples/codex-project-config/.codex/agents/material_validator.toml",
-    "examples/codex-project-config/.codex/agents/material_adjudicator.toml",
-    "examples/codex-project-config/.codex/agents/material_postfix.toml",
-}
+LAYOUT_MANIFEST_SOURCE = Path("skills/material-code-review/package-layouts.json")
+LAYOUT_NAMES = ("full-plugin", "standalone")
 MAINTAINER_SOURCE_REQUIRED = {
     ".agents/skills/material-review-evaluation/SKILL.md",
     "EVALUATION.md",
-    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
-    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
     "evaluations/material-code-review/README.md",
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
     "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/challenger.md",
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/coverage-plan.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/package-layouts.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/coverage-plan.json",
 }
 EVALUATOR_ASSET_ALLOWLIST = (
     "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
     "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/challenger.md",
     "evaluations/material-code-review/prompts/judge.md",
     "evaluations/material-code-review/rubric.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/schemas/coverage-plan.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/base/skills/demo/package-layouts.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/scripts/validate_package.py",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/references/workflow.md",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/candidate-set.json",
+    "evaluations/material-code-review/fixtures/missed-contracts/review/skills/demo/schemas/coverage-plan.json",
 )
 EVALUATOR_ROOT_ANCHOR = (
     "Locate the repository root and confirm the invocation is running in a source checkout"
@@ -100,13 +142,31 @@ EVALUATOR_NO_FALLBACK = (
     "Do not search alternate directories, fall back to skill-relative resolution, "
     "or use parent traversal from the skill directory."
 )
+EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_START = (
+    "<!-- evaluator-fixture-object-format-contract:start"
+)
+EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_END = (
+    "evaluator-fixture-object-format-contract:end -->"
+)
 EVALUATOR_DISPATCH_CONTRACT_START = "<!-- evaluator-dispatch-contract:start"
 EVALUATOR_DISPATCH_CONTRACT_END = "evaluator-dispatch-contract:end -->"
+EVALUATOR_CONTAMINATION_CONTRACT_START = (
+    "<!-- evaluator-worker-contamination-contract:start"
+)
+EVALUATOR_CONTAMINATION_CONTRACT_END = (
+    "evaluator-worker-contamination-contract:end -->"
+)
+EVALUATOR_CHALLENGER_CONTRACT_START = (
+    "<!-- evaluator-challenger-boundary-contract:start"
+)
+EVALUATOR_CHALLENGER_CONTRACT_END = (
+    "evaluator-challenger-boundary-contract:end -->"
+)
 EVALUATOR_CONTEXT_FREE_PROMPT_MARKER = (
     "The root dispatcher must provide zero inherited task history."
 )
 EVALUATOR_PREDISPATCH_REATTESTATION = (
-    "Immediately before each reviewer or judge dispatch, recapture the active material-review "
+    "Immediately before each reviewer, challenger, or judge dispatch, recapture the active material-review "
     "repository's `HEAD` and porcelain status and require an exact match to the initial clean "
     "attestation."
 )
@@ -118,14 +178,18 @@ EVALUATOR_PROMPT_ROOT_DISPATCH_AUTHORITY = (
 )
 EVALUATOR_PRIVATE_RECEIPT_REQUIREMENT = "Do not proceed if the dispatch receipt"
 EVALUATOR_CONTEXT_FREE_DOC_MARKER = (
-    "Every reviewer and judge dispatch uses a self-contained request with zero inherited task history."
+    "Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history."
 )
 EVALUATOR_CONTEXT_FREE_DOCS = (
     "README.md",
     "EVALUATION.md",
-    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
-    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
     "evaluations/material-code-review/README.md",
+)
+RETIRED_MAINTAINER_SOURCE_PATHS = frozenset(
+    {
+        "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
+        "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
+    }
 )
 EVALUATOR_GATE_DISPOSITION_CONTRACT_START = (
     "<!-- evaluator-gate-disposition-contract:start"
@@ -170,8 +234,131 @@ EVALUATOR_JUDGE_DOC_MARKER = (
     "Judge responses are accepted only after root-side protocol validation."
 )
 
+MISSED_CONTRACT_BASE_FILES = frozenset(
+    {
+        "AGENTS.md",
+        "scripts/validate_package.py",
+        "skills/demo/scripts/validate_package.py",
+        "skills/demo/references/workflow.md",
+        "skills/demo/schemas/candidate-set.json",
+        "skills/demo/schemas/coverage-plan.json",
+        "skills/demo/package-layouts.json",
+    }
+)
+MISSED_CONTRACT_REVIEW_FILES = MISSED_CONTRACT_BASE_FILES - {
+    "AGENTS.md",
+    "skills/demo/package-layouts.json",
+}
+MISSED_CONTRACT_ROOT_IDS = frozenset(
+    {
+        "version-decoy",
+        "workflow-missing-scope",
+        "path-language",
+        "risk-cardinality",
+        "archive-closure",
+    }
+)
+MISSED_CONTRACT_ROOT_CONTRACTS = {
+    "version-decoy": "The validator trusts raw source text instead of one top-level literal assignment.",
+    "workflow-missing-scope": "Coverage can be recorded without the required fresh-scope check.",
+    "path-language": "The candidate schema accepts path forms rejected by runtime validation.",
+    "risk-cardinality": "The coverage schema permits a duplicate required risk while omitting another.",
+    "archive-closure": "Archive validation uses an incomplete hand-maintained required-entry set.",
+}
+MISSED_CONTRACT_RETIRED_GUIDANCE = (
+    "release versions are accepted only from one top-level literal assignment parsed as Python syntax;",
+    "`check-scope` precedes `record-coverage` in the normative workflow;",
+    "schema and runtime path validation accept only canonical repository-relative Git paths, excluding absolute, drive, UNC, backslash, and dot-component forms;",
+    "every required risk role occurs exactly once in a coverage plan; and",
+    "archive validation derives its complete required-entry closure from the canonical package layout instead of a second hand-maintained subset.",
+)
+MISSED_CONTRACT_WORKER_GUIDANCE_PATHS = (
+    "evaluations/material-code-review/fixtures/missed-contracts/base/AGENTS.md",
+    "evaluations/material-code-review/prompts/reviewer.md",
+    "evaluations/material-code-review/prompts/challenger.md",
+    "evaluations/material-code-review/prompts/judge.md",
+    "evaluations/material-code-review/rubric.md",
+)
+MISSED_CONTRACT_TOP_LEVEL_POLICY = {
+    "schema_version": "material-review-evaluation/case/v1",
+    "case_id": "missed-contracts",
+    "target_type": "git_fixture",
+    "review_mode": "range",
+    "posture": "immutable",
+    "require_immediate_parent": True,
+}
+MISSED_CONTRACT_TOP_LEVEL_KEYS = frozenset(
+    {
+        *MISSED_CONTRACT_TOP_LEVEL_POLICY,
+        "fixture",
+        "required_root_ids",
+        "root_contracts",
+        "acceptance",
+        "attempt_policy",
+    }
+)
+MISSED_CONTRACT_FIXTURE_POLICY = {
+    "base_root": "evaluations/material-code-review/fixtures/missed-contracts/base",
+    "review_root": "evaluations/material-code-review/fixtures/missed-contracts/review",
+    "author_name": "Material Review Fixture",
+    "author_email": "fixture@example.invalid",
+    "base_timestamp": "2026-07-30T12:00:00+00:00",
+    "review_timestamp": "2026-07-30T12:01:00+00:00",
+    "base_message": "fixture: establish contract controls",
+    "review_message": "fixture: introduce missed contracts",
+}
+MISSED_CONTRACT_FIXTURE_KEYS = frozenset(
+    {
+        *MISSED_CONTRACT_FIXTURE_POLICY,
+        "base_tree",
+        "review_tree",
+        "base_commit",
+        "review_commit",
+    }
+)
+MISSED_CONTRACT_ACCEPTANCE_POLICY = {
+    "candidate_must_support_every_required_root": True,
+    "preserve_every_baseline_material_root": True,
+    "unsupported_high_severity_additions": 0,
+    "require_controller_valid_gate_a_evidence": True,
+    "require_no_mutation": True,
+    "require_complete_obligations": True,
+    "require_no_coverage_gap": True,
+}
+MISSED_CONTRACT_ATTEMPT_POLICY = {
+    "comparisons": 1,
+    "repair_confirmations": 1,
+    "repair_confirmation_requires_concrete_implementation_defect": True,
+    "resampling": False,
+}
+EVALUATOR_CHALLENGER_CONTRACT = {
+    "case": "missed-contracts",
+    "challenger_inputs": "frozen-source,change-units,risk-decisions,obligations,obligation-check-contracts,assignments,limitations",
+    "challenger_forbidden": "candidates,candidate-sets,check-results,adjudication,ledgers,plans,expected-roots,variant-identities,refs,private-mapping,other-variant,prior-output",
+    "challenger_claim": "declarative-coverage-only",
+    "challenger_outcomes": "NO_COVERAGE_GAP,COVERAGE_GAP",
+    "no_coverage_gap_proves": "declarative-coverage-only",
+    "native_assignment_validation": "required-independent",
+    "native_obligation_validation": "required-independent",
+    "native_check_results_fresh": "true",
+    "native_check_results_complete": "true",
+    "native_check_results_unblocked": "true",
+    "native_check_results_unique": "true",
+    "native_check_results_resolved": "true",
+    "native_gate_a_validation": "required-independent",
+    "invalid_empty_or_gap": "blocks-success-no-retry",
+    "challenge_response_to_reviewer": "false",
+    "default_discogs_challenger": "false",
+}
+
 FORBIDDEN_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
+MAX_ARCHIVE_MEMBERS = 10_000
+MAX_ARCHIVE_MEMBER_SIZE = 100 * 1024 * 1024
+MAX_ARCHIVE_CUMULATIVE_SIZE = 500 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSION_RATIO = 100
+LAYOUT_EXCLUDED_PARTS = FORBIDDEN_PARTS | {".hypothesis", ".tox", ".nox", "dist"}
+LAYOUT_EXCLUDED_SUFFIXES = FORBIDDEN_SUFFIXES | {".zip", ".sha256"}
 MAINTAINER_ONLY_ARCHIVE_PREFIXES = (
     ".agents/skills/material-review-evaluation/",
     ".evaluation-runs/",
@@ -183,6 +370,16 @@ LOCAL_RUNTIME_JSON_PREFIXES = (
     ".evaluation-runs/",
     ".superpowers/",
 )
+WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
+WORKFLOW_BLOCK_END = "\n```"
+WORKFLOW_DISCOVERY_MARKERS = (
+    "init",
+    "context record and change-unit inventory (manual; see references/context-checklist.md)",
+    'python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .',
+    "record-coverage",
+    "dispatch assignments",
+    "ingest one complete assignment-matched wave",
+)
 
 
 def is_maintainer_only_archive_entry(name: str) -> bool:
@@ -191,6 +388,235 @@ def is_maintainer_only_archive_entry(name: str) -> bool:
 
 def fail(errors: list[str], message: str) -> None:
     errors.append(message)
+
+
+class ArchiveResourceError(ValueError):
+    """Raised when an archive exceeds the bounded validation policy."""
+
+
+def preflight_archive_resources(
+    archive_name: str,
+    members: list[zipfile.ZipInfo],
+) -> str | None:
+    if len(members) > MAX_ARCHIVE_MEMBERS:
+        return (
+            f"{archive_name}: archive exceeds maximum member count of "
+            f"{MAX_ARCHIVE_MEMBERS}"
+        )
+    cumulative_size = 0
+    for member in members:
+        if member.file_size > MAX_ARCHIVE_MEMBER_SIZE:
+            return (
+                f"{archive_name}: member {member.filename} exceeds maximum size of "
+                f"{MAX_ARCHIVE_MEMBER_SIZE} bytes"
+            )
+        cumulative_size += member.file_size
+        if cumulative_size > MAX_ARCHIVE_CUMULATIVE_SIZE:
+            return (
+                f"{archive_name}: cumulative expanded size exceeds maximum of "
+                f"{MAX_ARCHIVE_CUMULATIVE_SIZE} bytes"
+            )
+        if member.file_size > 0 and member.compress_size == 0:
+            return (
+                f"{archive_name}: nonempty member {member.filename} has zero "
+                "compressed size"
+            )
+        if (
+            member.compress_size > 0
+            and member.file_size
+            > member.compress_size * MAX_ARCHIVE_COMPRESSION_RATIO
+        ):
+            return (
+                f"{archive_name}: member {member.filename} compression ratio "
+                f"exceeds maximum of {MAX_ARCHIVE_COMPRESSION_RATIO}"
+            )
+    return None
+
+
+def read_bounded_archive_member(
+    archive: zipfile.ZipFile,
+    member_name: str,
+    archive_name: str,
+) -> bytes:
+    with archive.open(archive.getinfo(member_name), "r") as member:
+        payload = member.read(MAX_ARCHIVE_MEMBER_SIZE + 1)
+    if len(payload) > MAX_ARCHIVE_MEMBER_SIZE:
+        raise ArchiveResourceError(
+            f"{archive_name}: member {member_name} exceeds bounded read limit of "
+            f"{MAX_ARCHIVE_MEMBER_SIZE} bytes"
+        )
+    return payload
+
+
+def normalize_layout_path(value: object, label: str) -> str:
+    return normalize_package_path(value, f"layout {label}")
+
+
+def load_layout_manifest(
+    root: Path,
+    errors: list[str],
+) -> dict[str, dict[str, object]] | None:
+    manifest_path = root / LAYOUT_MANIFEST_SOURCE
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail(errors, f"missing package layout manifest: {LAYOUT_MANIFEST_SOURCE.as_posix()}")
+        return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(errors, f"invalid package layout manifest: {exc}")
+        return None
+    if not isinstance(manifest, dict) or not schema_version_is_supported(
+        manifest.get("schema_version")
+    ):
+        fail(errors, "package layout manifest schema_version must be 1")
+        return None
+    layouts = manifest.get("layouts")
+    if not isinstance(layouts, dict) or set(layouts) != set(LAYOUT_NAMES):
+        fail(errors, "package layout manifest must define full-plugin and standalone")
+        return None
+
+    normalized_layouts: dict[str, dict[str, object]] = {}
+    try:
+        for layout_name in LAYOUT_NAMES:
+            layout = layouts[layout_name]
+            if not isinstance(layout, dict):
+                raise ValueError(f"layout {layout_name} must be an object")
+            canonical_skill = normalize_layout_path(
+                layout.get("canonical_skill"),
+                f"canonical skill for {layout_name}",
+            )
+            mappings = layout.get("required_mappings")
+            if not isinstance(mappings, list) or not mappings:
+                raise ValueError(
+                    f"layout {layout_name} required_mappings must be a non-empty array"
+                )
+            seen_sources: set[str] = set()
+            seen_destinations: set[str] = set()
+            normalized_mappings: list[dict[str, str]] = []
+            for index, mapping in enumerate(mappings):
+                if not isinstance(mapping, dict) or set(mapping) != {
+                    "source",
+                    "destination",
+                }:
+                    raise ValueError(
+                        f"layout {layout_name} mapping {index} must contain source and destination"
+                    )
+                source = normalize_layout_path(mapping["source"], "source")
+                destination = normalize_layout_path(
+                    mapping["destination"], "destination"
+                )
+                if source in seen_sources:
+                    raise ValueError(f"duplicate layout source: {source}")
+                if destination in seen_destinations:
+                    raise ValueError(f"duplicate layout destination: {destination}")
+                seen_sources.add(source)
+                seen_destinations.add(destination)
+                source_path = PurePosixPath(source)
+                destination_path = PurePosixPath(destination)
+                if is_maintainer_only_archive_entry(source) or is_maintainer_only_archive_entry(
+                    destination
+                ):
+                    raise ValueError(
+                        f"maintainer-only layout mapping: {source} -> {destination}"
+                    )
+                if (
+                    any(part in LAYOUT_EXCLUDED_PARTS for part in source_path.parts)
+                    or any(
+                        part in LAYOUT_EXCLUDED_PARTS
+                        for part in destination_path.parts
+                    )
+                    or source_path.suffix in LAYOUT_EXCLUDED_SUFFIXES
+                    or destination_path.suffix in LAYOUT_EXCLUDED_SUFFIXES
+                ):
+                    raise ValueError(
+                        f"excluded layout mapping: {source} -> {destination}"
+                    )
+                normalized_mappings.append(
+                    {"source": source, "destination": destination}
+                )
+            if canonical_skill not in seen_destinations:
+                raise ValueError(
+                    f"layout {layout_name} canonical skill is not a required destination: "
+                    f"{canonical_skill}"
+                )
+            normalized_layouts[layout_name] = {
+                "canonical_skill": canonical_skill,
+                "required_mappings": normalized_mappings,
+            }
+    except ValueError as exc:
+        fail(errors, f"invalid package layout manifest: {exc}")
+        return None
+    return normalized_layouts
+
+
+def validate_workflow_discovery_order(
+    source: str | bytes,
+    inspected_path: str,
+) -> str | None:
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{inspected_path}: workflow discovery order has invalid UTF-8"
+    if source.count(WORKFLOW_BLOCK_START) != 1:
+        return f"{inspected_path}: workflow discovery order block missing or duplicate"
+    block, separator, _ = source.split(WORKFLOW_BLOCK_START, 1)[1].partition(
+        WORKFLOW_BLOCK_END
+    )
+    if not separator:
+        return f"{inspected_path}: workflow discovery order block is unterminated"
+    lines = block.splitlines()
+    for marker in WORKFLOW_DISCOVERY_MARKERS:
+        if lines.count(marker) != 1:
+            return (
+                f"{inspected_path}: workflow discovery order marker missing or "
+                f"duplicate: {marker}"
+            )
+    positions = [lines.index(marker) for marker in WORKFLOW_DISCOVERY_MARKERS]
+    if positions != sorted(positions):
+        return f"{inspected_path}: workflow discovery order markers out of order"
+    return None
+
+
+def validate_obligation_workflow_contract(
+    source: str | bytes,
+    inspected_path: str,
+) -> str | None:
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{inspected_path}: obligation workflow contract has invalid UTF-8"
+    if (
+        source.count(OBLIGATION_WORKFLOW_BLOCK_START) != 1
+        or source.count(OBLIGATION_WORKFLOW_BLOCK_END) != 1
+    ):
+        return f"{inspected_path}: obligation workflow contract block missing or duplicate"
+    block, separator, _ = source.split(
+        OBLIGATION_WORKFLOW_BLOCK_START,
+        1,
+    )[1].partition(OBLIGATION_WORKFLOW_BLOCK_END)
+    if not separator:
+        return f"{inspected_path}: obligation workflow contract block is unterminated"
+    expected = "\n" + "\n".join(OBLIGATION_WORKFLOW_CONTRACT_LINES) + "\n"
+    if block != expected:
+        return f"{inspected_path}: obligation workflow contract entries are malformed"
+    return None
+
+
+def validate_retired_maintainer_source_paths(errors: list[str]) -> None:
+    active_inventories = (
+        MAINTAINER_SOURCE_REQUIRED,
+        EVALUATOR_CONTEXT_FREE_DOCS,
+    )
+    active_paths = set().union(*map(set, active_inventories))
+    reactivated_paths = RETIRED_MAINTAINER_SOURCE_PATHS.intersection(active_paths)
+    for relative in sorted(reactivated_paths):
+        fail(
+            errors,
+            "retired maintainer-source path reintroduced into active inventory: "
+            f"{relative}",
+        )
 
 
 def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
@@ -272,6 +698,293 @@ def validate_openai_activation_metadata(text: str, errors: list[str]) -> None:
         fail(errors, "openai.yaml short_description does not match the Git-change activation contract")
 
 
+def git_object_hash(kind: str, payload: bytes) -> str:
+    header = f"{kind} {len(payload)}\0".encode("ascii")
+    return hashlib.sha1(header + payload).hexdigest()
+
+
+def git_tree_hash(files: dict[str, tuple[bytes, int]]) -> str:
+    root: dict[str, object] = {}
+    for relative, value in files.items():
+        node = root
+        parts = PurePosixPath(relative).parts
+        for part in parts[:-1]:
+            child = node.setdefault(part, {})
+            if not isinstance(child, dict):
+                raise ValueError(f"fixture path collision at {relative}")
+            node = child
+        if parts[-1] in node:
+            raise ValueError(f"duplicate fixture path {relative}")
+        node[parts[-1]] = value
+
+    def hash_node(node: dict[str, object]) -> str:
+        entries: list[tuple[bytes, bytes]] = []
+        for name, child in node.items():
+            if isinstance(child, dict):
+                mode = b"40000"
+                object_hash = hash_node(child)
+                sort_name = f"{name}/".encode("utf-8")
+            else:
+                contents, file_mode = child
+                mode = b"100755" if file_mode & stat.S_IXUSR else b"100644"
+                object_hash = git_object_hash("blob", contents)
+                sort_name = name.encode("utf-8")
+            entry = mode + b" " + name.encode("utf-8") + b"\0" + bytes.fromhex(object_hash)
+            entries.append((sort_name, entry))
+        payload = b"".join(entry for _sort_name, entry in sorted(entries))
+        return git_object_hash("tree", payload)
+
+    return hash_node(root)
+
+
+def git_commit_hash(
+    *,
+    tree_hash: str,
+    parent_hash: str | None,
+    author_name: str,
+    author_email: str,
+    timestamp: str,
+    message: str,
+) -> str:
+    moment = datetime.fromisoformat(timestamp)
+    if moment.tzinfo is None:
+        raise ValueError("fixture timestamp lacks timezone")
+    identity = (
+        f"{author_name} <{author_email}> {int(moment.timestamp())} "
+        f"{moment.strftime('%z')}"
+    )
+    lines = [f"tree {tree_hash}"]
+    if parent_hash is not None:
+        lines.append(f"parent {parent_hash}")
+    lines.extend((f"author {identity}", f"committer {identity}", "", message))
+    return git_object_hash("commit", ("\n".join(lines) + "\n").encode("utf-8"))
+
+
+def fixture_files(
+    root: Path,
+    expected: frozenset[str],
+    errors: list[str],
+    label: str,
+) -> dict[str, tuple[bytes, int]] | None:
+    if not root.is_dir():
+        fail(errors, f"missed-contracts {label} fixture root is missing")
+        return None
+    actual_paths = {
+        path.relative_to(root).as_posix(): path
+        for path in root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if set(actual_paths) != expected:
+        fail(errors, f"missed-contracts {label} fixture file set has drifted")
+        return None
+    result: dict[str, tuple[bytes, int]] = {}
+    for relative, path in actual_paths.items():
+        if path.is_symlink() or not path.is_file():
+            fail(errors, f"missed-contracts {label} fixture contains a non-regular file")
+            return None
+        result[relative] = (path.read_bytes(), path.stat().st_mode)
+    return result
+
+
+def validate_closed_policy_object(
+    value: object,
+    expected: dict[str, object],
+    errors: list[str],
+    dimension: str,
+) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        fail(errors, f"missed-contracts {dimension} policy must be an object")
+        return None
+    actual_keys = set(value)
+    expected_keys = set(expected)
+    for key in sorted(expected_keys - actual_keys):
+        fail(errors, f"missed-contracts {dimension} policy missing key: {key}")
+    for key in sorted(actual_keys - expected_keys):
+        fail(errors, f"missed-contracts {dimension} policy has unexpected key: {key}")
+    for key in sorted(actual_keys & expected_keys):
+        actual_value = value[key]
+        expected_value = expected[key]
+        if type(actual_value) is not type(expected_value):
+            fail(
+                errors,
+                f"missed-contracts {dimension} policy {key} has wrong type",
+            )
+        elif actual_value != expected_value:
+            fail(
+                errors,
+                f"missed-contracts {dimension} policy {key} has wrong value",
+            )
+    return value
+
+
+def validate_maintainer_evaluator_cases(root: Path, errors: list[str]) -> None:
+    discogs_path = root / "evaluations/material-code-review/cases/discogs-custom-playlists.json"
+    missed_path = root / "evaluations/material-code-review/cases/missed-contracts.json"
+    discogs = load_json(discogs_path, errors) if discogs_path.is_file() else None
+    missed = load_json(missed_path, errors) if missed_path.is_file() else None
+    if isinstance(discogs, dict) and discogs.get("target_type") != "git_repository":
+        fail(errors, "Discogs evaluator case must select target_type git_repository")
+    if missed is not None and not isinstance(missed, dict):
+        fail(errors, "missed-contracts evaluator case must contain an object")
+        return
+    if not isinstance(missed, dict):
+        return
+    actual_top_level_keys = set(missed)
+    for key in sorted(MISSED_CONTRACT_TOP_LEVEL_KEYS - actual_top_level_keys):
+        fail(errors, f"missed-contracts top-level policy missing key: {key}")
+    for key in sorted(actual_top_level_keys - MISSED_CONTRACT_TOP_LEVEL_KEYS):
+        fail(errors, f"missed-contracts top-level policy has unexpected key: {key}")
+    for key, expected in MISSED_CONTRACT_TOP_LEVEL_POLICY.items():
+        if key not in missed:
+            continue
+        actual = missed[key]
+        if type(actual) is not type(expected):
+            fail(errors, f"missed-contracts top-level policy {key} has wrong type")
+        elif actual != expected:
+            fail(errors, f"missed-contracts top-level policy {key} has wrong value")
+
+    required_root_ids = missed.get("required_root_ids")
+    if not isinstance(required_root_ids, list):
+        fail(errors, "missed-contracts root-oracle required_root_ids must be a list")
+    elif any(not isinstance(root_id, str) for root_id in required_root_ids):
+        fail(
+            errors,
+            "missed-contracts root-oracle required_root_ids entries must be strings",
+        )
+    elif (
+        len(required_root_ids) != len(MISSED_CONTRACT_ROOT_IDS)
+        or len(set(required_root_ids)) != len(required_root_ids)
+    ):
+        fail(
+            errors,
+            "missed-contracts root-oracle required_root_ids must contain exactly five unique IDs",
+        )
+    elif set(required_root_ids) != MISSED_CONTRACT_ROOT_IDS:
+        fail(errors, "missed-contracts root-oracle required_root_ids values have drifted")
+
+    validate_closed_policy_object(
+        missed.get("root_contracts"),
+        MISSED_CONTRACT_ROOT_CONTRACTS,
+        errors,
+        "root-oracle root_contracts",
+    )
+    validate_closed_policy_object(
+        missed.get("acceptance"),
+        MISSED_CONTRACT_ACCEPTANCE_POLICY,
+        errors,
+        "acceptance",
+    )
+    validate_closed_policy_object(
+        missed.get("attempt_policy"),
+        MISSED_CONTRACT_ATTEMPT_POLICY,
+        errors,
+        "attempt",
+    )
+
+    fixture = missed.get("fixture")
+    if not isinstance(fixture, dict):
+        fail(errors, "missed-contracts fixture contract is missing")
+        return
+    fixture_keys = set(fixture)
+    for key in sorted(MISSED_CONTRACT_FIXTURE_KEYS - fixture_keys):
+        fail(errors, f"missed-contracts fixture policy missing key: {key}")
+    for key in sorted(fixture_keys - MISSED_CONTRACT_FIXTURE_KEYS):
+        fail(errors, f"missed-contracts fixture policy has unexpected key: {key}")
+    for key, expected in MISSED_CONTRACT_FIXTURE_POLICY.items():
+        if key not in fixture:
+            continue
+        actual = fixture[key]
+        if type(actual) is not type(expected):
+            fail(errors, f"missed-contracts fixture policy {key} has wrong type")
+        elif actual != expected:
+            fail(errors, f"missed-contracts fixture policy {key} has wrong value")
+    for key in ("base_tree", "review_tree", "base_commit", "review_commit"):
+        if key in fixture and (
+            not isinstance(fixture[key], str)
+            or re.fullmatch(r"[0-9a-f]{40}", fixture[key]) is None
+        ):
+            fail(errors, f"missed-contracts fixture policy {key} has invalid identity")
+    base_relative = fixture.get("base_root")
+    review_relative = fixture.get("review_root")
+    if not isinstance(base_relative, str) or not isinstance(review_relative, str):
+        fail(errors, "missed-contracts fixture roots are invalid")
+        return
+    if base_relative != "evaluations/material-code-review/fixtures/missed-contracts/base" or review_relative != "evaluations/material-code-review/fixtures/missed-contracts/review":
+        fail(errors, "missed-contracts fixture roots are outside the fixed allowlist")
+        return
+    base_files = fixture_files(root / base_relative, MISSED_CONTRACT_BASE_FILES, errors, "base")
+    overlay_files = fixture_files(
+        root / review_relative,
+        MISSED_CONTRACT_REVIEW_FILES,
+        errors,
+        "review",
+    )
+    if base_files is None or overlay_files is None:
+        return
+    review_files = {**base_files, **overlay_files}
+    try:
+        base_tree = git_tree_hash(base_files)
+        review_tree = git_tree_hash(review_files)
+        identity_keys = (
+            "author_name",
+            "author_email",
+            "base_timestamp",
+            "review_timestamp",
+            "base_message",
+            "review_message",
+        )
+        if any(not isinstance(fixture.get(key), str) for key in identity_keys):
+            raise ValueError("fixture identity is incomplete")
+        base_commit = git_commit_hash(
+            tree_hash=base_tree,
+            parent_hash=None,
+            author_name=fixture["author_name"],
+            author_email=fixture["author_email"],
+            timestamp=fixture["base_timestamp"],
+            message=fixture["base_message"],
+        )
+        review_commit = git_commit_hash(
+            tree_hash=review_tree,
+            parent_hash=base_commit,
+            author_name=fixture["author_name"],
+            author_email=fixture["author_email"],
+            timestamp=fixture["review_timestamp"],
+            message=fixture["review_message"],
+        )
+    except (TypeError, ValueError) as exc:
+        fail(errors, f"missed-contracts fixture identity is invalid: {exc}")
+        return
+    expected_hashes = {
+        "base_tree": base_tree,
+        "review_tree": review_tree,
+        "base_commit": base_commit,
+        "review_commit": review_commit,
+    }
+    for key, expected in expected_hashes.items():
+        if fixture.get(key) != expected:
+            fail(errors, f"missed-contracts fixture {key} has drifted")
+
+
+def validate_missed_contracts_worker_guidance(root: Path, errors: list[str]) -> None:
+    denied_values = (
+        *sorted(MISSED_CONTRACT_ROOT_IDS),
+        *MISSED_CONTRACT_ROOT_CONTRACTS.values(),
+        *MISSED_CONTRACT_RETIRED_GUIDANCE,
+    )
+    for relative in MISSED_CONTRACT_WORKER_GUIDANCE_PATHS:
+        path = root / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8").casefold()
+        for denied in denied_values:
+            if denied.casefold() in text:
+                fail(
+                    errors,
+                    f"missed-contracts worker guidance is contaminated: {relative}",
+                )
+                break
+
+
 def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
     skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
     if not skill_path.is_file():
@@ -325,6 +1038,37 @@ def validate_maintainer_evaluator_assets(root: Path, errors: list[str]) -> None:
         if resolved_asset != resolved_root and resolved_root not in resolved_asset.parents:
             fail(errors, "maintainer evaluator asset path escapes the repository root")
 
+    object_format_contract = parse_evaluator_contract(
+        text,
+        EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_START,
+        EVALUATOR_FIXTURE_OBJECT_FORMAT_CONTRACT_END,
+        errors,
+        "fixture object-format contract",
+    )
+    if object_format_contract is None:
+        return
+    if object_format_contract.get("initialization") != "git init --object-format=sha1":
+        fail(
+            errors,
+            "maintainer evaluator must initialize fixture repositories as SHA-1",
+        )
+    if object_format_contract.get("attestation") != "git rev-parse --show-object-format":
+        fail(errors, "maintainer evaluator must attest the fixture object format")
+    if (
+        object_format_contract.get("required_format") != "sha1"
+        or object_format_contract.get("attestation_timing")
+        != "before-add-commit-or-dispatch"
+    ):
+        fail(
+            errors,
+            "maintainer evaluator must attest SHA-1 before fixture mutation or dispatch",
+        )
+    if (
+        object_format_contract.get("case") != "missed-contracts"
+        or object_format_contract.get("failure") != "hard-stop-no-fallback"
+    ):
+        fail(errors, "maintainer evaluator fixture object-format failure must fail closed")
+
 
 def parse_evaluator_contract(
     text: str,
@@ -371,8 +1115,29 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
     if contract is None:
         return
 
+    contamination_contract = parse_evaluator_contract(
+        skill_text,
+        EVALUATOR_CONTAMINATION_CONTRACT_START,
+        EVALUATOR_CONTAMINATION_CONTRACT_END,
+        errors,
+        "worker contamination contract",
+    )
+    expected_contamination_contract = {
+        "case": "missed-contracts",
+        "check_timing": "before-any-worker-dispatch",
+        "worker_visible_guidance": ",".join(MISSED_CONTRACT_WORKER_GUIDANCE_PATHS),
+        "deny": "root-ids,root-contract-definitions,retired-one-to-one-guidance",
+        "frozen_source_evidence_scan": "false",
+        "private_oracle_timing": "after-durable-judgment-and-identity-reveal",
+        "contamination_dispatch": "false",
+    }
+    if contamination_contract != expected_contamination_contract:
+        fail(errors, "maintainer evaluator worker contamination contract is incomplete")
+    validate_missed_contracts_worker_guidance(root, errors)
+
     required_values = (
         ("reviewer_history", "none", "maintainer evaluator dispatch contract must require empty history for reviewers"),
+        ("challenger_history", "none", "maintainer evaluator dispatch contract must require empty history for challengers"),
         ("initial_judge_history", "none", "maintainer evaluator dispatch contract must require empty history for the initial judge"),
         ("replacement_judge_history", "none", "maintainer evaluator dispatch contract must require empty history for the replacement judge"),
         ("isolation_unavailable_dispatch", "false", "maintainer evaluator isolation failure must not dispatch a worker"),
@@ -389,6 +1154,7 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
 
     fixed_values = {
         "reviewers": "2",
+        "challengers": "case:missed-contracts-only",
         "codex_fork_turns": "none",
         "worker_message": "self-contained-allowlist",
         "private_dispatch_receipt": "true",
@@ -409,6 +1175,7 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
 
     for relative, label in (
         ("evaluations/material-code-review/prompts/reviewer.md", "reviewer"),
+        ("evaluations/material-code-review/prompts/challenger.md", "challenger"),
         ("evaluations/material-code-review/prompts/judge.md", "judge"),
     ):
         prompt_path = root / relative
@@ -426,6 +1193,84 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
         path = root / relative
         if path.is_file() and EVALUATOR_CONTEXT_FREE_DOC_MARKER not in path.read_text(encoding="utf-8"):
             fail(errors, f"{relative} must reference the context-free evaluator dispatch contract")
+
+
+def validate_maintainer_evaluator_challenger(root: Path, errors: list[str]) -> None:
+    skill_path = root / ".agents/skills/material-review-evaluation/SKILL.md"
+    if not skill_path.is_file():
+        return
+    contract = parse_evaluator_contract(
+        skill_path.read_text(encoding="utf-8"),
+        EVALUATOR_CHALLENGER_CONTRACT_START,
+        EVALUATOR_CHALLENGER_CONTRACT_END,
+        errors,
+        "challenger boundary contract",
+    )
+    if contract != EVALUATOR_CHALLENGER_CONTRACT:
+        fail(errors, "maintainer evaluator challenger boundary contract is incomplete")
+
+    controlled_markers = {
+        "evaluations/material-code-review/prompts/challenger.md": (
+            "Candidate findings and check results are forbidden as inputs.",
+            "`NO_COVERAGE_GAP` means only that the supplied declarative coverage is coherent",
+            "The evaluator root and native controller validate those later result properties independently.",
+        ),
+        "evaluations/material-code-review/prompts/reviewer.md": (
+            "before candidate ingestion and Gate A",
+            "without candidate findings or check results",
+            "never replaces later native controller and evaluator-root validation",
+            "coverage-plan version required by the supplied materialized skill",
+            "change-unit owners and affected consumers",
+            "specialist scenario decisions",
+            "exact assignment paths and checks",
+        ),
+        "evaluations/material-code-review/prompts/judge.md": (
+            "required only for the bounded declarative coverage claim",
+            "remains an independent prerequisite",
+        ),
+        "evaluations/material-code-review/rubric.md": (
+            "audits only the declarative change-unit, risk, obligation, obligation-check-contract, assignment, and limitation bundle",
+            "independently of the challenger",
+        ),
+        "EVALUATION.md": (
+            "before candidate ingestion or Gate A",
+            "remains mandatory and independent",
+        ),
+        "evaluations/material-code-review/README.md": (
+            "before candidate ingestion",
+            "remains mandatory and independent",
+        ),
+    }
+    for relative, markers in controlled_markers.items():
+        path = root / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in text:
+                fail(
+                    errors,
+                    f"{relative} lacks the declarative challenger boundary marker",
+                )
+                break
+
+    challenger_path = root / "evaluations/material-code-review/prompts/challenger.md"
+    if challenger_path.is_file():
+        challenger_text = challenger_path.read_text(encoding="utf-8")
+        if "stale, incomplete, blocked, or unsafe check evidence" in challenger_text:
+            fail(
+                errors,
+                "challenger prompt must not claim authority over unseen check-result evidence",
+            )
+
+    reviewer_path = root / "evaluations/material-code-review/prompts/reviewer.md"
+    if reviewer_path.is_file() and "coverage-plan/v3" in reviewer_path.read_text(
+        encoding="utf-8"
+    ):
+        fail(
+            errors,
+            "reviewer prompt must use the supplied materialized skill's coverage-plan contract",
+        )
 
 
 def validate_maintainer_evaluator_dispositions(root: Path, errors: list[str]) -> None:
@@ -598,15 +1443,23 @@ def check_source_package(
     distribution_layout: bool = False,
 ) -> list[str]:
     errors: list[str] = []
+    validate_retired_maintainer_source_paths(errors)
     if sys.version_info < (3, 10):
         return ["package validation requires Python 3.10+"]
     if not root.is_dir():
         return [f"package root is not a directory: {root}"]
 
     actual = {path.relative_to(root).as_posix() for path in iter_files(root)}
-    required = DISTRIBUTABLE_REQUIRED
+    layouts = load_layout_manifest(root, errors)
+    required: set[str] = set()
+    if layouts is not None:
+        mapping_key = "destination" if distribution_layout else "source"
+        required.update(
+            mapping[mapping_key]
+            for mapping in layouts["full-plugin"]["required_mappings"]
+        )
     if not distribution_layout:
-        required = required | MAINTAINER_SOURCE_REQUIRED
+        required.update(MAINTAINER_SOURCE_REQUIRED)
     for rel in sorted(required - actual):
         fail(errors, f"missing required file: {rel}")
 
@@ -704,11 +1557,13 @@ def check_source_package(
             fail(errors, "maintainer evaluator skill description must start with 'Use when '")
         if (
             frontmatter.get("argument-hint")
-            != "base:<skill-ref> candidate:<skill-ref>"
+            != "[case:<case-id>] base:<skill-ref> candidate:<skill-ref>"
         ):
             fail(errors, "maintainer evaluator skill has wrong argument hint")
+        validate_maintainer_evaluator_cases(root, errors)
         validate_maintainer_evaluator_assets(root, errors)
         validate_maintainer_evaluator_dispatch(root, errors)
+        validate_maintainer_evaluator_challenger(root, errors)
         validate_maintainer_evaluator_dispositions(root, errors)
         validate_maintainer_evaluator_reviewer_returns(root, errors)
         validate_maintainer_evaluator_judge_protocol(root, errors)
@@ -761,6 +1616,24 @@ def check_source_package(
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 fail(errors, f"canonical skill activation preflight missing marker: {marker}")
+        for marker in CONTROLLED_WORKFLOW_MARKERS:
+            if marker not in text:
+                fail(errors, f"canonical skill controlled workflow marker missing: {marker}")
+        obligation_workflow_error = validate_obligation_workflow_contract(
+            text,
+            canonical.relative_to(root).as_posix(),
+        )
+        if obligation_workflow_error is not None:
+            fail(errors, obligation_workflow_error)
+
+    workflow = root / "skills/material-code-review/references/workflow.md"
+    if workflow.is_file():
+        workflow_error = validate_workflow_discovery_order(
+            workflow.read_bytes(),
+            workflow.relative_to(root).as_posix(),
+        )
+        if workflow_error is not None:
+            fail(errors, workflow_error)
 
     for path in sorted((root / "skills/material-code-review/schemas").glob("*.json")):
         data = load_json(path, errors)
@@ -769,6 +1642,11 @@ def check_source_package(
                 fail(errors, f"{path.relative_to(root)} schema root must be object")
             if data.get("additionalProperties") is not False:
                 fail(errors, f"{path.relative_to(root)} must set additionalProperties=false")
+            for reference_error in local_schema_reference_errors(
+                data,
+                path.relative_to(root).as_posix(),
+            ):
+                fail(errors, reference_error)
 
     for path in iter_files(root):
         relative_path = path.relative_to(root).as_posix()
@@ -789,18 +1667,33 @@ def check_source_package(
             fail(errors, f"{relative_wrapper} is not executable")
 
     controller = root / "skills/material-code-review/scripts/reviewctl.py"
+    obligation_contract = root / "skills/material-code-review/scripts/obligation_contract.py"
+    if not obligation_contract.is_file():
+        fail(errors, "missing shared obligation contract")
     if controller.is_file():
-        text = controller.read_text(encoding="utf-8")
-        if f'TOOL_VERSION = "{VERSION}"' not in text:
-            fail(errors, "controller version does not match package version")
+        if "from obligation_contract import" not in controller.read_text(encoding="utf-8"):
+            fail(errors, "reviewctl.py does not import obligation_contract")
+        declaration_error = validate_static_version_declaration(
+            controller.read_bytes(),
+            "TOOL_VERSION",
+            VERSION,
+            controller.relative_to(root).as_posix(),
+        )
+        if declaration_error is not None:
+            fail(errors, declaration_error)
         if os.name != "nt" and not (controller.stat().st_mode & stat.S_IXUSR):
             fail(errors, "reviewctl.py is not executable")
 
     packager = root / "scripts/package_plugin.py"
     if packager.is_file():
-        text = packager.read_text(encoding="utf-8")
-        if f'VERSION = "{VERSION}"' not in text:
-            fail(errors, "archive builder version does not match package version")
+        declaration_error = validate_static_version_declaration(
+            packager.read_bytes(),
+            "VERSION",
+            VERSION,
+            packager.relative_to(root).as_posix(),
+        )
+        if declaration_error is not None:
+            fail(errors, declaration_error)
 
     readme = root / "README.md"
     if readme.is_file():
@@ -819,60 +1712,222 @@ def check_source_package(
     return errors
 
 
-def check_zip(path: Path, *, standalone: bool) -> list[str]:
+def check_zip(
+    path: Path,
+    *,
+    standalone: bool,
+    manifest_root: Path,
+) -> list[str]:
     errors: list[str] = []
     if not path.is_file():
         return [f"archive not found: {path}"]
+    layouts = load_layout_manifest(manifest_root, errors)
+    layout = None if layouts is None else layouts[
+        "standalone" if standalone else "full-plugin"
+    ]
     try:
         with zipfile.ZipFile(path) as zf:
-            raw_names = [name for name in zf.namelist() if not name.endswith("/")]
+            members = zf.infolist()
+            resource_error = preflight_archive_resources(path.name, members)
+            if resource_error is not None:
+                fail(errors, resource_error)
+                return errors
             archive_entries = []
-            for raw_name in raw_names:
+            archive_paths_safe = True
+            for member in members:
+                raw_name = member.filename
                 canonical_name = PurePosixPath(raw_name.replace("\\", "/")).as_posix()
-                archive_entries.append((raw_name, canonical_name))
+                archive_entries.append((member, raw_name, canonical_name))
                 if raw_name != canonical_name:
+                    archive_paths_safe = False
                     fail(errors, f"{path.name}: noncanonical archive path {raw_name}")
 
-            canonical_names = [canonical for _, canonical in archive_entries]
+            canonical_names = [canonical for _, _, canonical in archive_entries]
             if len(canonical_names) != len(set(canonical_names)):
+                archive_paths_safe = False
                 fail(errors, f"{path.name}: duplicate archive entries")
-            for raw_name, canonical_name in archive_entries:
+            portable_names: dict[str, str] = {}
+            for member, raw_name, canonical_name in archive_entries:
                 rel = PurePosixPath(canonical_name)
-                if rel.is_absolute() or ".." in rel.parts:
+                if not is_safe_relative_package_path(raw_name):
+                    archive_paths_safe = False
                     fail(errors, f"{path.name}: unsafe archive path {raw_name}")
+                metadata_error = regular_zip_member_metadata_error(
+                    member.create_system,
+                    member.external_attr,
+                )
+                if metadata_error is not None:
+                    archive_paths_safe = False
+                    fail(
+                        errors,
+                        f"{path.name}: archive member {raw_name}: {metadata_error}",
+                    )
+                portable_key = portable_archive_member_key(canonical_name)
+                prior_name = portable_names.get(portable_key)
+                if prior_name is not None and prior_name != canonical_name:
+                    archive_paths_safe = False
+                    fail(
+                        errors,
+                        f"{path.name}: portable archive member collision: "
+                        f"{prior_name} and {canonical_name}",
+                    )
+                else:
+                    portable_names[portable_key] = canonical_name
                 if any(part in FORBIDDEN_PARTS for part in rel.parts) or rel.suffix in FORBIDDEN_SUFFIXES:
+                    archive_paths_safe = False
                     fail(errors, f"{path.name}: forbidden archive entry {raw_name}")
                 if is_maintainer_only_archive_entry(canonical_name):
+                    archive_paths_safe = False
                     fail(
                         errors,
                         f"{path.name}: forbidden maintainer-only archive entry {raw_name}",
                     )
             names = {
                 canonical_name
-                for raw_name, canonical_name in archive_entries
+                for _, raw_name, canonical_name in archive_entries
                 if raw_name == canonical_name
             }
             required = (
-                {"SKILL.md", "agents/openai.yaml", "scripts/reviewctl.py", "schemas/candidate-set.schema.json"}
-                if standalone
+                set()
+                if layout is None
                 else {
-                    "SKILL.md",
-                    ".codex-plugin/plugin.json",
-                    ".agents/plugins/marketplace.json",
-                    "skills/material-code-review/SKILL.md",
-                    "skills/material-code-review/agents/openai.yaml",
-                    "scripts/package_plugin.py",
+                    mapping["destination"]
+                    for mapping in layout["required_mappings"]
                 }
             )
             for rel in sorted(required - names):
                 fail(errors, f"{path.name}: missing archive entry {rel}")
+            archive_manifest_trusted = False
+            if layout is not None and archive_paths_safe:
+                manifest_destination = next(
+                    (
+                        mapping["destination"]
+                        for mapping in layout["required_mappings"]
+                        if mapping["source"] == LAYOUT_MANIFEST_SOURCE.as_posix()
+                    ),
+                    None,
+                )
+                if manifest_destination is not None and manifest_destination in names:
+                    archived_manifest = read_bounded_archive_member(
+                        zf,
+                        manifest_destination,
+                        path.name,
+                    )
+                    try:
+                        json.loads(archived_manifest)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        fail(
+                            errors,
+                            f"{path.name}: archived package layout manifest has invalid JSON",
+                        )
+                    else:
+                        trusted_manifest = (
+                            manifest_root / LAYOUT_MANIFEST_SOURCE
+                        ).read_bytes()
+                        if archived_manifest != trusted_manifest:
+                            fail(
+                                errors,
+                                f"{path.name}: archived package layout manifest differs "
+                                "from trusted source contract",
+                            )
+                        else:
+                            archive_manifest_trusted = True
+            if layout is not None and archive_manifest_trusted:
+                canonical_skill = layout["canonical_skill"]
+                if canonical_skill in names:
+                    try:
+                        archived_skill = read_bounded_archive_member(
+                            zf,
+                            canonical_skill,
+                            path.name,
+                        ).decode("utf-8")
+                    except UnicodeDecodeError:
+                        fail(
+                            errors,
+                            f"{path.name}:{canonical_skill}: archived SKILL has invalid UTF-8",
+                        )
+                    else:
+                        skill_parent = PurePosixPath(canonical_skill).parent
+                        references = set(
+                            re.findall(
+                                r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`",
+                                archived_skill,
+                            )
+                        )
+                        for reference in sorted(references):
+                            archive_reference = (
+                                PurePosixPath(reference)
+                                if skill_parent == PurePosixPath(".")
+                                else skill_parent / PurePosixPath(reference)
+                            ).as_posix()
+                            if archive_reference not in names:
+                                fail(
+                                    errors,
+                                    f"{path.name}: archived SKILL references missing entry "
+                                    f"{archive_reference}",
+                                )
+            workflow_entry = (
+                "references/workflow.md"
+                if standalone
+                else "skills/material-code-review/references/workflow.md"
+            )
+            if archive_manifest_trusted and workflow_entry in names:
+                workflow_error = validate_workflow_discovery_order(
+                    read_bounded_archive_member(zf, workflow_entry, path.name),
+                    f"{path.name}:{workflow_entry}",
+                )
+                if workflow_error is not None:
+                    fail(errors, workflow_error)
+            if layout is not None and archive_paths_safe:
+                schema_destinations = sorted(
+                    mapping["destination"]
+                    for mapping in layout["required_mappings"]
+                    if mapping["source"].startswith(
+                        "skills/material-code-review/schemas/"
+                    )
+                    and mapping["source"].endswith(".json")
+                )
+                for schema_destination in schema_destinations:
+                    if schema_destination not in names:
+                        continue
+                    try:
+                        schema_document = json.loads(
+                            read_bounded_archive_member(
+                                zf,
+                                schema_destination,
+                                path.name,
+                            )
+                        )
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        fail(
+                            errors,
+                            f"{path.name}:{schema_destination}: invalid schema JSON",
+                        )
+                        continue
+                    for reference_error in local_schema_reference_errors(
+                        schema_document,
+                        f"{path.name}:{schema_destination}",
+                    ):
+                        fail(errors, reference_error)
             bad_prefixes = {name.split("/", 1)[0] for name in names if name.startswith("material-code-review-plugin/")}
             if bad_prefixes:
                 fail(errors, f"{path.name}: archive has an unwanted wrapper directory")
-            if not standalone and ".codex-plugin/plugin.json" in names:
-                manifest = json.loads(zf.read(".codex-plugin/plugin.json"))
+            if (
+                not standalone
+                and archive_paths_safe
+                and ".codex-plugin/plugin.json" in names
+            ):
+                manifest = json.loads(
+                    read_bounded_archive_member(
+                        zf,
+                        ".codex-plugin/plugin.json",
+                        path.name,
+                    )
+                )
                 if manifest.get("version") != VERSION or manifest.get("name") != "material-code-review":
                     fail(errors, f"{path.name}: embedded Codex manifest identity/version mismatch")
+    except ArchiveResourceError as exc:
+        fail(errors, str(exc))
     except (zipfile.BadZipFile, json.JSONDecodeError) as exc:
         fail(errors, f"{path.name}: invalid ZIP or embedded JSON: {exc}")
     return errors
@@ -894,14 +1949,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    package_root = Path(args.package_root).resolve()
     errors = check_source_package(
-        Path(args.package_root).resolve(),
+        package_root,
         distribution_layout=args.distribution_layout,
     )
     for raw in args.full_archive:
-        errors.extend(check_zip(Path(raw).resolve(), standalone=False))
+        errors.extend(
+            check_zip(
+                Path(raw).resolve(),
+                standalone=False,
+                manifest_root=package_root,
+            )
+        )
     for raw in args.standalone_archive:
-        errors.extend(check_zip(Path(raw).resolve(), standalone=True))
+        errors.extend(
+            check_zip(
+                Path(raw).resolve(),
+                standalone=True,
+                manifest_root=package_root,
+            )
+        )
     if errors:
         print("[FAIL] material-code-review package validation", file=sys.stderr)
         for error in errors:
