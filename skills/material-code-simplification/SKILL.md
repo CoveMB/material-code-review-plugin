@@ -41,7 +41,7 @@ python3 "$SKILL_DIR/scripts/simplifyctl.py" --help
 
 The adapter delegates all lifecycle commands to the existing controller. Its only additional runtime behavior is `scope=codebase`, which freezes selected current files rather than only Git changes.
 
-New codebase-scope and delegated change-scope simplification runs deliberately retain `material-review/state/v1` and `material-review/candidate-set/v1` with the exact trusted `profile=material-code-simplification`. They do not create change units, coverage plans, review obligations, assignments, specialist decisions, or check results. An unprofiled or contradictory `state/v1` run cannot inherit simplification authority from the adapter and must restart. Standalone adapter 1.3.0 embeds shared controller and helper 1.6.0 for runtime provenance, but selects only the simplification state/v1 profile.
+New codebase-scope and delegated change-scope simplification runs deliberately retain `material-review/state/v1` and `material-review/candidate-set/v1` with the exact trusted `profile=material-code-simplification`. They do not create change units, coverage plans, review obligations, assignments, specialist decisions, or check results. An unprofiled or contradictory `state/v1` run cannot inherit simplification authority from the adapter and must restart. Standalone adapter 1.3.0 embeds shared controller and helper 1.7.0 for runtime provenance, but selects only the simplification state/v1 profile.
 
 ## Hard invariants
 

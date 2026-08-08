@@ -20,6 +20,7 @@ sys.path.insert(0, str(SCRIPTS))
 from obligation_contract import (  # noqa: E402
     ObligationContractError,
     RISK_REQUIREMENTS,
+    check_contracts_for_assignment,
     validate_assignment_result,
     validate_coverage_contract,
 )
@@ -91,7 +92,7 @@ class ObligationCorpusTest(unittest.TestCase):
         template = case["valid_candidate_sets"][0]
         case["valid_candidate_sets"].append(
             {
-                "schema_version": "material-review/candidate-set/v5",
+            "schema_version": "material-review/candidate-set/v6",
                 "scope_hash": template["scope_hash"],
                 "coverage_plan_hash": template["coverage_plan_hash"],
                 "coverage_context_hash": template["coverage_context_hash"],
@@ -365,7 +366,10 @@ class ObligationCorpusTest(unittest.TestCase):
                 for item in check["evidence_items"]
                 if item["item_code"] == mutation["item_code"]
             )
-            evidence_item["evidence_paths"] = evidence_item["evidence_paths"][:1]
+            if "unassigned_path" in mutation:
+                evidence_item["evidence_paths"] = [mutation["unassigned_path"]]
+            else:
+                evidence_item["evidence_paths"] = evidence_item["evidence_paths"][:1]
         elif mutation_type == "omitted_atomic_check":
             target["check_results"] = [
                 item
@@ -494,6 +498,7 @@ class ObligationCorpusTest(unittest.TestCase):
                 "duplicate-required-risk-code",
                 "archive-missing-contract",
                 "output-target-identity-and-runtime-ownership",
+                "persisted-config-shape-migration",
                 "runtime-target-derivation-parity",
                 "validation-to-mutation-identity",
             },
@@ -534,9 +539,16 @@ class ObligationCorpusTest(unittest.TestCase):
                     set(RISK_REQUIREMENTS[risk_code]["required_checks"]),
                 )
 
-    def test_positive_corpus_uses_complete_v5_candidate_contract(self) -> None:
+        persisted_cases = [
+            case
+            for case in self.corpus["cases"]
+            if case["risk_code"] == "persisted_config_semantics"
+        ]
+        self.assertEqual(len(persisted_cases), 1)
+
+    def test_positive_corpus_uses_complete_v6_candidate_contract(self) -> None:
         schema = json.loads(
-            (SKILL_ROOT / "schemas" / "candidate-set-v5.schema.json").read_text(
+            (SKILL_ROOT / "schemas" / "candidate-set-v6.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -562,6 +574,89 @@ class ObligationCorpusTest(unittest.TestCase):
             with self.subTest(case=case["case_id"], category="contract"):
                 with self.assertRaisesRegex(reviewctl.ReviewError, "category"):
                     self.normalized_case_wave(case, invalid)
+
+    def test_persisted_config_contract_has_literal_causal_coverage(self) -> None:
+        expected_item_scopes = (
+            ("accepted_shapes", "any_required_review_path"),
+            ("baseline_identity", "any_required_review_path"),
+            ("comparison_identity", "any_required_review_path"),
+            ("explicit_value_control", "any_required_review_path"),
+            ("migration_control", "any_required_review_path"),
+            ("missing_value_default", "any_required_review_path"),
+        )
+        persisted_cases = [
+            case
+            for case in self.corpus["cases"]
+            if case["risk_code"] == "persisted_config_semantics"
+        ]
+        self.assertEqual(len(persisted_cases), 1)
+        case = persisted_cases[0]
+        self.assertEqual(
+            tuple(
+                sorted(
+                    (item["item_code"], item["path_scope"])
+                    for item in case["expected_evidence_contract"]
+                )
+            ),
+            expected_item_scopes,
+        )
+
+        plan, normalized = self.normalized_case_wave(
+            case,
+            copy.deepcopy(case["valid_candidate_sets"]),
+        )
+        obligation_assignment = next(
+            assignment
+            for assignment in plan["assignments"]
+            if assignment["assignment_kind"] == "obligation"
+        )
+        actual_item_scopes = tuple(
+            sorted(
+                (item["item_code"], item["path_scope"])
+                for contract in check_contracts_for_assignment(
+                    plan,
+                    obligation_assignment,
+                )
+                for item in contract["evidence_items"]
+            )
+        )
+        self.assertEqual(actual_item_scopes, expected_item_scopes)
+        obligation_result = next(
+            result
+            for result in normalized
+            if result["assignment_kind"] == "obligation"
+        )
+        self.assertEqual(
+            {
+                item["item_code"]
+                for check in obligation_result["check_results"]
+                for item in check["evidence_items"]
+            },
+            {item_code for item_code, _ in expected_item_scopes},
+        )
+
+        for mutation_type, expected_error in (
+            ("missing_obligation_evidence_item", "required evidence items"),
+            ("shallow_obligation_evidence_paths", "outside required_review_paths"),
+        ):
+            mutation = next(
+                item
+                for item in case["negative_mutations"]
+                if item["mutation"] == mutation_type
+                and (
+                    mutation_type != "shallow_obligation_evidence_paths"
+                    or "unassigned_path" in item
+                )
+            )
+            mutated_case = copy.deepcopy(case)
+            candidate_sets = copy.deepcopy(case["valid_candidate_sets"])
+            self.apply_mutation(mutated_case, candidate_sets, mutation)
+            with self.subTest(mutation=mutation_type):
+                with self.assertRaisesRegex(
+                    (ObligationContractError, reviewctl.ReviewError),
+                    expected_error,
+                ):
+                    self.normalized_case_wave(mutated_case, candidate_sets)
 
     def test_every_negative_mutation_fails_for_declared_reason(self) -> None:
         for case in self.cases:

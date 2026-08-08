@@ -13,8 +13,8 @@ import re
 from typing import Any
 
 
-COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v4"
-CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v5"
+COVERAGE_PLAN_SCHEMA = "material-review/coverage-plan/v5"
+CANDIDATE_SET_SCHEMA = "material-review/candidate-set/v6"
 WORKFLOW_PROFILE = "material_review"
 CANDIDATE_LOCAL_ID_MAX_LENGTH = 128
 

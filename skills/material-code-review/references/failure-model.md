@@ -17,7 +17,7 @@
 | Selected specialist lacks atomic scenarios, repeats a scenario code, uses a generic claim/countercontrol, or cites a path outside its unit | Reject coverage before dispatch. Rejected specialists must have no scenarios. |
 | Specialist assignment is missing, duplicated, wrong-lens, wrong-unit, or wrong-path | Reject coverage. It cannot substitute for core or obligation authority. |
 | Assignment `required_review_paths` or `required_checks` differs from controller derivation | Reject coverage before dispatch. Do not widen or narrow authority manually. |
-| Malformed candidate-set/v5 JSON | Reject the entire wave. Do not repair it by guessing. |
+| Malformed candidate-set/v6 JSON | Reject the entire wave. Do not repair it by guessing. |
 | Missing, duplicate, stale, unassigned, or identity-mismatched assignment result | Reject the entire wave without authoritative candidates. |
 | Required check is absent or duplicated | Reject the entire wave. |
 | Obligation evidence item is absent, duplicated, unknown, or reconstructed instead of using its machine-owned check contract | Reject the entire wave. Every required evidence item must occur exactly once. |
@@ -57,7 +57,7 @@
 | Historical checkpoint lacks v4 repository authority | Use only the isolated bounded legacy restore path. Never synthesize missing HEAD/ref/index authority. |
 | Post-fix unrelated issue | Record-only; no repair loop. |
 | Attempt or repair-round budget exhausted | `BLOCKED`; never continue indefinitely. |
-| Historical material-review `state/v1` through `state/v4` run | Do not migrate, backfill, or reinterpret it into discovery. Preserve only bounded inspection and checkpointed restoration; forward work requires a state/v5 run. |
+| Historical material-review `state/v1` through `state/v5` run | Do not migrate, backfill, or reinterpret it into discovery. Preserve only bounded inspection and checkpointed restoration; forward work requires a state/v6 run. |
 | Unknown or contradictory state/profile identity | Fail before dispatch and preserve state, artifacts, source, and repository controls unchanged. |
 | External reviewer route unavailable | Fall back locally only if policy permits and record the degraded route. Never silently egress. |
 

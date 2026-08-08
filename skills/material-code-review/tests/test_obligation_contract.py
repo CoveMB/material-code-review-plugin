@@ -185,7 +185,7 @@ def make_plan(
             assignment["required_review_paths"] = unit_paths
             assignment["required_checks"] = []
     return {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "a" * 64,
         "workflow_profile": "material_review",
         "depth": "auto",
@@ -214,7 +214,7 @@ def make_v4_specialist_plan() -> dict:
         primary_paths=("api.py", "writer.py"),
         context_paths=("contract.md",),
     )
-    plan["schema_version"] = "material-review/coverage-plan/v4"
+    plan["schema_version"] = "material-review/coverage-plan/v5"
     unit = plan["change_units"][0]
     unit["canonical_owner"] = "api.py"
     unit["affected_consumers"] = ["contract.md", "writer.py"]
@@ -268,7 +268,7 @@ def output_path_candidate(plan: dict) -> tuple[dict, dict, dict]:
     obligation = plan["review_obligations"][0]
     required_paths = assignment["required_review_paths"]
     result = {
-        "schema_version": "material-review/candidate-set/v5",
+        "schema_version": "material-review/candidate-set/v6",
         "scope_hash": "a" * 64,
         "coverage_plan_hash": "b" * 64,
         "coverage_context_hash": "c" * 64,
@@ -333,7 +333,7 @@ def specialist_candidate(plan: dict) -> tuple[dict, dict]:
         if assignment["assignment_kind"] == "specialist"
     )
     result = {
-        "schema_version": "material-review/candidate-set/v5",
+        "schema_version": "material-review/candidate-set/v6",
         "scope_hash": "a" * 64,
         "coverage_plan_hash": "b" * 64,
         "coverage_context_hash": "c" * 64,
@@ -862,7 +862,7 @@ class ObligationContractTest(unittest.TestCase):
         )
         obligation = plan["review_obligations"][0]
         result = {
-            "schema_version": "material-review/candidate-set/v5",
+            "schema_version": "material-review/candidate-set/v6",
             "scope_hash": "a" * 64,
             "coverage_plan_hash": "b" * 64,
             "coverage_context_hash": "c" * 64,
@@ -954,9 +954,9 @@ class ObligationContractTest(unittest.TestCase):
             "blocked",
         )
 
-    def test_candidate_local_id_length_matches_v5_schema(self) -> None:
+    def test_candidate_local_id_length_matches_v6_schema(self) -> None:
         schema = json.loads(
-            (SKILL_ROOT / "schemas" / "candidate-set-v5.schema.json").read_text(
+            (SKILL_ROOT / "schemas" / "candidate-set-v6.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -977,7 +977,7 @@ class ObligationContractTest(unittest.TestCase):
 
         def result_with_local_id(local_id: str) -> dict:
             result = {
-                "schema_version": "material-review/candidate-set/v5",
+                "schema_version": "material-review/candidate-set/v6",
                 "scope_hash": "a" * 64,
                 "coverage_plan_hash": "b" * 64,
                 "coverage_context_hash": "c" * 64,
@@ -1036,7 +1036,7 @@ class ObligationContractTest(unittest.TestCase):
         )
         assignment = plan["assignments"][0]
         result = {
-            "schema_version": "material-review/candidate-set/v5",
+            "schema_version": "material-review/candidate-set/v6",
             "scope_hash": "a" * 64,
             "coverage_plan_hash": "b" * 64,
             "coverage_context_hash": "c" * 64,
@@ -1066,11 +1066,11 @@ class ObligationContractTest(unittest.TestCase):
     def test_new_schema_paths_match_runtime_path_language(self) -> None:
         schemas = [
             json.loads((SKILL_ROOT / "schemas" / name).read_text(encoding="utf-8"))
-            for name in ("coverage-plan-v4.schema.json", "candidate-set-v5.schema.json")
+            for name in ("coverage-plan-v5.schema.json", "candidate-set-v6.schema.json")
         ]
         self.assertEqual(
             [schema["$id"] for schema in schemas],
-            ["material-review/coverage-plan/v4", "material-review/candidate-set/v5"],
+            ["material-review/coverage-plan/v5", "material-review/candidate-set/v6"],
         )
         patterns = [schema["$defs"]["repositoryRelativeGitPath"]["pattern"] for schema in schemas]
         self.assertEqual(patterns[0], patterns[1])
@@ -1098,25 +1098,49 @@ class ObligationContractTest(unittest.TestCase):
             candidate_v2["properties"]["findings"]["items"]["allOf"],
         )
 
-    def test_v4_coverage_and_v5_candidate_schemas_publish_specialist_contract(self) -> None:
-        coverage = json.loads(
+    def test_v5_coverage_and_v6_candidate_schemas_publish_specialist_contract(self) -> None:
+        legacy_coverage = json.loads(
             (SKILL_ROOT / "schemas" / "coverage-plan-v4.schema.json").read_text(
                 encoding="utf-8"
             )
         )
-        candidate = json.loads(
+        legacy_candidate = json.loads(
             (SKILL_ROOT / "schemas" / "candidate-set-v5.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        coverage = json.loads(
+            (SKILL_ROOT / "schemas" / "coverage-plan-v5.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        candidate = json.loads(
+            (SKILL_ROOT / "schemas" / "candidate-set-v6.schema.json").read_text(
                 encoding="utf-8"
             )
         )
 
         self.assertEqual(
             coverage["properties"]["schema_version"]["const"],
-            "material-review/coverage-plan/v4",
+            "material-review/coverage-plan/v5",
         )
         self.assertEqual(
             candidate["properties"]["schema_version"]["const"],
+            "material-review/candidate-set/v6",
+        )
+        self.assertEqual(
+            legacy_coverage["properties"]["schema_version"]["const"],
+            "material-review/coverage-plan/v4",
+        )
+        self.assertEqual(
+            legacy_candidate["properties"]["schema_version"]["const"],
             "material-review/candidate-set/v5",
+        )
+        self.assertNotIn("evidenceItem", legacy_candidate["$defs"])
+        self.assertNotIn("obligationCheckResult", legacy_candidate["$defs"])
+        self.assertIn("evidence", legacy_candidate["$defs"]["checkResult"]["required"])
+        self.assertIn(
+            "evidence_paths", legacy_candidate["$defs"]["checkResult"]["required"]
         )
         self.assertIn("specialist", coverage["$defs"]["assignment"]["properties"]["assignment_kind"]["enum"])
         self.assertIn("specialist", candidate["properties"]["assignment_kind"]["enum"])
@@ -1231,7 +1255,7 @@ class ObligationContractTest(unittest.TestCase):
             with self.subTest(case=case["case_id"]):
                 self.assertEqual(
                     case["valid_plan"]["schema_version"],
-                    "material-review/coverage-plan/v4",
+                    "material-review/coverage-plan/v5",
                 )
                 for candidate in case["valid_candidate_sets"]:
                     expected_fields = set(required_candidate_fields)
@@ -1240,7 +1264,7 @@ class ObligationContractTest(unittest.TestCase):
                     self.assertEqual(set(candidate), expected_fields)
                     self.assertEqual(
                         candidate["schema_version"],
-                        "material-review/candidate-set/v5",
+                        "material-review/candidate-set/v6",
                     )
                     for check in candidate["check_results"]:
                         self.assertEqual(
@@ -1278,7 +1302,7 @@ class ObligationContractTest(unittest.TestCase):
 
     def test_auto_specialists_bind_selected_units_and_exact_primary_path_union(self) -> None:
         plan = make_plan(risk_code=None, primary_paths=("api.py",), context_paths=("contract.md",))
-        plan["schema_version"] = "material-review/coverage-plan/v4"
+        plan["schema_version"] = "material-review/coverage-plan/v5"
         plan["depth"] = "auto"
         decisions = [
             {
@@ -1345,7 +1369,7 @@ class ObligationContractTest(unittest.TestCase):
         self.assertEqual(specialist["context_paths"], ["contract.md"])
 
         candidate = {
-            "schema_version": "material-review/candidate-set/v5",
+            "schema_version": "material-review/candidate-set/v6",
             "scope_hash": "a" * 64,
             "coverage_plan_hash": "b" * 64,
             "coverage_context_hash": "c" * 64,
@@ -1421,7 +1445,7 @@ class ObligationContractTest(unittest.TestCase):
 
     def test_full_depth_requires_every_specialist_for_every_change_unit(self) -> None:
         plan = make_plan(risk_code=None, primary_paths=("api.py",), context_paths=())
-        plan["schema_version"] = "material-review/coverage-plan/v4"
+        plan["schema_version"] = "material-review/coverage-plan/v5"
         plan["depth"] = "full"
         lenses = (
             "security_privacy",

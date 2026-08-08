@@ -252,6 +252,10 @@
           "source": "skills/material-code-review/schemas/candidate-set-v5.schema.json"
         },
         {
+          "destination": "skills/material-code-review/schemas/candidate-set-v6.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v6.schema.json"
+        },
+        {
           "destination": "skills/material-code-review/schemas/candidate-set.schema.json",
           "source": "skills/material-code-review/schemas/candidate-set.schema.json"
         },
@@ -266,6 +270,10 @@
         {
           "destination": "skills/material-code-review/schemas/coverage-plan-v4.schema.json",
           "source": "skills/material-code-review/schemas/coverage-plan-v4.schema.json"
+        },
+        {
+          "destination": "skills/material-code-review/schemas/coverage-plan-v5.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan-v5.schema.json"
         },
         {
           "destination": "skills/material-code-review/schemas/coverage-plan.schema.json",
@@ -318,6 +326,10 @@
         {
           "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_5_compat.py",
           "source": "skills/material-code-review/tests/fixtures/reviewctl_1_5_compat.py"
+        },
+        {
+          "destination": "skills/material-code-review/tests/fixtures/reviewctl_1_6_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_6_compat.py"
         },
         {
           "destination": "skills/material-code-review/tests/test_discovery_contract.py",
@@ -537,6 +549,10 @@
           "source": "skills/material-code-review/schemas/candidate-set-v5.schema.json"
         },
         {
+          "destination": "schemas/candidate-set-v6.schema.json",
+          "source": "skills/material-code-review/schemas/candidate-set-v6.schema.json"
+        },
+        {
           "destination": "schemas/candidate-set.schema.json",
           "source": "skills/material-code-review/schemas/candidate-set.schema.json"
         },
@@ -551,6 +567,10 @@
         {
           "destination": "schemas/coverage-plan-v4.schema.json",
           "source": "skills/material-code-review/schemas/coverage-plan-v4.schema.json"
+        },
+        {
+          "destination": "schemas/coverage-plan-v5.schema.json",
+          "source": "skills/material-code-review/schemas/coverage-plan-v5.schema.json"
         },
         {
           "destination": "schemas/coverage-plan.schema.json",
@@ -603,6 +623,10 @@
         {
           "destination": "tests/fixtures/reviewctl_1_5_compat.py",
           "source": "skills/material-code-review/tests/fixtures/reviewctl_1_5_compat.py"
+        },
+        {
+          "destination": "tests/fixtures/reviewctl_1_6_compat.py",
+          "source": "skills/material-code-review/tests/fixtures/reviewctl_1_6_compat.py"
         },
         {
           "destination": "tests/test_discovery_contract.py",

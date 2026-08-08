@@ -37,7 +37,7 @@ from package_publication import (  # noqa: E402
     publish_staged_outputs as publish_shared_staged_outputs,
 )
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)
 EXCLUDED_PARTS = {
     ".git",

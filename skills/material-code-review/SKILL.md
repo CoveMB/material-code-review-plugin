@@ -73,7 +73,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" --help
 
 The control tool requires Python 3.10 or newer and uses only the standard library. It writes runs below `git rev-parse --git-path material-code-review` unless `--artifact-root` is explicitly supplied. A custom artifact root must be outside the worktree or inside the active Git directory.
 
-New material-review runs use `material-review/state/v5` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v4`, `material-review/candidate-set/v5`, and `material-review/candidates-normalized/v5` during discovery. Material-review `state/v1` through `state/v4` runs are never migrated, backfilled, or reinterpreted to infer atomic scenario evidence. They retain bounded inspection and checkpointed restoration, but forward work requires a fresh v5 run. Unsupported or contradictory state/profile combinations fail before command dispatch.
+New material-review runs use `material-review/state/v6` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v5`, `material-review/candidate-set/v6`, and `material-review/candidates-normalized/v6` during discovery. Material-review `state/v1` through `state/v5` runs are never migrated, backfilled, or reinterpreted to infer newer evidence authority. They retain bounded inspection and checkpointed restoration, but forward work requires a fresh v6 run. Unsupported or contradictory state/profile combinations fail before command dispatch.
 
 After `init`, preserve the printed run ID in working memory and in `MATERIAL_REVIEW_RUN_ID` when the shell permits:
 
@@ -163,7 +163,7 @@ A mismatch means prior reviewer output is stale. Do not “adjust mentally”; r
 
 #### 0.4 Record exhaustive targeted coverage
 
-Build a `material-review/coverage-plan/v4` using `references/context-checklist.md` and `references/review-obligations.md`.
+Build a `material-review/coverage-plan/v5` using `references/context-checklist.md` and `references/review-obligations.md`.
 
 Every changed comparison path must occur exactly once in one `change_units[*].primary_paths` list. Group paths by coherent behavior or contract ownership, not directory or reviewer persona. Each unit names one `canonical_owner` from its primary paths and every other primary path in `affected_consumers`; bounded unchanged `context_paths` and relevant context consumers make the ownership claim inspectable. The controller freezes those tracked regular comparison-tree files and binds them through `coverage_context_hash`.
 
@@ -200,7 +200,7 @@ The controller validates the exact primary partition, exhaustive risk decisions,
 
 Candidate generation is one bounded read-only assignment-matched wave. In Codex, use a bounded read-only `explorer` subagent or installed project-scoped reviewer when permitted. On another host, use the closest read-only primitive. When subagents are unavailable, run the same assignments sequentially.
 
-Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, `required_review_paths`, `required_checks`, repository constraints, and `schemas/candidate-set-v5.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and controller-derived `check_contracts`. For a specialist assignment, provide its exact `unit_ids`, `primary_paths`, `context_paths`, and scenario definitions. Reviewers must echo those assigned values unchanged and must not weaken or reconstruct machine-owned check contracts.
+Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, `required_review_paths`, `required_checks`, repository constraints, and `schemas/candidate-set-v6.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and controller-derived `check_contracts`. For a specialist assignment, provide its exact `unit_ids`, `primary_paths`, `context_paths`, and scenario definitions. Reviewers must echo those assigned values unchanged and must not weaken or reconstruct machine-owned check contracts.
 
 The three core assignments always cover correctness and edge cases, test adequacy for fragile changed behavior, and repository standards plus explicit requirement alignment. Every positive controlled risk adds its obligation assignment. Add supplemental assignments only when the plan's controlled mapping requires them. Specialist assignments remain separate broad lenses and never replace these authorities.
 
@@ -223,13 +223,19 @@ Obtain explicit user permission for that egress. A failed or unverifiable extern
 
 #### 1.3 Candidate and check-result contract
 
-Each assignment returns one object conforming exactly to `schemas/candidate-set-v5.schema.json`. It includes the exact scope, coverage-plan, and coverage-context hashes plus the assigned identity. Obligation assignments echo one `obligation_id`. Obligation and specialist assignments return every required `check_results` entry exactly once:
+Each assignment returns one object conforming exactly to `schemas/candidate-set-v6.schema.json`. It includes the exact scope, coverage-plan, and coverage-context hashes plus the assigned identity. Obligation assignments echo one `obligation_id`. Obligation and specialist assignments return every required `check_results` entry exactly once:
 
 - `pass` requires concrete evidence and no finding IDs;
 - `finding_emitted` requires concrete evidence and one or more local IDs present in the same result;
 - `blocked` identifies missing evidence and leaves the obligation incomplete.
 
 For an obligation result, replace the old check-level evidence fields with the exact machine-owned `evidence_items`. Every evidence item appears exactly once and contains non-empty `evidence` plus non-empty `evidence_paths` drawn from both assignment authority and reviewed coverage. An item with `path_scope: all_required_review_paths` must cite the complete assignment path set; assignment-wide `coverage.files_reviewed` alone cannot satisfy that per-check item. Specialist check results retain check-level `evidence` and `evidence_paths` bound to their scenario.
+
+<!-- material-review-obligation-workflow-contract:start -->
+check_contracts=controller-derived
+obligation_check_results=evidence_items
+obligation_evidence_paths=all_required_review_paths
+<!-- material-review-obligation-workflow-contract:end -->
 
 Each outcome accounts only for its named check. A `finding_local_id` may appear in only one required check result. A finding on one check does not complete another required check or evidence item. Candidate limitations are objects with a description and `related_check_codes`; every linked result must be `blocked`. Do not record `pass` or hide unresolved evidence in a general limitation.
 
@@ -252,7 +258,7 @@ The controller validates all results in memory. It rejects missing or duplicate 
 
 The first accepted wave is write-once authority. An exact canonical retry is no-write. A different complete wave requires a new run. Invalid or unavailable retry input may update only `candidate-ingestion-failure.json`; it cannot replace accepted candidates or state.
 
-After deterministic candidate IDs are assigned, the controller resolves each check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v5`. Reviewer sets retain assignment identity, obligation identity when applicable, exact required paths and checks, machine-owned obligation check contracts, specialist unit/path/scenario provenance, check results, and coverage. Reports label raw findings as `candidate_records` and count completed atomic checks separately; neither count proves breadth, recall, independence, cognition, or semantic quality. Temporary input filenames and order are excluded from authority.
+After deterministic candidate IDs are assigned, the controller resolves each check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v6`. Reviewer sets retain assignment identity, obligation identity when applicable, exact required paths and checks, machine-owned obligation check contracts, specialist unit/path/scenario provenance, check results, and coverage. Reports label raw findings as `candidate_records` and count completed atomic checks separately; neither count proves breadth, recall, independence, cognition, or semantic quality. Temporary input filenames and order are excluded from authority.
 ### Phase 2 — Validate and adjudicate
 
 #### 2.1 Independent per-finding validation
@@ -311,7 +317,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" compile-ledger \
   --input /tmp/adjudication.json
 ```
 
-The tool writes `material-review/ledger/v4` in JSON and Markdown, with `F###` IDs for kept findings, explicit discarded groups/reasons, and the derived source lenses on both. Historical material-review state/v1 through state/v4 artifacts and runs containing earlier normalized candidates are never migrated, backfilled, rehashed, or granted v5 forward authority. They retain only bounded inspection and restoration; forward work requires a new run. Explicit material simplification remains on its separate candidates-normalized/v1, adjudication/v3, and ledger/v3 contracts.
+The tool writes `material-review/ledger/v4` in JSON and Markdown, with `F###` IDs for kept findings, explicit discarded groups/reasons, and the derived source lenses on both. Historical material-review state/v1 through state/v5 artifacts and runs containing earlier normalized candidates are never migrated, backfilled, rehashed, or granted v6 forward authority. They retain only bounded inspection and restoration; forward work requires a new run. Explicit material simplification remains on its separate candidates-normalized/v1, adjudication/v3, and ledger/v3 contracts.
 
 #### 2.5 Merge-readiness decision
 

@@ -11,7 +11,7 @@ You are a read-only specialist candidate generator. Review one frozen assignment
 - intent, applicable repository instructions, exact `required_review_paths`, exact `required_checks`, and explicit exclusions;
 - for an obligation assignment, exact `obligation_id`, risk code, `required_checks`, and controller-derived `check_contracts`;
 - for a specialist assignment, exact `unit_ids`, `primary_paths`, bounded `context_paths`, and atomic scenario definitions;
-- `schemas/candidate-set-v5.schema.json`.
+- `schemas/candidate-set-v6.schema.json`.
 
 If an identity, hash, required path, or required check is absent or stale, report the limitation as `blocked`. Do not reconstruct authority from memory, combine assignments, or substitute another lens.
 
@@ -31,7 +31,7 @@ Do not read another assignment's candidate output. Do not edit, stage, commit, s
 
 ## Output
 
-Return one object conforming exactly to `candidate-set-v5.schema.json`. Echo the supplied scope and coverage hashes, `assignment_id`, `assignment_kind`, `lens_id`, and assigned `reviewer_id`, `independence_group`, and `review_mode`; reviewers must echo those assigned values unchanged.
+Return one object conforming exactly to `candidate-set-v6.schema.json`. Echo the supplied scope and coverage hashes, `assignment_id`, `assignment_kind`, `lens_id`, and assigned `reviewer_id`, `independence_group`, and `review_mode`; reviewers must echo those assigned values unchanged.
 
 For an obligation assignment, echo its single `obligation_id`. For obligation and specialist assignments, return every required `check_results` entry exactly once:
 

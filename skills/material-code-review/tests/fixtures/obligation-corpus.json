@@ -19,7 +19,7 @@
       "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
         "workflow_profile": "material_review",
         "change_units": [
@@ -232,7 +232,7 @@
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -256,7 +256,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -280,7 +280,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -304,7 +304,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "1111111111111111111111111111111111111111111111111111111111111111",
           "coverage_plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "coverage_context_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -520,7 +520,7 @@
       "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
         "workflow_profile": "material_review",
         "change_units": [
@@ -735,7 +735,7 @@
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -759,7 +759,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -783,7 +783,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -807,7 +807,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "2222222222222222222222222222222222222222222222222222222222222222",
           "coverage_plan_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "coverage_context_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -1051,7 +1051,7 @@
       "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
         "workflow_profile": "material_review",
         "change_units": [
@@ -1266,7 +1266,7 @@
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1290,7 +1290,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1314,7 +1314,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1338,7 +1338,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
           "coverage_plan_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "coverage_context_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1571,7 +1571,7 @@
       "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
         "workflow_profile": "material_review",
         "change_units": [
@@ -1786,7 +1786,7 @@
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1810,7 +1810,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1834,7 +1834,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -1858,7 +1858,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "4444444444444444444444444444444444444444444444444444444444444444",
           "coverage_plan_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "coverage_context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -2090,7 +2090,7 @@
       "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
         "workflow_profile": "material_review",
         "change_units": [
@@ -2303,7 +2303,7 @@
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -2327,7 +2327,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -2351,7 +2351,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -2375,7 +2375,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
           "coverage_plan_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "coverage_context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -2573,7 +2573,7 @@
       "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
       "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
       "valid_plan": {
-        "schema_version": "material-review/coverage-plan/v4",
+        "schema_version": "material-review/coverage-plan/v5",
         "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
         "workflow_profile": "material_review",
         "change_units": [
@@ -2792,7 +2792,7 @@
       },
       "valid_candidate_sets": [
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2816,7 +2816,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2840,7 +2840,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -2864,7 +2864,7 @@
           }
         },
         {
-          "schema_version": "material-review/candidate-set/v5",
+          "schema_version": "material-review/candidate-set/v6",
           "scope_hash": "6666666666666666666666666666666666666666666666666666666666666666",
           "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
           "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
@@ -3197,6 +3197,557 @@
         }
       ],
       "mutation_profile": "atomic_obligation"
+    },
+    {
+      "case_id": "persisted-config-shape-migration",
+      "risk_code": "persisted_config_semantics",
+      "changed_paths": [
+        "config/settings.json"
+      ],
+      "context_paths": [
+        "config/loader.py",
+        "docs/unassigned.md"
+      ],
+      "expected_checks": [
+        "accepted_shape_and_default",
+        "migration_and_identity"
+      ],
+      "expected_defect": "A persisted setting changes its missing-value default or durable identity during migration.",
+      "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+      "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+      "valid_plan": {
+        "schema_version": "material-review/coverage-plan/v5",
+        "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "workflow_profile": "material_review",
+        "change_units": [
+          {
+            "unit_id": "unit-001",
+            "purpose": "Exercise one frozen missed-contract boundary.",
+            "primary_paths": [
+              "config/settings.json"
+            ],
+            "context_paths": [
+              "config/loader.py"
+            ],
+            "risk_codes": [
+              "persisted_config_semantics"
+            ],
+            "selected_risk_rationale": [
+              {
+                "risk_code": "persisted_config_semantics",
+                "rationale": "The changed persisted setting and loader jointly define accepted shapes, defaults, migration, and durable identity.",
+                "evidence_paths": [
+                  "config/settings.json"
+                ]
+              }
+            ],
+            "rejected_risk_rationale": [
+              {
+                "risk_code": "distribution_contract_integrity",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "machine_contract_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "normative_workflow_coherence",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "user_selectable_output_paths",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              },
+              {
+                "risk_code": "verification_mechanism_semantics",
+                "rationale": "The frozen case does not alter this other controlled boundary."
+              }
+            ],
+            "specialist_decisions": [
+              {
+                "lens_id": "security_privacy",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger security_privacy."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "reliability",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger reliability."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "api_contract",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger api_contract."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "migration_deployment",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger migration_deployment."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "concurrency",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger concurrency."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "performance",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger performance."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "documentation",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger documentation."
+                ],
+                "scenario_checks": []
+              },
+              {
+                "lens_id": "architecture_simplification",
+                "decision": "rejected",
+                "basis": "behavior_evidence",
+                "evidence": [
+                  "The fixture behavior does not trigger architecture_simplification."
+                ],
+                "scenario_checks": []
+              }
+            ],
+            "canonical_owner": "config/settings.json",
+            "affected_consumers": [
+              "config/loader.py"
+            ]
+          }
+        ],
+        "review_obligations": [
+          {
+            "obligation_id": "obligation-unit-001-persisted-config-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "persisted_config_semantics",
+            "canonical_owner": "config/settings.json",
+            "affected_consumers": [
+              "config/loader.py"
+            ],
+            "evidence_paths": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "required_lens": "migration_data_safety",
+            "required_checks": [
+              "accepted_shape_and_default",
+              "migration_and_identity"
+            ]
+          }
+        ],
+        "assignments": [
+          {
+            "assignment_id": "core-correctness",
+            "assignment_kind": "core",
+            "lens_id": "correctness",
+            "reviewer_id": "core-correctness",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "required_checks": []
+          },
+          {
+            "assignment_id": "core-standards",
+            "assignment_kind": "core",
+            "lens_id": "standards_alignment",
+            "reviewer_id": "core-standards",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "required_checks": []
+          },
+          {
+            "assignment_id": "core-tests",
+            "assignment_kind": "core",
+            "lens_id": "test_adequacy",
+            "reviewer_id": "core-tests",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "required_checks": []
+          },
+          {
+            "assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+            "assignment_kind": "obligation",
+            "obligation_id": "obligation-unit-001-persisted-config-semantics",
+            "unit_id": "unit-001",
+            "risk_code": "persisted_config_semantics",
+            "lens_id": "migration_data_safety",
+            "reviewer_id": "reviewer-2",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "required_checks": [
+              "accepted_shape_and_default",
+              "migration_and_identity"
+            ]
+          },
+          {
+            "assignment_id": "supplemental-unit-001-persisted-config-semantics-api-config-compatibility",
+            "assignment_kind": "supplemental",
+            "unit_id": "unit-001",
+            "risk_code": "persisted_config_semantics",
+            "lens_id": "api_config_compatibility",
+            "reviewer_id": "reviewer-3",
+            "independence_group": "corpus-independent",
+            "review_mode": "subagent",
+            "required_review_paths": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "required_checks": []
+          }
+        ],
+        "depth": "auto"
+      },
+      "valid_candidate_sets": [
+        {
+          "schema_version": "material-review/candidate-set/v6",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "core-correctness",
+          "assignment_kind": "core",
+          "lens_id": "correctness",
+          "reviewer_id": "core-correctness",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "areas": [
+              "correctness"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v6",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "core-standards",
+          "assignment_kind": "core",
+          "lens_id": "standards_alignment",
+          "reviewer_id": "core-standards",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "areas": [
+              "standards_alignment"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v6",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "core-tests",
+          "assignment_kind": "core",
+          "lens_id": "test_adequacy",
+          "reviewer_id": "core-tests",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "areas": [
+              "test_adequacy"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v6",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "supplemental-unit-001-persisted-config-semantics-api-config-compatibility",
+          "assignment_kind": "supplemental",
+          "lens_id": "api_config_compatibility",
+          "reviewer_id": "reviewer-3",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [],
+          "findings": [],
+          "coverage": {
+            "files_reviewed": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "areas": [
+              "api_config_compatibility"
+            ],
+            "limitations": []
+          }
+        },
+        {
+          "schema_version": "material-review/candidate-set/v6",
+          "scope_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "coverage_plan_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+          "coverage_context_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "assignment_kind": "obligation",
+          "lens_id": "migration_data_safety",
+          "reviewer_id": "reviewer-2",
+          "independence_group": "corpus-independent",
+          "review_mode": "subagent",
+          "check_results": [
+            {
+              "check_code": "accepted_shape_and_default",
+              "outcome": "finding_emitted",
+              "evidence_items": [
+                {
+                  "item_code": "accepted_shapes",
+                  "evidence": [
+                    "Observed omitted, explicit-default, empty, and custom persisted shapes."
+                  ],
+                  "evidence_paths": [
+                    "config/settings.json"
+                  ]
+                },
+                {
+                  "item_code": "missing_value_default",
+                  "evidence": [
+                    "Observed the documented default when the persisted value is absent."
+                  ],
+                  "evidence_paths": [
+                    "config/settings.json"
+                  ]
+                },
+                {
+                  "item_code": "explicit_value_control",
+                  "evidence": [
+                    "Compared explicit default, empty, and custom values against omission."
+                  ],
+                  "evidence_paths": [
+                    "config/settings.json"
+                  ]
+                }
+              ],
+              "finding_local_ids": [
+                "observed-defect"
+              ]
+            },
+            {
+              "check_code": "migration_and_identity",
+              "outcome": "pass",
+              "evidence_items": [
+                {
+                  "item_code": "baseline_identity",
+                  "evidence": [
+                    "Recorded the durable identity produced by the baseline persisted value."
+                  ],
+                  "evidence_paths": [
+                    "config/settings.json"
+                  ]
+                },
+                {
+                  "item_code": "comparison_identity",
+                  "evidence": [
+                    "Recorded the durable identity produced by the comparison runtime."
+                  ],
+                  "evidence_paths": [
+                    "config/settings.json"
+                  ]
+                },
+                {
+                  "item_code": "migration_control",
+                  "evidence": [
+                    "Loaded the baseline-valid value through the comparison migration path."
+                  ],
+                  "evidence_paths": [
+                    "config/settings.json"
+                  ]
+                }
+              ],
+              "finding_local_ids": []
+            }
+          ],
+          "findings": [
+            {
+              "local_id": "observed-defect",
+              "title": "A persisted setting changes its missing-value default or durable identity during migration.",
+              "nature": "defect",
+              "category": "api_contract",
+              "severity": "high",
+              "confidence": "high",
+              "file": "config/settings.json",
+              "line_start": 1,
+              "line_end": 1,
+              "evidence_side": "comparison",
+              "evidence_quote": "observed contract boundary",
+              "scope_relation": "primary",
+              "related_changed_files": [
+                "config/settings.json"
+              ],
+              "direct_dependency": true,
+              "observable_consequence": "The changed contract can accept an invalid state or omit a required control.",
+              "trigger_conditions": "Exercise the declared negative control against the changed boundary.",
+              "counterevidence_checked": [
+                "The paired positive control follows the same authoritative path."
+              ],
+              "why_not_preference": "The observed acceptance language or required sequence is machine-verifiable.",
+              "proposed_resolution": "Align the authoritative contract and preserve the paired control.",
+              "estimated_fix_risk": "low",
+              "requires_user_decision": false,
+              "assumptions": []
+            }
+          ],
+          "coverage": {
+            "files_reviewed": [
+              "config/loader.py",
+              "config/settings.json"
+            ],
+            "areas": [
+              "migration_data_safety"
+            ],
+            "limitations": []
+          },
+          "obligation_id": "obligation-unit-001-persisted-config-semantics"
+        }
+      ],
+      "negative_mutations": [
+        {
+          "name": "wrong-lens",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "wrong_lens",
+          "expected_error": "assignment identity mismatch for lens_id"
+        },
+        {
+          "name": "omitted-check",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "omitted_check",
+          "check_code": "accepted_shape_and_default",
+          "expected_error": "required checks must equal"
+        },
+        {
+          "name": "compound-assignment",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "compound_assignment",
+          "expected_error": "obligation_id does not match"
+        },
+        {
+          "name": "blocked-result",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "blocked_result",
+          "check_code": "accepted_shape_and_default",
+          "expected_error": "blocked required checks"
+        },
+        {
+          "name": "stale-context",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "stale_context",
+          "expected_error": "coverage_context_hash does not match"
+        },
+        {
+          "name": "empty-persisted-shape-evidence",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "semantic_bypass",
+          "check_code": "accepted_shape_and_default",
+          "expected_error": "requires evidence"
+        },
+        {
+          "name": "omit-accepted-shapes-item",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "missing_obligation_evidence_item",
+          "check_code": "accepted_shape_and_default",
+          "item_code": "accepted_shapes",
+          "expected_error": "required evidence items"
+        },
+        {
+          "name": "cite-only-unassigned-config-path",
+          "target_assignment_id": "assignment-obligation-unit-001-persisted-config-semantics",
+          "mutation": "shallow_obligation_evidence_paths",
+          "check_code": "migration_and_identity",
+          "item_code": "migration_control",
+          "unassigned_path": "docs/unassigned.md",
+          "expected_error": "outside required_review_paths"
+        }
+      ],
+      "expected_evidence_contract": [
+        {
+          "item_code": "accepted_shapes",
+          "path_scope": "any_required_review_path"
+        },
+        {
+          "item_code": "missing_value_default",
+          "path_scope": "any_required_review_path"
+        },
+        {
+          "item_code": "explicit_value_control",
+          "path_scope": "any_required_review_path"
+        },
+        {
+          "item_code": "baseline_identity",
+          "path_scope": "any_required_review_path"
+        },
+        {
+          "item_code": "comparison_identity",
+          "path_scope": "any_required_review_path"
+        },
+        {
+          "item_code": "migration_control",
+          "path_scope": "any_required_review_path"
+        }
+      ],
+      "mutation_profile": "atomic_obligation"
     }
   ],
   "low_risk_case": {
@@ -3206,7 +3757,7 @@
     ],
     "context_paths": [],
     "valid_plan": {
-      "schema_version": "material-review/coverage-plan/v4",
+      "schema_version": "material-review/coverage-plan/v5",
       "scope_hash": "9999999999999999999999999999999999999999999999999999999999999999",
       "workflow_profile": "material_review",
       "change_units": [

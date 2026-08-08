@@ -93,6 +93,21 @@ VALID_WORKFLOW_DISCOVERY_BLOCK = "\n".join(
         "Gate B",
     )
 )
+OBLIGATION_WORKFLOW_BLOCK_START = (
+    "<!-- material-review-obligation-workflow-contract:start -->"
+)
+OBLIGATION_WORKFLOW_BLOCK_END = (
+    "<!-- material-review-obligation-workflow-contract:end -->"
+)
+VALID_OBLIGATION_WORKFLOW_BLOCK = "\n".join(
+    (
+        OBLIGATION_WORKFLOW_BLOCK_START,
+        "check_contracts=controller-derived",
+        "obligation_check_results=evidence_items",
+        "obligation_evidence_paths=all_required_review_paths",
+        OBLIGATION_WORKFLOW_BLOCK_END,
+    )
+)
 
 
 def _load_publication_module(module_path: str, label: str):
@@ -946,12 +961,12 @@ class StandalonePackagingTests(unittest.TestCase):
             with zipfile.ZipFile(full_output) as archive:
                 self.assertEqual(
                     archive.comment,
-                    b"material-code-review Codex plugin 1.6.0",
+                    b"material-code-review Codex plugin 1.7.0",
                 )
             with zipfile.ZipFile(standalone_output) as archive:
                 self.assertEqual(
                     archive.comment,
-                    b"material-code-review standalone Codex skill 1.6.0",
+                    b"material-code-review standalone Codex skill 1.7.0",
                 )
             for output in (full_output, standalone_output):
                 checksum = output.with_suffix(output.suffix + ".sha256")
@@ -1587,9 +1602,9 @@ class StandalonePackagingTests(unittest.TestCase):
             self.assertNotEqual(validation_result.returncode, 0)
             self.assertIn("forbidden generated/VCS path in source package: vendor/.git", validation_result.stderr)
 
-    def test_shipped_reviewer_prompts_bind_v5_assignments_in_source_and_archive(self) -> None:
+    def test_shipped_reviewer_prompts_bind_v6_assignments_in_source_and_archive(self) -> None:
         required_tokens = (
-            "candidate-set-v5.schema.json",
+            "candidate-set-v6.schema.json",
             "coverage_plan_hash",
             "coverage_context_hash",
             "assignment_id",
@@ -4635,8 +4650,14 @@ class StandalonePackagingTests(unittest.TestCase):
 
     def test_review_archives_ship_obligation_coverage_contract(self) -> None:
         source_root = REPOSITORY_ROOT / "skills" / "material-code-review"
-        source_candidate = (source_root / "schemas/candidate-set-v5.schema.json").read_bytes()
-        source_coverage = (source_root / "schemas/coverage-plan-v4.schema.json").read_bytes()
+        source_candidate = (source_root / "schemas/candidate-set-v6.schema.json").read_bytes()
+        source_legacy_candidate = (
+            source_root / "schemas/candidate-set-v5.schema.json"
+        ).read_bytes()
+        source_coverage = (source_root / "schemas/coverage-plan-v5.schema.json").read_bytes()
+        source_legacy_coverage = (
+            source_root / "schemas/coverage-plan-v4.schema.json"
+        ).read_bytes()
         source_helper = (source_root / "scripts/obligation_contract.py").read_bytes()
         candidate_schema = json.loads(source_candidate)
         coverage_schema = json.loads(source_coverage)
@@ -4655,15 +4676,18 @@ class StandalonePackagingTests(unittest.TestCase):
                 "schemas/coverage-plan-v2.schema.json",
                 "schemas/coverage-plan-v3.schema.json",
                 "schemas/coverage-plan-v4.schema.json",
+                "schemas/coverage-plan-v5.schema.json",
                 "schemas/candidate-set-v3.schema.json",
                 "schemas/candidate-set-v4.schema.json",
                 "schemas/candidate-set-v5.schema.json",
+                "schemas/candidate-set-v6.schema.json",
                 "scripts/package_layout_contract.py",
                 "scripts/obligation_contract.py",
                 "tests/fixtures/obligation-corpus.json",
                 "tests/fixtures/reviewctl_1_3_compat.py",
                 "tests/fixtures/reviewctl_1_4_compat.py",
                 "tests/fixtures/reviewctl_1_5_compat.py",
+                "tests/fixtures/reviewctl_1_6_compat.py",
                 "tests/test_obligation_contract.py",
                 "tests/test_obligation_corpus.py",
             }
@@ -4679,12 +4703,20 @@ class StandalonePackagingTests(unittest.TestCase):
                         {f"{prefix}{suffix}" for suffix in expected_suffixes}.issubset(names)
                     )
                     self.assertEqual(
-                        archive.read(f"{prefix}schemas/candidate-set-v5.schema.json"),
+                        archive.read(f"{prefix}schemas/candidate-set-v6.schema.json"),
                         source_candidate,
                     )
                     self.assertEqual(
-                        archive.read(f"{prefix}schemas/coverage-plan-v4.schema.json"),
+                        archive.read(f"{prefix}schemas/candidate-set-v5.schema.json"),
+                        source_legacy_candidate,
+                    )
+                    self.assertEqual(
+                        archive.read(f"{prefix}schemas/coverage-plan-v5.schema.json"),
                         source_coverage,
+                    )
+                    self.assertEqual(
+                        archive.read(f"{prefix}schemas/coverage-plan-v4.schema.json"),
+                        source_legacy_coverage,
                     )
                     self.assertEqual(
                         archive.read(f"{prefix}scripts/obligation_contract.py"),
@@ -4720,15 +4752,18 @@ class StandalonePackagingTests(unittest.TestCase):
             "schemas/coverage-plan-v2.schema.json",
             "schemas/coverage-plan-v3.schema.json",
             "schemas/coverage-plan-v4.schema.json",
+            "schemas/coverage-plan-v5.schema.json",
             "schemas/candidate-set-v3.schema.json",
             "schemas/candidate-set-v4.schema.json",
             "schemas/candidate-set-v5.schema.json",
+            "schemas/candidate-set-v6.schema.json",
             "scripts/package_layout_contract.py",
             "scripts/obligation_contract.py",
             "tests/fixtures/obligation-corpus.json",
             "tests/fixtures/reviewctl_1_3_compat.py",
             "tests/fixtures/reviewctl_1_4_compat.py",
             "tests/fixtures/reviewctl_1_5_compat.py",
+            "tests/fixtures/reviewctl_1_6_compat.py",
             "tests/test_obligation_contract.py",
             "tests/test_obligation_corpus.py",
         }
@@ -4807,7 +4842,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertIn(
-                "material-code-review package 1.6.0 is structurally valid",
+                "material-code-review package 1.7.0 is structurally valid",
                 validation_result.stdout,
             )
             targeted_test_result = subprocess.run(
@@ -5038,7 +5073,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 validation_result.stdout + validation_result.stderr,
             )
             self.assertTrue(
-                (distribution_directory / "material-code-review-plugin-1.6.0.zip").is_file()
+                (distribution_directory / "material-code-review-plugin-1.7.0.zip").is_file()
             )
 
     @unittest.skipIf(
@@ -5243,6 +5278,166 @@ class StandalonePackagingTests(unittest.TestCase):
                         VALID_WORKFLOW_DISCOVERY_BLOCK,
                     )
 
+    def test_review_validators_require_obligation_workflow_contract(self) -> None:
+        decoy = (
+            "<!-- decoy: check_contracts evidence_items "
+            "all_required_review_paths -->"
+        )
+        mutations = (
+            (
+                "missing-block-with-decoy",
+                decoy,
+                False,
+            ),
+            (
+                "missing-start",
+                VALID_OBLIGATION_WORKFLOW_BLOCK.replace(
+                    OBLIGATION_WORKFLOW_BLOCK_START,
+                    decoy,
+                    1,
+                ),
+                False,
+            ),
+            (
+                "missing-end",
+                VALID_OBLIGATION_WORKFLOW_BLOCK.replace(
+                    OBLIGATION_WORKFLOW_BLOCK_END,
+                    decoy,
+                    1,
+                ),
+                False,
+            ),
+            (
+                "duplicate-block",
+                f"{VALID_OBLIGATION_WORKFLOW_BLOCK}\n{VALID_OBLIGATION_WORKFLOW_BLOCK}",
+                False,
+            ),
+            (
+                "duplicate-entry",
+                VALID_OBLIGATION_WORKFLOW_BLOCK.replace(
+                    "check_contracts=controller-derived",
+                    "check_contracts=controller-derived\n"
+                    "check_contracts=controller-derived",
+                    1,
+                ),
+                False,
+            ),
+            (
+                "malformed-value-with-decoy",
+                VALID_OBLIGATION_WORKFLOW_BLOCK.replace(
+                    "obligation_check_results=evidence_items",
+                    "obligation_check_results=check_results",
+                    1,
+                )
+                + f"\n{decoy}",
+                False,
+            ),
+            (
+                "weakened-check-contracts-with-decoy",
+                VALID_OBLIGATION_WORKFLOW_BLOCK.replace(
+                    "check_contracts=controller-derived",
+                    "check_contracts=reviewer-derived",
+                    1,
+                )
+                + f"\n{decoy}",
+                False,
+            ),
+            (
+                "weakened-path-scope-with-decoy",
+                VALID_OBLIGATION_WORKFLOW_BLOCK.replace(
+                    "obligation_evidence_paths=all_required_review_paths",
+                    "obligation_evidence_paths=reported_review_paths",
+                    1,
+                )
+                + f"\n{decoy}",
+                False,
+            ),
+            (
+                "relocated-outside-canonical-owner",
+                decoy,
+                True,
+            ),
+        )
+        expected_error = "obligation workflow contract"
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            source_skill = fixture_root / "skills/material-code-review/SKILL.md"
+            canonical_skill = source_skill.read_text(encoding="utf-8")
+            self.assertEqual(canonical_skill.count(VALID_OBLIGATION_WORKFLOW_BLOCK), 1)
+
+            standalone_root = temp_root / "standalone-review"
+            shutil.copytree(
+                fixture_root / "skills/material-code-review",
+                standalone_root,
+            )
+            for contract in sorted(STANDALONE_REVIEW_FIXED_CONTRACTS):
+                shutil.copy2(fixture_root / contract, standalone_root / contract)
+            standalone_skill = standalone_root / "SKILL.md"
+
+            source_intact = self.run_package_validator(fixture_root)
+            standalone_intact = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(standalone_root / "scripts/validate_package.py"),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(source_intact.returncode, 0, source_intact.stderr)
+            self.assertEqual(standalone_intact.returncode, 0, standalone_intact.stderr)
+
+            source_relocation = fixture_root / "README.md"
+            standalone_relocation = standalone_root / "CODEX.md"
+            source_relocation_text = source_relocation.read_text(encoding="utf-8")
+            standalone_relocation_text = standalone_relocation.read_text(encoding="utf-8")
+            for label, replacement, relocate in mutations:
+                with self.subTest(label=label):
+                    source_skill.write_text(
+                        canonical_skill.replace(
+                            VALID_OBLIGATION_WORKFLOW_BLOCK,
+                            replacement,
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    standalone_skill.write_text(
+                        canonical_skill.replace(
+                            VALID_OBLIGATION_WORKFLOW_BLOCK,
+                            replacement,
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    source_relocation.write_text(
+                        source_relocation_text
+                        + (f"\n{VALID_OBLIGATION_WORKFLOW_BLOCK}\n" if relocate else ""),
+                        encoding="utf-8",
+                    )
+                    standalone_relocation.write_text(
+                        standalone_relocation_text
+                        + (f"\n{VALID_OBLIGATION_WORKFLOW_BLOCK}\n" if relocate else ""),
+                        encoding="utf-8",
+                    )
+
+                    source_result = self.run_package_validator(fixture_root)
+                    standalone_result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-B",
+                            str(standalone_root / "scripts/validate_package.py"),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(source_result.returncode, 0)
+                    self.assertIn(expected_error, source_result.stderr)
+                    self.assertNotEqual(standalone_result.returncode, 0)
+                    self.assertIn(expected_error, standalone_result.stderr)
+
     def test_review_archives_require_workflow_order(self) -> None:
         mutations = (
             (
@@ -5399,10 +5594,12 @@ class StandalonePackagingTests(unittest.TestCase):
         source_candidate_v3_bytes = (source_review_root / "schemas" / "candidate-set-v3.schema.json").read_bytes()
         source_candidate_v4_bytes = (source_review_root / "schemas" / "candidate-set-v4.schema.json").read_bytes()
         source_candidate_v5_bytes = (source_review_root / "schemas" / "candidate-set-v5.schema.json").read_bytes()
+        source_candidate_v6_bytes = (source_review_root / "schemas" / "candidate-set-v6.schema.json").read_bytes()
         source_coverage_bytes = (source_review_root / "schemas" / "coverage-plan.schema.json").read_bytes()
         source_coverage_v2_bytes = (source_review_root / "schemas" / "coverage-plan-v2.schema.json").read_bytes()
         source_coverage_v3_bytes = (source_review_root / "schemas" / "coverage-plan-v3.schema.json").read_bytes()
         source_coverage_v4_bytes = (source_review_root / "schemas" / "coverage-plan-v4.schema.json").read_bytes()
+        source_coverage_v5_bytes = (source_review_root / "schemas" / "coverage-plan-v5.schema.json").read_bytes()
         source_controller_bytes = (source_review_root / "scripts" / "reviewctl.py").read_bytes()
         source_obligation_contract_bytes = (source_review_root / "scripts" / "obligation_contract.py").read_bytes()
         definition_name = "canonical_repository_relative_git_path"
@@ -5446,6 +5643,10 @@ class StandalonePackagingTests(unittest.TestCase):
                     source_candidate_v5_bytes,
                 )
                 self.assertEqual(
+                    archive.read("core/schemas/candidate-set-v6.schema.json"),
+                    source_candidate_v6_bytes,
+                )
+                self.assertEqual(
                     archive.read("core/schemas/coverage-plan.schema.json"),
                     source_coverage_bytes,
                 )
@@ -5460,6 +5661,10 @@ class StandalonePackagingTests(unittest.TestCase):
                 self.assertEqual(
                     archive.read("core/schemas/coverage-plan-v4.schema.json"),
                     source_coverage_v4_bytes,
+                )
+                self.assertEqual(
+                    archive.read("core/schemas/coverage-plan-v5.schema.json"),
+                    source_coverage_v5_bytes,
                 )
                 self.assertEqual(controller_bytes, source_controller_bytes)
                 self.assertEqual(
@@ -5480,15 +5685,17 @@ class StandalonePackagingTests(unittest.TestCase):
                     "core/schemas/candidate-set-v3.schema.json",
                     "core/schemas/candidate-set-v4.schema.json",
                     "core/schemas/candidate-set-v5.schema.json",
+                    "core/schemas/candidate-set-v6.schema.json",
                     "core/schemas/coverage-plan.schema.json",
                     "core/schemas/coverage-plan-v2.schema.json",
                     "core/schemas/coverage-plan-v3.schema.json",
                     "core/schemas/coverage-plan-v4.schema.json",
+                    "core/schemas/coverage-plan-v5.schema.json",
                     "core/obligation_contract.py",
                 }.issubset(names)
             )
             self.assertIn(
-                'TOOL_VERSION = "1.6.0"',
+                'TOOL_VERSION = "1.7.0"',
                 controller,
             )
             self.assertIn(
@@ -5504,9 +5711,11 @@ class StandalonePackagingTests(unittest.TestCase):
             "core/schemas/candidate-set-v3.schema.json",
             "core/schemas/candidate-set-v4.schema.json",
             "core/schemas/candidate-set-v5.schema.json",
+            "core/schemas/candidate-set-v6.schema.json",
             "core/schemas/coverage-plan-v2.schema.json",
             "core/schemas/coverage-plan-v3.schema.json",
             "core/schemas/coverage-plan-v4.schema.json",
+            "core/schemas/coverage-plan-v5.schema.json",
         )
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
@@ -5529,8 +5738,8 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"missing archive entry: {member}", result.stderr)
 
-    def test_release_1_5_1_and_simplification_1_3_0_are_aligned(self) -> None:
-        full_version = "1.6.0"
+    def test_release_1_7_0_and_simplification_1_3_0_are_aligned(self) -> None:
+        full_version = "1.7.0"
         simplification_version = "1.3.0"
 
         for relative in (
@@ -5727,8 +5936,8 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertIn(expected_cause, results[0])
 
         for relative, constant_name, expected_value in (
-            ("scripts/package_plugin.py", "VERSION", "1.6.0"),
-            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.6.0"),
+            ("scripts/package_plugin.py", "VERSION", "1.7.0"),
+            ("skills/material-code-review/scripts/reviewctl.py", "TOOL_VERSION", "1.7.0"),
             ("skills/material-code-simplification/scripts/simplifyctl.py", "ADAPTER_VERSION", "1.3.0"),
         ):
             for helper in helpers:
@@ -5888,8 +6097,8 @@ class StandalonePackagingTests(unittest.TestCase):
             controller = fixture_root / "skills/material-code-review/scripts/reviewctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.6.0"',
-                '# TOOL_VERSION = "1.6.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.7.0"',
+                '# TOOL_VERSION = "1.7.0"\nTOOL_VERSION = "0.0.0"',
             )
             root_result = self.run_package_validator(fixture_root)
             review_result = self.run_review_validator(fixture_root)
@@ -5905,8 +6114,8 @@ class StandalonePackagingTests(unittest.TestCase):
             packager = fixture_root / "scripts/package_plugin.py"
             self.replace_once(
                 packager,
-                'VERSION = "1.6.0"',
-                'VERSION = "1.6.0"\nif True:\n    VERSION = "1.6.0"',
+                'VERSION = "1.7.0"',
+                'VERSION = "1.7.0"\nif True:\n    VERSION = "1.7.0"',
             )
             result = self.run_package_validator(fixture_root)
             self.assertNotEqual(result.returncode, 0)
@@ -5921,8 +6130,8 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.6.0"',
-                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.6.0"',
+                'TOOL_VERSION = "1.7.0"',
+                'TOOL_VERSION = "0.0.0"\n# TOOL_VERSION = "1.7.0"',
             )
             self.replace_once(
                 adapter,
@@ -5946,8 +6155,8 @@ class StandalonePackagingTests(unittest.TestCase):
             adapter = fixture_root / "skills/material-code-simplification/scripts/simplifyctl.py"
             self.replace_once(
                 controller,
-                'TOOL_VERSION = "1.6.0"',
-                '# TOOL_VERSION = "1.6.0"\nTOOL_VERSION = "0.0.0"',
+                'TOOL_VERSION = "1.7.0"',
+                '# TOOL_VERSION = "1.7.0"\nTOOL_VERSION = "0.0.0"',
             )
             self.replace_once(
                 adapter,

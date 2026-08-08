@@ -29,6 +29,8 @@ CONTROLLER_1_4_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewct
 CONTROLLER_1_4_COMPAT_SHA256 = "93ddef8c5c712a7426acf4ab0307a4f62824f68a924cc76ad9ddd2f3245b7280"
 CONTROLLER_1_5_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewctl_1_5_compat.py"
 CONTROLLER_1_5_COMPAT_SHA256 = "0e1b9c87c10e990f8d3eb11f747a84504a4b13bbb31a4db159ecf847910c8245"
+CONTROLLER_1_6_COMPAT = Path(__file__).resolve().parent / "fixtures" / "reviewctl_1_6_compat.py"
+CONTROLLER_1_6_COMPAT_SHA256 = "c1ef28fc068c8657f0d69dcd3ff5d1181f880522db318a19ecb961f9062b1a10"
 SPEC = importlib.util.spec_from_file_location("material_reviewctl", SCRIPT)
 assert SPEC and SPEC.loader
 reviewctl = importlib.util.module_from_spec(SPEC)
@@ -199,6 +201,20 @@ class ReviewCtlTest(unittest.TestCase):
             [
                 sys.executable,
                 str(CONTROLLER_1_5_COMPAT),
+                "--run-dir",
+                str(self.run_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def make_run_state_v5_with_frozen_1_6_fixture(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CONTROLLER_1_6_COMPAT),
                 "--run-dir",
                 str(self.run_dir),
             ],
@@ -422,7 +438,7 @@ class ReviewCtlTest(unittest.TestCase):
                 assignment["required_review_paths"] = unit_paths
                 assignment["required_checks"] = []
         return {
-            "schema_version": "material-review/coverage-plan/v4",
+            "schema_version": "material-review/coverage-plan/v5",
             "scope_hash": scope_hash,
             "workflow_profile": "material_review",
             "depth": "auto",
@@ -570,7 +586,7 @@ class ReviewCtlTest(unittest.TestCase):
         findings: list[dict] | None = None,
     ) -> dict:
         payload = {
-            "schema_version": "material-review/candidate-set/v5",
+            "schema_version": "material-review/candidate-set/v6",
             "scope_hash": scope_hash,
             "coverage_plan_hash": coverage_plan_hash,
             "coverage_context_hash": coverage_context_hash,
@@ -2262,7 +2278,7 @@ class ReviewCtlTest(unittest.TestCase):
             bundle = self.load("candidates.json")
             self.assertEqual(
                 bundle["schema_version"],
-                "material-review/candidates-normalized/v5",
+                "material-review/candidates-normalized/v6",
             )
             self.assertEqual(
                 [candidate.get("lens_id") for candidate in bundle["candidates"]],
@@ -2420,7 +2436,7 @@ class ReviewCtlTest(unittest.TestCase):
                 )
                 expected_cause = (
                     "normalized candidates schema_version does not match the active "
-                    "workflow profile: expected material-review/candidates-normalized/v5, "
+                    "workflow profile: expected material-review/candidates-normalized/v6, "
                     "got material-review/candidates-normalized/v1"
                     if name == "old-normalized-version"
                     else "normalized candidates.candidates[0] identity does not match its validated assignment source"
@@ -3588,13 +3604,13 @@ class ReviewCtlTest(unittest.TestCase):
                 self.tearDown()
                 self.setUp()
 
-    def test_v4_coverage_and_v5_candidate_schemas_share_canonical_paths(self) -> None:
+    def test_v5_coverage_and_v6_candidate_schemas_share_canonical_paths(self) -> None:
         schema_root = Path(__file__).resolve().parents[1] / "schemas"
         coverage_schema = json.loads(
-            (schema_root / "coverage-plan-v4.schema.json").read_text(encoding="utf-8")
+            (schema_root / "coverage-plan-v5.schema.json").read_text(encoding="utf-8")
         )
         candidate_schema = json.loads(
-            (schema_root / "candidate-set-v5.schema.json").read_text(encoding="utf-8")
+            (schema_root / "candidate-set-v6.schema.json").read_text(encoding="utf-8")
         )
         path_definition = coverage_schema["$defs"]["repositoryRelativeGitPath"]
         self.assertEqual(
@@ -3614,11 +3630,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(
             coverage_schema["properties"]["schema_version"]["const"],
-            "material-review/coverage-plan/v4",
+            "material-review/coverage-plan/v5",
         )
         self.assertEqual(
             candidate_schema["properties"]["schema_version"]["const"],
-            "material-review/candidate-set/v5",
+            "material-review/candidate-set/v6",
         )
 
         accepted = (
@@ -3652,10 +3668,10 @@ class ReviewCtlTest(unittest.TestCase):
                 with self.assertRaises(reviewctl.ReviewError):
                     reviewctl.require_canonical_repo_path(path, "path")
 
-    def test_candidate_v5_array_uniqueness_matches_runtime(self) -> None:
+    def test_candidate_v6_array_uniqueness_matches_runtime(self) -> None:
         schema_root = Path(__file__).resolve().parents[1] / "schemas"
         candidate_schema = json.loads(
-            (schema_root / "candidate-set-v5.schema.json").read_text(
+            (schema_root / "candidate-set-v6.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -4625,7 +4641,7 @@ class ReviewCtlTest(unittest.TestCase):
         schema_path = (
             Path(__file__).resolve().parents[1]
             / "schemas"
-            / "candidate-set-v5.schema.json"
+            / "candidate-set-v6.schema.json"
         )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertIs(schema["additionalProperties"], False)
@@ -4649,11 +4665,11 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(
             reviewctl.CANDIDATE_SCHEMA_REVIEW,
-            "material-review/candidate-set/v5",
+            "material-review/candidate-set/v6",
         )
         self.assertEqual(
             schema["properties"]["schema_version"]["const"],
-            "material-review/candidate-set/v5",
+            "material-review/candidate-set/v6",
         )
         self.assertEqual(
             schema["properties"]["coverage_plan_hash"],
@@ -5384,12 +5400,108 @@ class ReviewCtlTest(unittest.TestCase):
                 )
                 self.assertNotIn("Run predates required coverage", stderr)
 
-    def test_new_review_run_uses_state_v5(self) -> None:
+    def test_new_review_run_uses_state_v6(self) -> None:
         self.init()
         state = self.load("state.json")
-        self.assertEqual(state["schema_version"], "material-review/state/v5")
+        self.assertEqual(state["schema_version"], "material-review/state/v6")
         self.assertEqual(state["workflow_profile"], "material_review")
         self.assertIs(state["coverage_required"], True)
+
+    def test_state_v5_review_is_restart_only_after_state_v6_release(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(CONTROLLER_1_6_COMPAT.read_bytes()).hexdigest(),
+            CONTROLLER_1_6_COMPAT_SHA256,
+        )
+        scope_hash = self.init()
+        self.make_run_state_v5_with_frozen_1_6_fixture()
+        state = self.load("state.json")
+        self.assertEqual(state["schema_version"], "material-review/state/v5")
+        self.assertEqual(
+            reviewctl.classify_state_contract(state),
+            "legacy_material_review_v5",
+        )
+
+        self.run_tool(
+            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
+        )
+        self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        coverage = self.write_json("state-v5-coverage.json", self.coverage_plan(scope_hash))
+        state_before = (self.run_dir / "state.json").read_bytes()
+        _, stderr = self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(coverage),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertEqual((self.run_dir / "state.json").read_bytes(), state_before)
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+
+        queued_candidate = self.write_json(
+            "state-v5-candidate.json",
+            {"schema_version": "material-review/candidate-set/v5"},
+        )
+        _, stderr = self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(queued_candidate),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertFalse((self.run_dir / "candidate-ingestion-failure.json").exists())
+
+        state = self.load("state.json")
+        state["phase"] = reviewctl.PHASE_CANDIDATES
+        (self.run_dir / "state.json").write_text(
+            json.dumps(state, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        normalized_v5 = {
+            "schema_version": "material-review/candidates-normalized/v5",
+        }
+        (self.run_dir / "candidates.json").write_text(
+            json.dumps(normalized_v5, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        candidates_before = (self.run_dir / "candidates.json").read_bytes()
+        _, stderr = self.run_tool(
+            "ingest-candidates",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(queued_candidate),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
+        self.assertEqual((self.run_dir / "candidates.json").read_bytes(), candidates_before)
+
+        for command in (
+            ("rollback-finding", "--finding", "F001", "--reason", "Bounded legacy check."),
+            ("abort-fixes", "--reason", "Bounded legacy check."),
+        ):
+            with self.subTest(command=command[0]):
+                _, stderr = self.run_tool(
+                    command[0],
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    *command[1:],
+                    expected=2,
+                )
+                self.assertNotIn("Run predates required coverage", stderr)
 
     def test_state_v4_review_is_restart_only_after_state_v5_release(self) -> None:
         self.assertEqual(
@@ -6405,7 +6517,7 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertFalse(downgrade_sentinel.exists())
         self.assertFalse((self.run_dir / "candidates.json").exists())
         self.assertEqual((self.run_dir / "state.json").read_bytes(), state_before_downgrade)
-        self.assertEqual(initial_state["schema_version"], "material-review/state/v5")
+        self.assertEqual(initial_state["schema_version"], "material-review/state/v6")
         self.assertIs(initial_state["coverage_required"], True)
         self.assertEqual(initial_state["workflow_profile"], "material_review")
 

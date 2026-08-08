@@ -32,7 +32,7 @@ from package_layout_contract import (  # noqa: E402
     portable_archive_member_key,
 )
 VERSION = "1.3.0"
-CORE_VERSION = "1.6.0"
+CORE_VERSION = "1.7.0"
 BASE_REQUIRED = {
     "SKILL.md",
     "agents/openai.yaml",
@@ -66,10 +66,12 @@ ARCHIVE_REQUIRED = BASE_REQUIRED | {
     "core/schemas/candidate-set-v3.schema.json",
     "core/schemas/candidate-set-v4.schema.json",
     "core/schemas/candidate-set-v5.schema.json",
+    "core/schemas/candidate-set-v6.schema.json",
     "core/schemas/coverage-plan.schema.json",
     "core/schemas/coverage-plan-v2.schema.json",
     "core/schemas/coverage-plan-v3.schema.json",
     "core/schemas/coverage-plan-v4.schema.json",
+    "core/schemas/coverage-plan-v5.schema.json",
     "core/schemas/adjudication.schema.json",
     "core/schemas/adjudication-v4.schema.json",
     "core/schemas/fix-plan.schema.json",
@@ -342,10 +344,12 @@ def main(argv: list[str] | None = None) -> int:
             "candidate-set-v3.schema.json",
             "candidate-set-v4.schema.json",
             "candidate-set-v5.schema.json",
+            "candidate-set-v6.schema.json",
             "coverage-plan.schema.json",
             "coverage-plan-v2.schema.json",
             "coverage-plan-v3.schema.json",
             "coverage-plan-v4.schema.json",
+            "coverage-plan-v5.schema.json",
             "adjudication.schema.json",
             "adjudication-v4.schema.json",
             "fix-plan.schema.json",

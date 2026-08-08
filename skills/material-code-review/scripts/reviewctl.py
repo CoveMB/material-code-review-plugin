@@ -48,8 +48,9 @@ from obligation_contract import (  # noqa: E402
 )
 
 
-TOOL_VERSION = "1.6.0"
-MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v5"
+TOOL_VERSION = "1.7.0"
+MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v6"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V5 = "material-review/state/v5"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V4 = "material-review/state/v4"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3 = "material-review/state/v3"
 LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
@@ -58,7 +59,7 @@ SIMPLIFICATION_STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
 CANDIDATE_SCHEMA_REVIEW = OBLIGATION_CANDIDATE_SET_SCHEMA
-NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v5"
+NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v6"
 NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION = "material-review/candidates-normalized/v1"
 ADJUDICATION_SCHEMA_REVIEW = "material-review/adjudication/v4"
 ADJUDICATION_SCHEMA_SIMPLIFICATION = "material-review/adjudication/v3"
@@ -81,6 +82,7 @@ STATE_CONTRACT_MATERIAL_REVIEW = "current_material_review"
 STATE_CONTRACT_SIMPLIFICATION = "current_simplification"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1 = "finalizable_material_review_v1"
 STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2 = "finalizable_material_review_v2"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V5 = "legacy_material_review_v5"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4 = "legacy_material_review_v4"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3 = "legacy_material_review_v3"
 STATE_CONTRACT_LEGACY_MATERIAL_REVIEW = "legacy_material_review"
@@ -1801,6 +1803,13 @@ def classify_state_contract(
     ):
         return STATE_CONTRACT_SIMPLIFICATION
     if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V5
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V5
+    if (
         schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V4
         and not profile_present
         and coverage_required is True
@@ -1900,6 +1909,7 @@ def enforce_command_compatibility(args: argparse.Namespace) -> None:
         contract
         in {
             STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4,
+            STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V5,
             STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3,
             STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1,
             STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2,

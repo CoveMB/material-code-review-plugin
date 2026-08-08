@@ -92,10 +92,10 @@ class DiscoveryContractTests(unittest.TestCase):
     def test_discovery_contract_requires_change_units_and_obligations(self) -> None:
         text = self.read("SKILL.md")
         for marker in (
-            "material-review/state/v5",
-            "material-review/coverage-plan/v4",
-            "material-review/candidate-set/v5",
-            "material-review/candidates-normalized/v5",
+            "material-review/state/v6",
+            "material-review/coverage-plan/v5",
+            "material-review/candidate-set/v6",
+            "material-review/candidates-normalized/v6",
             "change_units",
             "canonical_owner",
             "affected_consumers",
@@ -181,10 +181,10 @@ class DiscoveryContractTests(unittest.TestCase):
             self.assertIn("A finding on one check does not complete another required check", text)
             self.assertIn("related_check_codes", text)
 
-    def test_reviewer_template_requires_assignment_matched_v5_output(self) -> None:
+    def test_reviewer_template_requires_assignment_matched_v6_output(self) -> None:
         reviewer = self.read("references/reviewer-template.md")
         for marker in (
-            "candidate-set-v5.schema.json",
+            "candidate-set-v6.schema.json",
             "coverage_context_hash",
             "assignment_id",
             "assignment_kind",

@@ -1,9 +1,16 @@
 # Changelog
 
+## 1.7.0 — 2026-08-06
+
+- Published the strengthened material-review evidence contract under state/v6, coverage-plan/v5, candidate-set/v6, and candidates-normalized/v6 identities.
+- Preserved state/v5, coverage-plan/v4, and candidate-set/v5 as immutable historical contracts; 1.6.0 runs remain inspectable and restorable but require a fresh v6 run for forward work.
+- Added a frozen 1.6.0 compatibility fixture, shipped both historical and current schemas in every applicable layout, and kept standalone material simplification at adapter/archive 1.3.0 with shared-controller/helper provenance 1.7.0.
+- Made the canonical obligation-workflow declaration decoy-resistant in both package validators and added literal persisted-config evidence-item and path-scope corpus controls.
+
 ## 1.6.0 — 2026-08-05
 
 - Added state/v5, coverage-plan/v4, candidate-set/v5, and candidates-normalized/v5 with explicit change-unit owners/consumers and controller-derived assignment path/check authority.
-- Required every obligation check to use a machine-owned claim, exact evidence items with path scopes, and a countercontrol; output-path collision, writer-inventory, and derivation evidence must cover every required review path.
+- Required every obligation result to return every assigned check exactly once with non-empty evidence and evidence paths; output-path collision, writer-inventory, and derivation evidence must cover every required review path.
 - Required every selected specialist to define unique atomic scenario claims, in-unit evidence paths, and countercontrols; specialist and obligation results now return every assigned check exactly once, and one finding ID cannot discharge multiple atomic checks.
 - Replaced free-form material-review limitations with description/check-link objects and made every linked limitation block its named check and the complete write-once candidate wave.
 - Added independent `runtime_target_derivation_parity` and `validation_to_mutation_identity_stability` controls plus repository-neutral causal cases and negative mutations.

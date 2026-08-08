@@ -18,7 +18,7 @@ from package_layout_contract import (  # noqa: E402
     normalize_package_path,
     schema_version_is_supported,
 )
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 ACTIVATION_DISCOVERY_DESCRIPTION = (
     "Evidence-gated review and bounded repair of a concrete Git change scope. "
     "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
@@ -34,18 +34,15 @@ ACTIVATION_PREFLIGHT_MARKERS = (
     "**Fail closed before initialization.**",
 )
 CONTROLLED_WORKFLOW_MARKERS = (
-    "material-review/state/v5",
-    "material-review/coverage-plan/v4",
-    "material-review/candidate-set/v5",
-    "material-review/candidates-normalized/v5",
+    "material-review/state/v6",
+    "material-review/coverage-plan/v5",
+    "material-review/candidate-set/v6",
+    "material-review/candidates-normalized/v6",
     "canonical_owner",
     "affected_consumers",
     "scenario_checks",
     "required_review_paths",
     "required_checks",
-    "check_contracts",
-    "evidence_items",
-    "all_required_review_paths",
     "change_units",
     "review_obligations",
     "assignment_id",
@@ -58,6 +55,17 @@ CONTROLLED_WORKFLOW_MARKERS = (
     "Missing required assignment coverage",
     "CONSEQUENCE_UNSUPPORTED",
     "plausibly blocker/high",
+)
+OBLIGATION_WORKFLOW_BLOCK_START = (
+    "<!-- material-review-obligation-workflow-contract:start -->"
+)
+OBLIGATION_WORKFLOW_BLOCK_END = (
+    "<!-- material-review-obligation-workflow-contract:end -->"
+)
+OBLIGATION_WORKFLOW_CONTRACT_LINES = (
+    "check_contracts=controller-derived",
+    "obligation_check_results=evidence_items",
+    "obligation_evidence_paths=all_required_review_paths",
 )
 WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
 WORKFLOW_BLOCK_END = "\n```"
@@ -237,6 +245,32 @@ def validate_workflow_discovery_order(
     return None
 
 
+def validate_obligation_workflow_contract(
+    source: str | bytes,
+    inspected_path: str,
+) -> str | None:
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{inspected_path}: obligation workflow contract has invalid UTF-8"
+    if (
+        source.count(OBLIGATION_WORKFLOW_BLOCK_START) != 1
+        or source.count(OBLIGATION_WORKFLOW_BLOCK_END) != 1
+    ):
+        return f"{inspected_path}: obligation workflow contract block missing or duplicate"
+    block, separator, _ = source.split(
+        OBLIGATION_WORKFLOW_BLOCK_START,
+        1,
+    )[1].partition(OBLIGATION_WORKFLOW_BLOCK_END)
+    if not separator:
+        return f"{inspected_path}: obligation workflow contract block is unterminated"
+    expected = "\n" + "\n".join(OBLIGATION_WORKFLOW_CONTRACT_LINES) + "\n"
+    if block != expected:
+        return f"{inspected_path}: obligation workflow contract entries are malformed"
+    return None
+
+
 def parse_frontmatter(text: str) -> dict[str, str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -297,6 +331,12 @@ def main() -> int:
         for marker in CONTROLLED_WORKFLOW_MARKERS:
             if marker not in text:
                 errors.append(f"SKILL.md controlled workflow marker missing: {marker}")
+        obligation_workflow_error = validate_obligation_workflow_contract(
+            text,
+            skill.relative_to(ROOT).as_posix(),
+        )
+        if obligation_workflow_error is not None:
+            errors.append(obligation_workflow_error)
         for rel in sorted(set(re.findall(r"`((?:references|schemas)/[A-Za-z0-9._/-]+)`", text))):
             if not (ROOT / rel).is_file():
                 errors.append(f"SKILL.md references missing file: {rel}")
