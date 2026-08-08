@@ -39,9 +39,11 @@ SPEC.loader.exec_module(reviewctl)
 from obligation_contract import RISK_REQUIREMENTS  # noqa: E402
 
 SIMULTANEOUS_INGEST_HARNESS = r"""
+import contextlib
 import importlib.util
 import sys
 import time
+import traceback
 from pathlib import Path
 
 script = Path(sys.argv[1])
@@ -58,22 +60,64 @@ spec.loader.exec_module(module)
 original_load_state = module.load_state
 load_count = 0
 
+def wait_for(path, description):
+    deadline = time.monotonic() + 15.0
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"timed out waiting for {description}")
+        time.sleep(0.005)
+
 def barrier_load_state(run_dir):
     global load_count
     state = original_load_state(run_dir)
     load_count += 1
     if load_count == 2 and state.get("phase") == module.PHASE_CONTEXT:
         (barrier_directory / f"ready-{worker_id}").write_text("ready\n", encoding="utf-8")
-        release = barrier_directory / "release"
-        deadline = time.monotonic() + 15.0
-        while not release.exists():
-            if time.monotonic() >= deadline:
-                raise TimeoutError("simultaneous ingestion barrier was not released")
-            time.sleep(0.005)
+        wait_for(barrier_directory / "release-preflight", "preflight release")
     return state
 
 module.load_state = barrier_load_state
-raise SystemExit(module.main(controller_arguments))
+original_candidate_authority_lock = module.candidate_authority_lock
+
+if worker_id == "a":
+    @contextlib.contextmanager
+    def controlled_candidate_authority_lock(run_dir):
+        with original_candidate_authority_lock(run_dir):
+            (barrier_directory / "lock-held-a").write_text("held\n", encoding="utf-8")
+            wait_for(barrier_directory / "release-winner", "winner release")
+            yield
+
+    module.candidate_authority_lock = controlled_candidate_authority_lock
+elif worker_id == "b":
+    original_acquire_candidate_lock = module._acquire_candidate_lock
+
+    def traced_acquire_candidate_lock(descriptor):
+        try:
+            original_acquire_candidate_lock(descriptor)
+        except OSError as error:
+            if module._candidate_lock_is_contended(error):
+                (barrier_directory / "contended-b").write_text(
+                    "contended\n", encoding="utf-8"
+                )
+            raise
+
+    @contextlib.contextmanager
+    def controlled_candidate_authority_lock(run_dir):
+        wait_for(barrier_directory / "lock-held-a", "worker A to hold the lock")
+        with original_candidate_authority_lock(run_dir):
+            yield
+
+    module._acquire_candidate_lock = traced_acquire_candidate_lock
+    module.candidate_authority_lock = controlled_candidate_authority_lock
+
+try:
+    result = module.main(controller_arguments)
+except BaseException:
+    (barrier_directory / f"exception-{worker_id}.txt").write_text(
+        traceback.format_exc(), encoding="utf-8"
+    )
+    raise
+raise SystemExit(result)
 """
 
 
@@ -4982,24 +5026,49 @@ class ReviewCtlTest(unittest.TestCase):
 
         environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
         processes = [
-            subprocess.Popen(
-                command("a", wave_a),
-                cwd=self.repo,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            (
+                "a",
+                subprocess.Popen(
+                    command("a", wave_a),
+                    cwd=self.repo,
+                    env=environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                ),
             ),
-            subprocess.Popen(
-                command("b", wave_b),
-                cwd=self.repo,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            (
+                "b",
+                subprocess.Popen(
+                    command("b", wave_b),
+                    cwd=self.repo,
+                    env=environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                ),
             ),
         ]
-        completed: list[tuple[int, str, str]] = []
+        completed: list[dict[str, object]] = []
+
+        def require_running(stage: str) -> None:
+            for worker_id, process in processes:
+                returncode = process.poll()
+                if returncode is None:
+                    continue
+                stdout, stderr = process.communicate()
+                exception_path = barrier_directory / f"exception-{worker_id}.txt"
+                exception = (
+                    exception_path.read_text(encoding="utf-8")
+                    if exception_path.exists()
+                    else ""
+                )
+                self.fail(
+                    f"ingestion worker {worker_id} exited during {stage}: "
+                    f"returncode={returncode}, stdout={stdout!r}, stderr={stderr!r}, "
+                    f"exception={exception!r}"
+                )
+
         try:
             ready_paths = [
                 barrier_directory / "ready-a",
@@ -5007,31 +5076,56 @@ class ReviewCtlTest(unittest.TestCase):
             ]
             deadline = time.monotonic() + 15.0
             while not all(path.exists() for path in ready_paths):
-                exited = [
-                    process.returncode
-                    for process in processes
-                    if process.poll() is not None
-                ]
-                if exited:
-                    self.fail(f"ingestion worker exited before the barrier: {exited}")
+                require_running("the preflight barrier")
                 if time.monotonic() >= deadline:
                     self.fail("ingestion workers did not reach the semantic barrier")
                 time.sleep(0.005)
-            (barrier_directory / "release").write_text("go\n", encoding="utf-8")
-            for process in processes:
+            (barrier_directory / "release-preflight").write_text(
+                "go\n", encoding="utf-8"
+            )
+            contention_path = barrier_directory / "contended-b"
+            deadline = time.monotonic() + 15.0
+            while not contention_path.exists():
+                require_running("lock contention")
+                if time.monotonic() >= deadline:
+                    self.fail("worker B did not contend on worker A's candidate lock")
+                time.sleep(0.005)
+            (barrier_directory / "release-winner").write_text(
+                "go\n", encoding="utf-8"
+            )
+            for worker_id, process in processes:
                 stdout, stderr = process.communicate(timeout=30.0)
-                completed.append((process.returncode, stdout, stderr))
+                exception_path = barrier_directory / f"exception-{worker_id}.txt"
+                completed.append(
+                    {
+                        "worker_id": worker_id,
+                        "returncode": process.returncode,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "exception": (
+                            exception_path.read_text(encoding="utf-8")
+                            if exception_path.exists()
+                            else ""
+                        ),
+                    }
+                )
         finally:
-            for process in processes:
+            for _, process in processes:
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
 
-        self.assertEqual(sorted(result[0] for result in completed), [0, 2])
-        winner = next(result for result in completed if result[0] == 0)
-        loser = next(result for result in completed if result[0] == 2)
-        self.assertIn("Candidate bundle written", winner[1])
-        self.assertIn("candidate bundle is already captured", loser[2].lower())
+        by_worker = {result["worker_id"]: result for result in completed}
+        self.assertEqual(
+            {worker_id: result["returncode"] for worker_id, result in by_worker.items()},
+            {"a": 0, "b": 2},
+            completed,
+        )
+        self.assertIn("Candidate bundle written", str(by_worker["a"]["stdout"]))
+        self.assertIn(
+            "candidate bundle is already captured",
+            str(by_worker["b"]["stderr"]).lower(),
+        )
 
         bundle = self.load("candidates.json")
         state = self.load("state.json")
