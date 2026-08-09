@@ -3425,6 +3425,98 @@ class StandalonePackagingTests(unittest.TestCase):
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
     )
+    def test_evaluator_frozen_source_citations_are_side_aware(self) -> None:
+        mutations = (
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "frozen_source_citation=frozen-source://<side>/<percent-encoded-repository-relative-path>#L<start>-L<end>",
+                "frozen_source_citation=<working-tree-path>:<start>-<end>",
+                "maintainer evaluator frozen-source citation format must be side-aware",
+            ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "frozen_source_sides=review,immediate-parent",
+                "frozen_source_sides=review",
+                "maintainer evaluator frozen-source citations must bind both frozen sides",
+            ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "frozen_source_line_basis=one-based-lf-delimited-blob-lines",
+                "frozen_source_line_basis=working-tree-lines",
+                "maintainer evaluator frozen-source lines must be blob-relative",
+            ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "frozen_source_worktree_paths=forbidden",
+                "frozen_source_worktree_paths=allowed",
+                "maintainer evaluator frozen-source citations must forbid working-tree paths",
+            ),
+            (
+                ".agents/skills/material-review-evaluation/SKILL.md",
+                "frozen_source_claim_sides=every-relied-upon-side",
+                "frozen_source_claim_sides=review-only",
+                "maintainer evaluator frozen-source claims must cite every relied-upon side",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "frozen-source://review/<percent-encoded-repository-relative-path>#L<start>-L<end>",
+                "<review-working-tree-path>:<start>-<end>",
+                "judge prompt must define the review-side frozen-source citation",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "frozen-source://immediate-parent/<percent-encoded-repository-relative-path>#L<start>-L<end>",
+                "<parent-working-tree-path>:<start>-<end>",
+                "judge prompt must define the immediate-parent frozen-source citation",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "counted as one-based LF-delimited lines in that exact blob",
+                "counted as zero-based LF-delimited lines in that exact blob",
+                "judge prompt must define one-based blob-relative frozen-source lines",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "A detached working-tree path is not a frozen-source citation.",
+                "A detached working-tree path is a frozen-source citation.",
+                "judge prompt must forbid working-tree frozen-source citations",
+            ),
+            (
+                "evaluations/material-code-review/prompts/judge.md",
+                "Cite every frozen side that a claim relies on.",
+                "Cite only the review side.",
+                "judge prompt must require every relied-upon frozen side",
+            ),
+            (
+                "evaluations/material-code-review/rubric.md",
+                "Every frozen-source citation must use the side-qualified form",
+                "Frozen-source citations may use working-tree paths",
+                "evaluator rubric must require side-qualified frozen-source citations",
+            ),
+            (
+                "evaluations/material-code-review/README.md",
+                "Frozen-source citations are side-qualified and blob-relative",
+                "Frozen-source citations are working-tree-relative",
+                "evaluator README must document side-qualified frozen-source citations",
+            ),
+        )
+        for relative, original, replacement, expected_error in mutations:
+            with self.subTest(relative=relative, original=original), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                self.replace_once(fixture_root / relative, original, replacement)
+
+                validation_result = self.run_package_validator(
+                    fixture_root,
+                    distribution_layout=False,
+                )
+
+                self.assertNotEqual(validation_result.returncode, 0)
+                self.assertIn(expected_error, validation_result.stderr)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_evaluator_judge_failures_are_bounded_and_fail_closed(self) -> None:
         mutations = (
             (

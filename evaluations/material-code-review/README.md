@@ -26,6 +26,8 @@ Any rejection or deferral in either non-empty variant makes the comparison non-c
 
 Judge responses are accepted only after root-side protocol validation. A first identity leak permits one corrected zero-history replacement; every other invalid first response and every invalid or leaking replacement produces a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment while raw attempts remain private local evidence.
 
+Frozen-source citations are side-qualified and blob-relative: `review` resolves against the exact review commit and `immediate-parent` against its verified first parent. Working-tree paths do not identify a frozen side and cannot satisfy the citation contract. The evaluator skill owns the exact URI grammar and resolution procedure; the judge prompt supplies that contract to the anonymous judge.
+
 ## Frozen cases and workflow boundary
 
 The default case is the provenance label `custom-playlists` from `https://github.com/CoveMB/discogs-collection.git`, frozen as the immediate-parent range:

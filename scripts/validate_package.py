@@ -233,6 +233,27 @@ EVALUATOR_JUDGE_PROMPT_MARKER = (
 EVALUATOR_JUDGE_DOC_MARKER = (
     "Judge responses are accepted only after root-side protocol validation."
 )
+EVALUATOR_FROZEN_SOURCE_REVIEW_CITATION = (
+    "frozen-source://review/<percent-encoded-repository-relative-path>#L<start>-L<end>"
+)
+EVALUATOR_FROZEN_SOURCE_PARENT_CITATION = (
+    "frozen-source://immediate-parent/<percent-encoded-repository-relative-path>#L<start>-L<end>"
+)
+EVALUATOR_FROZEN_SOURCE_LINE_BASIS_RULE = (
+    "counted as one-based LF-delimited lines in that exact blob"
+)
+EVALUATOR_FROZEN_SOURCE_WORKTREE_RULE = (
+    "A detached working-tree path is not a frozen-source citation."
+)
+EVALUATOR_FROZEN_SOURCE_CLAIM_SIDES_RULE = (
+    "Cite every frozen side that a claim relies on."
+)
+EVALUATOR_FROZEN_SOURCE_RUBRIC_MARKER = (
+    "Every frozen-source citation must use the side-qualified form"
+)
+EVALUATOR_FROZEN_SOURCE_README_MARKER = (
+    "Frozen-source citations are side-qualified and blob-relative"
+)
 
 MISSED_CONTRACT_BASE_FILES = frozenset(
     {
@@ -1381,6 +1402,11 @@ def validate_maintainer_evaluator_judge_protocol(root: Path, errors: list[str]) 
         ("valid_outcome_count", "1", "maintainer evaluator must accept exactly one judge outcome"),
         ("required_sections", "Outcome,Finding comparison,Repair-plan comparison,Limitations and uncertainty,Citations", "maintainer evaluator must validate every ordered judge section"),
         ("citations", "anonymous-artifacts,frozen-source", "maintainer evaluator must validate anonymous artifact and frozen-source citations"),
+        ("frozen_source_citation", "frozen-source://<side>/<percent-encoded-repository-relative-path>#L<start>-L<end>", "maintainer evaluator frozen-source citation format must be side-aware"),
+        ("frozen_source_sides", "review,immediate-parent", "maintainer evaluator frozen-source citations must bind both frozen sides"),
+        ("frozen_source_line_basis", "one-based-lf-delimited-blob-lines", "maintainer evaluator frozen-source lines must be blob-relative"),
+        ("frozen_source_worktree_paths", "forbidden", "maintainer evaluator frozen-source citations must forbid working-tree paths"),
+        ("frozen_source_claim_sides", "every-relied-upon-side", "maintainer evaluator frozen-source claims must cite every relied-upon side"),
         ("identity_data", "forbidden", "maintainer evaluator must reject identity-bearing judgment data"),
         ("judgment_before_mapping", "true", "maintainer evaluator must write judgment before revealing the private mapping"),
         ("max_attempts", "2", "maintainer evaluator judge protocol must allow at most two attempts"),
@@ -1399,13 +1425,35 @@ def validate_maintainer_evaluator_judge_protocol(root: Path, errors: list[str]) 
             fail(errors, error)
 
     judge_prompt = root / "evaluations/material-code-review/prompts/judge.md"
-    if judge_prompt.is_file() and EVALUATOR_JUDGE_PROMPT_MARKER not in judge_prompt.read_text(encoding="utf-8"):
-        fail(errors, "judge prompt must require root-side protocol validation")
+    if judge_prompt.is_file():
+        judge_prompt_text = judge_prompt.read_text(encoding="utf-8")
+        if EVALUATOR_JUDGE_PROMPT_MARKER not in judge_prompt_text:
+            fail(errors, "judge prompt must require root-side protocol validation")
+        if EVALUATOR_FROZEN_SOURCE_REVIEW_CITATION not in judge_prompt_text:
+            fail(errors, "judge prompt must define the review-side frozen-source citation")
+        if EVALUATOR_FROZEN_SOURCE_PARENT_CITATION not in judge_prompt_text:
+            fail(errors, "judge prompt must define the immediate-parent frozen-source citation")
+        if EVALUATOR_FROZEN_SOURCE_LINE_BASIS_RULE not in judge_prompt_text:
+            fail(errors, "judge prompt must define one-based blob-relative frozen-source lines")
+        if EVALUATOR_FROZEN_SOURCE_WORKTREE_RULE not in judge_prompt_text:
+            fail(errors, "judge prompt must forbid working-tree frozen-source citations")
+        if EVALUATOR_FROZEN_SOURCE_CLAIM_SIDES_RULE not in judge_prompt_text:
+            fail(errors, "judge prompt must require every relied-upon frozen side")
     rubric = root / "evaluations/material-code-review/rubric.md"
     if rubric.is_file():
         rubric_text = rubric.read_text(encoding="utf-8")
         if "private `judge-invalid` reason" not in rubric_text or "fifth public outcome" not in rubric_text:
             fail(errors, "evaluator rubric must preserve bounded judge-invalid semantics")
+        if EVALUATOR_FROZEN_SOURCE_RUBRIC_MARKER not in rubric_text:
+            fail(errors, "evaluator rubric must require side-qualified frozen-source citations")
+
+    evaluator_readme = root / "evaluations/material-code-review/README.md"
+    if (
+        evaluator_readme.is_file()
+        and EVALUATOR_FROZEN_SOURCE_README_MARKER
+        not in evaluator_readme.read_text(encoding="utf-8")
+    ):
+        fail(errors, "evaluator README must document side-qualified frozen-source citations")
 
     for relative in EVALUATOR_CONTEXT_FREE_DOCS:
         path = root / relative

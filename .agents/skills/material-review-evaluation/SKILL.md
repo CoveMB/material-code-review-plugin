@@ -261,6 +261,17 @@ Require exact anonymous artifact and source citations and exactly one outcome:
 
 The judge must not receive or infer refs, skill commits, branch names, commit subjects, version order, private mapping, prior reports, or expected roots.
 
+Every frozen-source citation must use exactly one of these side-qualified forms:
+
+```text
+frozen-source://review/<percent-encoded-repository-relative-path>#L<start>-L<end>
+frozen-source://immediate-parent/<percent-encoded-repository-relative-path>#L<start>-L<end>
+```
+
+`review` binds to the recorded exact review commit. `immediate-parent` binds to that commit's already-attested first parent, which must equal the selected case's recorded base commit. The path is the exact repository-relative Git pathname: keep `/` as the segment separator and percent-encode every other byte outside the URI unreserved set with uppercase hexadecimal escapes. Percent-decode exactly once, reject a malformed or non-canonical encoding, and pass `<recorded-commit>:<decoded-path>` to Git as one argument without shell interpolation. Require the resolved object to be a blob.
+
+`start` and `end` are unpadded positive decimal line numbers with `start <= end`. Lines are one-based LF-delimited blob records; a final LF does not create another empty line. Require the complete range to exist. One citation identifies one contiguous range on one side. Cite every frozen side that a claim relies on; a comparison, removal, or changed-contract claim that relies on both blobs must provide both citations, using each side's actual path when paths differ. A detached working-tree path is not a frozen-source citation. Never fall back to a clone path, infer the side from line availability, or reinterpret a missing or out-of-range blob. Record any malformed form, unknown side, unresolved blob, or invalid range as `UNRESOLVABLE_FROZEN_SOURCE_CITATION` and apply the existing non-replaceable judge-invalid branch.
+
 For missed-contracts, the judge may evaluate whether the anonymous ledgers support all five privately required roots only through the root's post-judgment acceptance check; do not give the private root list or root definitions to the judge. A challenger-reported gap, invalid challenger evidence, incomplete obligation evidence, missing candidate root, lost baseline material root, unsupported high-severity addition, invalid Gate-A evidence, or mutation requires `INSUFFICIENT_EVIDENCE` for a successful-strengthening claim. `NO_COVERAGE_GAP` is necessary but does not by itself prove finding correctness.
 
 <!-- evaluator-judge-protocol:start
@@ -268,6 +279,11 @@ public_outcomes=VARIANT_A_STRONGER,VARIANT_B_STRONGER,MATERIAL_TIE,INSUFFICIENT_
 valid_outcome_count=1
 required_sections=Outcome,Finding comparison,Repair-plan comparison,Limitations and uncertainty,Citations
 citations=anonymous-artifacts,frozen-source
+frozen_source_citation=frozen-source://<side>/<percent-encoded-repository-relative-path>#L<start>-L<end>
+frozen_source_sides=review,immediate-parent
+frozen_source_line_basis=one-based-lf-delimited-blob-lines
+frozen_source_worktree_paths=forbidden
+frozen_source_claim_sides=every-relied-upon-side
 identity_data=forbidden
 judgment_before_mapping=true
 raw_attempts=private-local
