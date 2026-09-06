@@ -56,10 +56,6 @@ PROMPT_DRIVEN_EVALUATOR_PATHS = (
 MAINTAINER_EVALUATOR_PATHS = PROMPT_DRIVEN_EVALUATOR_PATHS + (
     "EVALUATION.md",
 )
-RETIRED_EVALUATOR_DOCUMENTS = (
-    "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
-    "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
-)
 # Split literals intentionally keep repo-wide legacy-token scans from matching this test file.
 LEGACY_EVALUATOR_PATHS = (
     "bin/material-review-" "evaluate",
@@ -2977,6 +2973,84 @@ class StandalonePackagingTests(unittest.TestCase):
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",
     )
+    def test_root_evaluator_overviews_require_invocations_and_safety_boundaries(
+        self,
+    ) -> None:
+        required_markers = (
+            "$material-review-evaluation base:<skill-ref> candidate:<skill-ref>",
+            "$material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<skill-ref>",
+            "This maintainer-only evaluator is available only from a source checkout and produces trusted-local, directional evidence.",
+            "It never approves Gate B, mutates reviewed source, publishes results, or authorizes source egress.",
+            "Raw evidence remains under ignored `.evaluation-runs/`, may contain machine-specific or private data, and is not automatically sanitized.",
+            "The evaluator skill, evaluation assets, and run data are excluded from every full and standalone release archive.",
+        )
+        for relative in ("README.md", "EVALUATION.md"):
+            for missing_marker in required_markers:
+                with self.subTest(relative=relative, missing_marker=missing_marker), tempfile.TemporaryDirectory() as temp_directory:
+                    fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                    overview = fixture_root / relative
+                    text = overview.read_text(encoding="utf-8")
+                    for marker in required_markers:
+                        if marker != missing_marker and marker not in text:
+                            text += f"\n{marker}\n"
+                    overview.write_text(
+                        text.replace(missing_marker, "", 1),
+                        encoding="utf-8",
+                    )
+
+                    validation_result = self.run_package_validator(
+                        fixture_root,
+                        distribution_layout=False,
+                    )
+
+                    self.assertNotEqual(validation_result.returncode, 0)
+                    self.assertIn(
+                        f"{relative} lacks a required maintainer evaluator overview marker",
+                        validation_result.stderr,
+                    )
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
+    def test_operational_evaluator_readme_protocol_markers_fail_closed(self) -> None:
+        mutations = (
+            (
+                "Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history.",
+                "Evaluator workers receive bounded inherited task history.",
+                "evaluations/material-code-review/README.md must reference the context-free evaluator dispatch contract",
+            ),
+            (
+                "Any rejection or deferral in either non-empty variant makes the comparison non-comparable.",
+                "Rejected or deferred findings remain comparable.",
+                "evaluations/material-code-review/README.md must state the evaluator rejection and deferral policy",
+            ),
+            (
+                "Judge responses are accepted only after root-side protocol validation.",
+                "Judge responses are accepted without root-side protocol validation.",
+                "evaluations/material-code-review/README.md must state the bounded judge-validation protocol",
+            ),
+        )
+        for original, replacement, expected_error in mutations:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                evaluator_readme = (
+                    fixture_root / "evaluations/material-code-review/README.md"
+                )
+                self.replace_once(evaluator_readme, original, replacement)
+
+                validation_result = self.run_package_validator(
+                    fixture_root,
+                    distribution_layout=False,
+                )
+
+                self.assertNotEqual(validation_result.returncode, 0)
+                self.assertIn(expected_error, validation_result.stderr)
+
+    @unittest.skipIf(
+        DISTRIBUTION_LAYOUT,
+        "maintainer evaluator is absent from distribution layouts",
+    )
     def test_evaluator_assets_require_attested_root_anchor(self) -> None:
         asset_path = "evaluations/material-code-review/cases/discogs-custom-playlists.json"
 
@@ -3638,57 +3712,7 @@ class StandalonePackagingTests(unittest.TestCase):
                     validation_result.stderr,
                 )
 
-    def test_retired_evaluator_documents_are_not_source_requirements(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_directory:
-            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
-
-            for relative in RETIRED_EVALUATOR_DOCUMENTS:
-                self.assertFalse((fixture_root / relative).exists(), relative)
-
-            validation_result = self.run_package_validator(
-                fixture_root,
-                distribution_layout=False,
-            )
-
-            self.assertEqual(validation_result.returncode, 0, validation_result.stderr)
-
-    def test_retired_evaluator_document_reactivation_fails(self) -> None:
-        inventories = (
-            "MAINTAINER_SOURCE_REQUIRED = {\n",
-            "EVALUATOR_CONTEXT_FREE_DOCS = (\n",
-        )
-        for inventory_start in inventories:
-            for relative in RETIRED_EVALUATOR_DOCUMENTS:
-                with self.subTest(inventory_start=inventory_start, relative=relative), tempfile.TemporaryDirectory() as temp_directory:
-                    fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
-                    fixture_validator = fixture_root / "scripts" / "validate_package.py"
-                    self.replace_once(
-                        fixture_validator,
-                        inventory_start,
-                        f'{inventory_start}    "{relative}",\n',
-                    )
-
-                    validation_result = subprocess.run(
-                        [
-                            sys.executable,
-                            "-B",
-                            str(fixture_validator),
-                            "--package-root",
-                            str(fixture_root),
-                        ],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-
-                    self.assertNotEqual(validation_result.returncode, 0)
-                    self.assertIn(
-                        "retired maintainer-source path reintroduced into active inventory: "
-                        f"{relative}",
-                        validation_result.stderr,
-                    )
-
-    def test_retired_evaluator_documents_remain_ignored(self) -> None:
+    def test_generic_superpowers_document_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
             initialize_repository_result = subprocess.run(
@@ -3703,21 +3727,20 @@ class StandalonePackagingTests(unittest.TestCase):
                 0,
                 initialize_repository_result.stderr,
             )
-            for relative in RETIRED_EVALUATOR_DOCUMENTS:
-                with self.subTest(relative=relative):
-                    check_ignore_result = subprocess.run(
-                        ["git", "check-ignore", "-v", "--", relative],
-                        cwd=fixture_root,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
+            relative = "docs/superpowers/probe.md"
+            check_ignore_result = subprocess.run(
+                ["git", "check-ignore", "-v", "--", relative],
+                cwd=fixture_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
-                    self.assertEqual(check_ignore_result.returncode, 0, check_ignore_result.stderr)
-                    matched_rule, ignored_path = check_ignore_result.stdout.rstrip().split("\t", 1)
-                    _, _, pattern = matched_rule.rpartition(":")
-                    self.assertEqual(ignored_path, relative)
-                    self.assertEqual(pattern, "docs/superpowers/")
+            self.assertEqual(check_ignore_result.returncode, 0, check_ignore_result.stderr)
+            matched_rule, ignored_path = check_ignore_result.stdout.rstrip().split("\t", 1)
+            _, _, pattern = matched_rule.rpartition(":")
+            self.assertEqual(ignored_path, relative)
+            self.assertEqual(pattern, "docs/superpowers/")
 
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
@@ -3816,16 +3839,16 @@ class StandalonePackagingTests(unittest.TestCase):
                 "---\nname: material-review-evaluation\n---\n",
             ),
             (
-                "full-retired-document",
+                "full-superpowers-document",
                 "--full-archive",
-                RETIRED_EVALUATOR_DOCUMENTS[0],
-                "retired maintainer document\n",
+                "docs/superpowers/probe.md",
+                "maintainer-only probe\n",
             ),
             (
-                "standalone-retired-document",
+                "standalone-superpowers-document",
                 "--standalone-archive",
-                RETIRED_EVALUATOR_DOCUMENTS[0],
-                "retired maintainer document\n",
+                "docs/superpowers/probe.md",
+                "maintainer-only probe\n",
             ),
         )
         for label, archive_flag, entry, contents in archive_cases:

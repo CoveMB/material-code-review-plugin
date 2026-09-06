@@ -257,29 +257,25 @@ Material-review ZIP validation requires every member to use Unix regular-file me
 
 ## Maintainer-only version evaluation
 
-From a fresh Codex task opened at this repository root, invoke the repository-local evaluator skill with two distinct material-review refs:
+This maintainer-only evaluator is available only from a source checkout and produces trusted-local, directional evidence.
+
+From a fresh Codex task opened at this repository root, compare two distinct material-review refs with:
 
 ```text
 $material-review-evaluation base:<skill-ref> candidate:<skill-ref>
 ```
 
-That invocation defaults to the frozen Discogs case. Use `$material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<skill-ref>` for the deterministic five-root obligation-coverage confirmation.
+```text
+$material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<skill-ref>
+```
 
-Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history. Codex uses `fork_turns: "none"`; a host that cannot verify an equivalent zero-history primitive stops with `INSUFFICIENT_EVIDENCE` and no worker or winner.
+It never approves Gate B, mutates reviewed source, publishes results, or authorizes source egress.
 
-Any rejection or deferral in either non-empty variant makes the comparison non-comparable. The evaluator preserves the native hash-bound disposition and lifecycle evidence, produces no comparison plan for that state, and requires `INSUFFICIENT_EVIDENCE` without changing the material-review controller.
+Raw evidence remains under ignored `.evaluation-runs/`, may contain machine-specific or private data, and is not automatically sanitized.
 
-Judge responses are accepted only after root-side protocol validation. The first identity leak permits one corrected zero-history replacement; every other invalid first response and every invalid or leaking replacement produces a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment, with raw attempts retained only in private local evidence.
+The evaluator skill, evaluation assets, and run data are excluded from every full and standalone release archive.
 
-The default workflow compares one anonymous primary-reviewer trial per skill version against the frozen Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`. The `custom-playlists` branch name is provenance only; the exact commits remain authoritative. The missed-contracts case reconstructs and verifies a deterministic temporary Git fixture with exactly five contract defects. It adds one case-only zero-history coverage challenger per variant; candidate findings and private expected roots are forbidden from that challenger.
-
-Each reviewer returns its complete finding ledger and native Gate-A result. The initial “approve all retained findings for planning” language is best-effort maintainer intent, not Gate-A approval. Both valid variants pause in one combined Gate-A interaction: Codex requests dispositions for every exact retained ID and explicit acceptance for each empty ledger. An all-approved non-empty variant continues to a controller-validated plan and stops at Gate B; any rejected or deferred ID uses the non-comparable no-plan policy above. Gate B is never approved and no repair runs.
-
-A fresh read-only judge compares anonymous findings, plans, limitations, and any case-only challenge evidence against the frozen source and returns `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. Invalid or missing required reviewer evidence is recorded without reconstruction and yields `INSUFFICIENT_EVIDENCE`. For missed-contracts, a challenger gap, missing private root, lost baseline finding, unsupported high-severity addition, invalid Gate-A evidence, or mutation blocks a successful-strengthening claim. One comparison and at most one evidence-backed repair confirmation are permitted; there is no resampling. The private A/B mapping is revealed only after `judgment.md` is written.
-
-This is trusted-local, directional evidence. It uses logical separation rather than Docker, has no CI/CD integration, automatic retry, automatic resume, or publication path, and makes no statistical claim. The explicit workflow invokes the selected materialized skill; it does not prove implicit skill selection.
-
-Raw evidence remains under ignored `.evaluation-runs/<run-id>/` paths and may contain machine-specific paths. It is not automatically sanitized or published. The evaluator skill and all evaluation assets are excluded from the full plugin and standalone archives. See `evaluations/material-code-review/README.md` for prerequisites, output layout, trust boundaries, and interruption handling.
+The source-only [evaluator skill](.agents/skills/material-review-evaluation/SKILL.md) and [evaluator README](evaluations/material-code-review/README.md) define the detailed cases, protocol, evidence, and trust boundaries.
 
 ## Distribution files
 
