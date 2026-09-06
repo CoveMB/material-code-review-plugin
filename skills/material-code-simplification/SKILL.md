@@ -148,18 +148,7 @@ The codebase adapter hashes every selected current file and snapshots content wi
 
 #### 0.3 Create the context and behavior record
 
-Write a read-only context note outside the worktree or under the run artifact directory containing:
-
-- scope, paths, exclusions, snapshot limitations, and `scope_hash`;
-- intent sources and confidence;
-- repository rules and generated/vendor boundaries;
-- languages, frameworks, build systems, package managers, and runtime topology;
-- public entry points, integrations, data stores, queues, filesystems, processes, and external services;
-- security, privacy, authorization, migration, concurrency, retry, and ordering boundaries;
-- available tests and what they actually assert;
-- known unknowns and conflicting contracts;
-- likely AI-agent provenance only as a non-evidential routing note;
-- external-review decision.
+Use `references/context-checklist.md` to create a read-only context note outside the worktree or under the run artifact directory. Preserve the exact scope, paths, exclusions, snapshot limitations, `scope_hash`, intent and repository rules, behavior and architecture boundaries, available test evidence, known unknowns, and external-review decision. Treat possible AI-agent provenance only as a non-evidential routing note.
 
 Run before every dispatch or synthesis step:
 
@@ -173,16 +162,7 @@ A mismatch invalidates downstream review artifacts. Reinitialize rather than adj
 
 This phase is read-only and produces an architecture/behavior map, not findings.
 
-Map only enough of the selected scope and direct dependencies to establish:
-
-- externally observable behavior and public contracts;
-- entry points and call paths;
-- ownership of validation, policy, state, errors, retries, caching, transactions, and side effects;
-- dependency direction and layer boundaries;
-- intentionally duplicated or isolated domains;
-- dynamic loading, reflection, plugin registration, generated code, and convention-based entry points;
-- test seams and behavior that currently lacks reliable characterization;
-- historical or documented reasons for apparent complexity.
+Use `references/context-checklist.md` to map only enough of the selected scope and direct dependencies to establish observable contracts and flows; ownership of policy, state, errors, retries, and side effects; dependency and intentional-isolation boundaries; dynamic/generated entry points; test seams; and unknown or historically justified behavior.
 
 Use bounded architecture exploration. For each evidenced hotspot, compare at most:
 
@@ -202,37 +182,11 @@ Pack applicable lenses into at most three reviewer assignments per wave, with a 
 
 #### Wave A — Structural and architectural candidates
 
-Select only applicable lenses:
-
-- dependency direction, cycles, unstable boundaries, and unnecessary cross-layer traffic;
-- duplicated policy or parallel implementations;
-- fragmented ownership and “modular mirage” where many files obscure one coupled flow;
-- unnecessary factories, interfaces, adapters, facades, managers, registries, or configuration surfaces;
-- speculative extensibility, compatibility branches, feature flags, retries, caches, queues, or concurrency;
-- framework or standard-library functionality reimplemented locally;
-- architecture that makes routine changes require shotgun edits.
-
-Use `references/architecture-reviewer-template.md` and `references/ai-agent-failure-catalog.md`.
+Use only the applicable bounded structural lens from `references/architecture-reviewer-template.md`, with `references/ai-agent-failure-catalog.md` as a disprovable search aid rather than a finding checklist.
 
 #### Wave B — Code and test candidates
 
-Select only applicable lenses:
-
-- duplicated or near-duplicated logic with shared policy;
-- avoidable branching, nesting, state, conversion, mapping, validation, and exception flow;
-- dead, unreachable, obsolete, or shadow implementations;
-- wrapper chains and pass-through helpers with no policy boundary;
-- over-generalized utilities, generics, builders, or configuration used by one real case;
-- repeated inline API/dependency usage that should have one existing boundary;
-- broad fallbacks or catch-all error handling that conceal failure semantics;
-- implementation-coupled tests, excessive mocks, duplicate fixtures, and tests that do not prove behavior;
-- generated comments, stale explanations, and documentation that obscure rather than clarify behavior;
-- placeholder/demo/debug residue, fabricated success fallbacks, or hard-coded artifacts that create duplicate paths;
-- near-identical DTO/model/schema layers and conversion chains with no contract boundary;
-- edits made directly to generated/vendor output instead of the owning source or generator;
-- unnecessary dependencies or dependency wrappers.
-
-Use `references/code-reviewer-template.md` and `references/ai-agent-failure-catalog.md`.
+Use only the applicable bounded code/test lens from `references/code-reviewer-template.md`, with `references/ai-agent-failure-catalog.md` under the same non-presumptive constraint.
 
 #### Candidate contract
 
@@ -273,34 +227,13 @@ Do not seed reviewers with one another's outputs. Agreement from the same model/
 
 Validate one semantic candidate group at a time with `references/validator-template.md`.
 
-The validator checks:
-
-- exact source evidence and actual reachability;
-- current maintenance or operational cost;
-- callers, guards, contracts, tests, framework behavior, history, and intentional isolation that may justify the existing shape;
-- the behavior-preservation boundary;
-- whether deletion/consolidation/reuse is genuinely available;
-- whether the proposal removes more concepts and failure modes than it adds;
-- whether a smaller or safer alternative exists;
-- churn, migration, dependency, and regression risk;
-- rewrite-specific gates when relevant.
-
-The validator may confirm, reject, or remain uncertain. It may not invent a new candidate. When no independent process/model exists, label the result honestly as controller-direct or degraded self-audit.
+The template owns the evidence, reachability, current-cost, counterevidence, behavior-preservation, net-reduction, smaller-alternative, risk, and rewrite checks. The validator may confirm, reject, or remain uncertain, but may not invent a new candidate. When no independent process/model exists, label the result honestly as controller-direct or degraded self-audit.
 
 #### 3.2 Provisional grouping and disposition
 
 Use `references/adjudicator-template.md`, the shared adjudication schema, and `references/simplification-rubric.md`.
 
-The adjudicator first creates a read-only provisional partition. It must:
-
-1. dispose every candidate exactly once;
-2. merge only semantic duplicates that share the same root cause and transformation boundary;
-3. preserve candidate sources and real independence groups;
-4. attach validation to every group;
-5. apply the complete net-simplification test;
-6. reject aesthetics, metric gaming, speculative future flexibility, harmless duplication, abstraction churn, uncharacterized behavior removal, and rewrites lacking bounded evidence;
-7. keep no new issue that lacks a candidate ID;
-8. give every group a provisional `keep` or `discard` disposition without assigning `F###` IDs.
+Create a complete read-only provisional partition: dispose every candidate exactly once; merge only semantic duplicates with one root cause and transformation boundary; preserve sources and real independence groups; attach validation; and apply the complete net-simplification test. Reject unsupported or preference-only work, invent no issue or candidate ID, and give every group a provisional `keep` or `discard` without assigning `F###` IDs.
 
 #### 3.3 Repair-direction audit
 
@@ -331,15 +264,7 @@ python3 "$SKILL_DIR/scripts/simplifyctl.py" compile-ledger \
 
 This is a hard pause. Gate A approves opportunities for planning only; it does not approve the provisional direction or any transformation. Do not draft the transformation plan before the user responds.
 
-Present:
-
-- frozen scope, paths, exclusions, hash, and coverage limits;
-- behavior/architecture map summary;
-- reviewer and validator coverage, including degraded independence;
-- action posture;
-- every kept `F###` item with exact evidence, present cost, preserved behavior, the direction hash and provisional reduction shape, alternatives checked, direction-audit provenance, validation result, separate finding/direction confidence, and risk;
-- every discarded group with the specific reason and code;
-- a decision request to approve, reject, or defer each kept ID.
+Render every required scope, coverage, action-posture, kept, discarded, direction-audit, validation, separate finding/direction confidence, and risk field through the Gate A section of `references/output-template.md`. Request an approve, reject, or defer decision for every kept ID.
 
 Persist the exact response with the shared `gate-findings` command. Silence, prior task approval, or agreement with the general goal is not approval.
 
@@ -360,39 +285,13 @@ Use `references/planner-template.md` and shared fix-plan/v2.
 
 Create exactly one plan item per Gate-A-approved `F###`. One item may span several exact files. If two IDs require one indivisible transformation, stop for re-adjudication or a plan amendment; do not combine IDs into an unrepresentable plan item.
 
-Each approved item must define:
-
-- supported root cause and observable behavior to preserve;
-- a `repair_direction_assessment` bound to the approved direction hash, with exact handling for every direction constraint, state/exception, and open user decision;
-- alternatives considered, an explicit divergence flag, and a rationale whenever the exact transformation differs from the audited direction;
-- transformation class: `delete`, `consolidate`, `inline`, `reuse-existing`, `dependency-reduce`, `restructure`, or `bounded-rewrite`; the shared fix-plan schema has no class field, so begin `objective` with `Transformation class: <class>.` and add no extra JSON property;
-- why a smaller transformation is insufficient when using `restructure` or `bounded-rewrite`;
-- exact current and replacement ownership boundaries;
-- ordered steps with characterization before destructive work when behavior is uncertain;
-- exact allowed file or final-symlink paths, including files to delete and any anticipated new file;
-- an overlap audit across plan items: candidates sharing one root cause/boundary should already be one adjudicated finding; for unavoidable overlapping paths, make ordering explicit and place final-state regression commands in `global_tests` so earlier per-item required tests do not become stale after later approved edits;
-- dependency-manifest and lockfile paths when dependencies change;
-- compatibility, migration, generated-code, and rollback handling;
-- exact non-mutating test commands, working directories, purposes, and timeouts;
-- success evidence for behavior preservation and for removal of the old path;
-- risk controls and `max_attempts` from 1 to 3.
+Follow every item field and test-quality guard in `references/planner-template.md`. In particular, bind `repair_direction_assessment` to the approved direction hash and handle every constraint, state/exception, and open decision; encode the exact transformation class at the start of `objective`; name exact ownership and allowed paths; order characterization before uncertain destructive work; address overlap, compatibility, migration, generated code, dependencies, rollback, and 1–3 attempts; and specify exact non-mutating tests and success evidence.
 
 The shared controller loads the hash-verified ledger through the Gate A receipt and rejects legacy fix-plan/v1, a stale direction hash, incomplete or reordered handling, an omitted decision, or unexplained divergence.
 
 #### Test strategy
 
-Prefer behavior-level evidence over implementation-shape assertions. The plan should select from:
-
-- existing focused regression tests;
-- characterization tests for currently unproven behavior;
-- public API/contract tests;
-- serialization, migration, or persistence compatibility tests;
-- authorization/security boundary tests;
-- ordering, concurrency, retry, idempotency, and timing tests where relevant;
-- build/type/lint/static checks when they establish a relevant property;
-- dependency resolution and packaging checks;
-- a broader existing suite after focused tests;
-- explicit checks that the old implementation, registration, dependency, flag, or duplicate path is no longer reachable.
+Prefer the behavior-level, characterization, contract, compatibility, boundary, build, dependency, packaging, and old-path-removal evidence applicable to the approved change. Do not substitute incidental implementation-shape assertions.
 
 A characterization command may run before destructive work, but that baseline run does not satisfy final retention after the allowed paths change; rerun it after the final item edit so the latest required result is current.
 
@@ -420,16 +319,7 @@ Validation does not grant write permission.
 
 ### Gate B — User validates the exact plan
 
-This is the second hard pause. Present:
-
-- approved IDs and transformation class as encoded in each plan item's `objective`;
-- preserved behavior and known uncertainty;
-- exact ordered steps;
-- every allowed path, including deletions and dependency files;
-- every command with working directory and purpose;
-- test additions and whether they run before and after destructive work;
-- migration, compatibility, rollback, and risk controls;
-- expected concept/path/dependency reduction without treating estimates as guarantees.
+This is the second hard pause. Render every approved ID, transformation, behavior, uncertainty, step, path, command, test, compatibility, rollback, risk, and expected-reduction field through the Gate B section of `references/output-template.md`.
 
 Persist approval only after an explicit response. Any changed path, command, strategy, or plan hash requires re-rendering and a new Gate B.
 
@@ -450,18 +340,7 @@ Only after Gate B:
 python3 "$SKILL_DIR/scripts/simplifyctl.py" begin-fix --repo-root .
 ```
 
-For each approved ID:
-
-1. start the controller checkpoint;
-2. re-read the approved plan item and behavior boundary;
-3. add or identify characterization evidence before destructive work when required;
-4. run the approved baseline characterization command when the plan calls for it;
-5. implement the smallest root-cause reduction inside exact paths;
-6. remove obsolete code, registrations, flags, dependencies, and compatibility shadows named by the plan rather than leaving old and new paths in parallel;
-7. avoid opportunistic abstraction, formatting, renaming, and comments unrelated to the approved item;
-8. run focused tests, then broader approved checks;
-9. inspect the item diff for changed behavior, widened contracts, hidden fallback paths, duplicated replacement logic, weakened tests, generated churn, dependency drift, and unapproved files;
-10. retain with `finish-finding` only after all required evidence passes; otherwise restore with `rollback-finding`.
+Process exactly one approved ID at a time through the checkpointed cycle in `references/refactorer-template.md`. It owns characterization order, the smallest exact-path transformation, obsolete-path removal, prohibited mixed cleanup, approved tests, delta inspection, retain-or-restore behavior, and escalation when the approved boundary proves insufficient.
 
 Controller pattern for one item:
 
@@ -497,13 +376,7 @@ Omit the first line only when the validated plan contains no required global tes
 
 Use a fresh read-only verifier and `references/postfix-verifier-template.md`. For each approved ID, verify:
 
-- the evidenced complexity root cause is removed rather than moved;
-- required behavior and contracts remain intact;
-- characterization and regression tests pass and were not weakened;
-- obsolete paths, dependencies, flags, registrations, and duplicate implementations are gone where the plan required;
-- no replacement abstraction, compatibility shadow, fallback, or indirection recreates equivalent complexity;
-- the repair delta caused no regression within approved behavior boundaries;
-- all edits remain within Gate-B-approved paths.
+Apply every template check against source and test evidence: prove the root cause was removed rather than moved, required behavior and tests remain intact, obsolete paths are gone, no replacement recreates the complexity, no in-boundary regression was introduced, and every edit remains within Gate-B-approved paths.
 
 Do not run a broad “what else can be simplified?” pass. Unrelated observations are record-only and cannot reopen candidate generation.
 
@@ -519,22 +392,9 @@ A bounded repair round may address only unresolved approved IDs or regressions c
 
 ## Common AI-agent failure guards
 
-Load `references/ai-agent-failure-catalog.md` during discovery, planning, implementation, and verification. The minimum guards are:
+Load `references/ai-agent-failure-catalog.md` during discovery, planning, implementation, and verification. It is a search-and-disconfirmation aid, not evidence. Apply its guards for provenance, APIs and dependencies, existing mechanisms, speculative infrastructure, dynamic reachability, intentional domain differences, old/new paths, exception fallbacks, test protection, security and behavior contracts, abstraction churn, generated/vendor boundaries, metric gaming, and cleanup recursion.
 
-- do not infer quality from AI provenance;
-- verify packages, APIs, framework behavior, and dependency versions from repository evidence or authoritative documentation before changing dependencies;
-- prefer existing repository/framework/standard-library mechanisms over generated helpers;
-- reject speculative interfaces, factories, registries, flags, fallbacks, retries, caches, async layers, and configuration without present use;
-- check dynamic entry points before declaring code dead;
-- do not collapse intentionally different domain rules because their syntax is similar;
-- do not preserve both old and new implementations “for safety” unless Gate B approves a time-bounded compatibility requirement;
-- do not catch broad exceptions or add silent fallback behavior to make tests pass;
-- do not rewrite tests to mirror the replacement implementation;
-- do not weaken assertions, authorization checks, validation, error contracts, or concurrency semantics;
-- do not replace one large module with many mutually dependent tiny modules and call that simplification;
-- do not create a generic abstraction for one concrete case without demonstrated near-term variants;
-- do not mix generated/vendor/lockfile churn with semantic edits unless explicitly required;
-- do not use a static smell catalog as a checklist that must produce findings.
+Do not preserve both old and new implementations unless Gate B approves an explicitly time-bounded compatibility requirement.
 
 ## Stop rules
 
@@ -553,21 +413,7 @@ Do not start another broad review cycle at completion.
 
 ## Final report
 
-Use `references/output-template.md`. Report:
-
-- final state and action posture;
-- scope mode, paths, exclusions, refs, hash, and coverage limits;
-- architecture/behavior-map limitations;
-- reviewers, validators, independence groups, and degraded areas;
-- kept, discarded, user-rejected, user-deferred, fixed, rolled-back, unresolved, and record-only items;
-- why each retained change was net simpler and what behavior was preserved;
-- Gate A and Gate B receipt hashes and user statements;
-- changed and deleted paths attributable to the approved layer;
-- dependency/configuration surface changed or removed;
-- exact test commands, exit codes, and log paths;
-- post-fix verification and repair-round count;
-- residual risk and human-review requirements;
-- run artifact directory.
+Use every Result, Evidence chain, Delta, Verification, and Residual risk field in `references/output-template.md`. Also report the human-readable scope mode, paths, exclusions, refs, coverage limits, and architecture-map limitations; reviewer/validator independence and degraded areas; every kept, discarded, user-rejected, user-deferred, fixed, rolled-back, unresolved, and record-only item; and the run artifact directory. The report must remain traceable to the frozen scope, both gate receipts, approved IDs and paths, exact test evidence, verification outcome, repair rounds, limitations, and run artifacts.
 
 Use the exact sentence below only when no material candidate survived adjudication and the user accepted the empty set at Gate A:
 
@@ -575,20 +421,7 @@ Use the exact sentence below only when no material candidate survived adjudicati
 
 ## Failure behavior
 
-Use `references/failure-model.md`. In summary:
-
-- stale or unbounded scope -> stop and refreeze;
-- missing behavior evidence -> plan characterization or discard;
-- malformed output -> reject visibly, do not repair the model's claim by guessing;
-- unavailable subagents -> sequential/degraded self-audit;
-- validator infrastructure failure -> preserve uncertainty visibly;
-- missing user gate -> stop;
-- changed plan -> invalidate Gate B;
-- unapproved mutation -> reject and restore;
-- failing required test -> restore or repair only within approved budget;
-- new improvement during implementation/verification -> record-only;
-- out-of-plan regression -> restore and require a new plan;
-- exhausted budget -> blocked, not recursive cleanup.
+Use `references/failure-model.md` and fail closed. Stop or restore on stale/unbounded scope, missing evidence or gates, changed plans, unapproved mutation, failed required tests, or out-of-plan regressions; preserve degraded uncertainty visibly; keep new improvements record-only; and block when finite budgets are exhausted.
 
 ## Reference loading
 
