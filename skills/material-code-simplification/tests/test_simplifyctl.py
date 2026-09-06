@@ -1069,13 +1069,6 @@ class SimplifyCtlTest(unittest.TestCase):
         self.assertFalse((self.run_dir / "coverage-plan.json").exists())
         return state
 
-    def test_codebase_scope_completes_full_gated_repair_lifecycle(self) -> None:
-        state = self.complete_full_gated_repair_lifecycle(
-            "--scope", "codebase", "--path", "src", "--exclude-untracked"
-        )
-        self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "codebase")
-        self.assertEqual(state["profile"], "material-code-simplification")
-
     def test_artifact_version_matrix_preserves_simplification_v1_v3_v3(self) -> None:
         state = self.complete_full_gated_repair_lifecycle(
             "--scope",
@@ -1084,6 +1077,16 @@ class SimplifyCtlTest(unittest.TestCase):
             "src",
             "--exclude-untracked",
             exercise_restoration=True,
+        )
+        self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "codebase")
+        self.assertEqual(state["profile"], "material-code-simplification")
+        self.assertNotIn("coverage_required", state)
+        self.assertNotIn("workflow_profile", state)
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+        history = state["finding_status"]["F001"]["history"]
+        self.assertEqual(
+            [entry["outcome"] for entry in history],
+            ["rolled_back", "fixed"],
         )
         candidates = self.load("candidates.json")
         adjudication = self.load("adjudication.normalized.json")
@@ -1371,43 +1374,21 @@ class SimplifyCtlTest(unittest.TestCase):
         )
         self.assertTrue((self.run_dir / "gates" / "findings.json").is_file())
 
-    def test_change_scope_completes_full_gated_repair_lifecycle(self) -> None:
+    def test_state_v1_simplification_remains_compatible(self) -> None:
         (self.repo / "src" / "service.py").write_text(
-            "def value():\n    return 1\n# selected uncommitted change\n", encoding="utf-8"
+            "def value():\n    return 1\n# delegated simplification scope\n",
+            encoding="utf-8",
         )
+        self.run_id = "simplification-v1-delegated-change"
         state = self.complete_full_gated_repair_lifecycle("--scope", "uncommitted")
         self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "uncommitted")
+        self.assertEqual(state["schema_version"], "material-review/state/v1")
         self.assertEqual(state["profile"], "material-code-simplification")
-
-    def test_state_v1_simplification_remains_compatible(self) -> None:
-        lifecycle_cases = (
-            (
-                "codebase",
-                ("--scope", "codebase", "--path", "src", "--exclude-untracked"),
-            ),
-            ("delegated-change", ("--scope", "uncommitted")),
-        )
-        for name, init_arguments in lifecycle_cases:
-            with self.subTest(scope_mode=name):
-                (self.repo / "src" / "service.py").write_text(
-                    "def value():\n    return 1\n", encoding="utf-8"
-                )
-                if name == "delegated-change":
-                    (self.repo / "src" / "service.py").write_text(
-                        "def value():\n    return 1\n# delegated simplification scope\n",
-                        encoding="utf-8",
-                    )
-                self.run_id = f"simplification-v1-{name}"
-                state = self.complete_full_gated_repair_lifecycle(
-                    *init_arguments, exercise_restoration=True
-                )
-                self.assertEqual(state["schema_version"], "material-review/state/v1")
-                self.assertEqual(state["profile"], "material-code-simplification")
-                self.assertNotIn("coverage_required", state)
-                self.assertNotIn("workflow_profile", state)
-                self.assertFalse((self.run_dir / "coverage-plan.json").exists())
-                history = state["finding_status"]["F001"]["history"]
-                self.assertEqual([entry["outcome"] for entry in history], ["rolled_back", "fixed"])
+        self.assertNotIn("coverage_required", state)
+        self.assertNotIn("workflow_profile", state)
+        self.assertFalse((self.run_dir / "coverage-plan.json").exists())
+        history = state["finding_status"]["F001"]["history"]
+        self.assertEqual([entry["outcome"] for entry in history], ["fixed"])
 
         (self.repo / "src" / "service.py").write_text(
             "def value():\n    return 1\n# ambiguous delegated scope\n", encoding="utf-8"
