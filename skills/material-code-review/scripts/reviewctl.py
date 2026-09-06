@@ -28,6 +28,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
@@ -5501,22 +5502,10 @@ def validate_fix_plan(
             )
 
     graph = {item["finding_id"]: set(item["depends_on"]) for item in items}
-    temporary: set[str] = set()
-    permanent: set[str] = set()
-
-    def visit(node: str) -> None:
-        if node in permanent:
-            return
-        if node in temporary:
-            raise ReviewError("Fix plan dependency graph contains a cycle")
-        temporary.add(node)
-        for dependency in graph[node]:
-            visit(dependency)
-        temporary.remove(node)
-        permanent.add(node)
-
-    for node in graph:
-        visit(node)
+    try:
+        TopologicalSorter(graph).prepare()
+    except CycleError as exc:
+        raise ReviewError("Fix plan dependency graph contains a cycle") from exc
 
     global_tests = [
         validate_test_spec(value, f"fix plan.global_tests[{index}]", repo)
