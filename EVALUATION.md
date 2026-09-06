@@ -84,41 +84,27 @@ This separation is the main defense against both false-positive review output an
 
 ## Maintainer-only skill-version evaluator
 
-The source repository includes a maintainer-only Codex skill for comparing two exact `material-code-review` commits. From a fresh task at the repository root, invoke:
+This maintainer-only evaluator is available only from a source checkout and produces trusted-local, directional evidence.
+
+From a fresh task at the repository root, invoke:
 
 ```text
 $material-review-evaluation base:<skill-ref> candidate:<skill-ref>
 ```
 
-The invocation above defaults to the frozen Discogs case. The bounded obligation-coverage confirmation uses:
-
 ```text
 $material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<skill-ref>
 ```
 
-The default target is the immutable Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957`; `custom-playlists` is provenance, not runtime authority. The missed-contracts target is an allowlisted deterministic Git fixture whose exact base/review trees, commits, immediate parentage, and five changed paths are verified before dispatch. One fresh anonymous primary reviewer runs per skill version and returns its finding ledger plus native Gate-A result. The initial approval wording expresses intent only. Both valid variants pause in one combined Gate-A checkpoint for every exact finding disposition and explicit acceptance of each empty ledger. Only an all-approved non-empty variant continues to a controller-validated plan at Gate B; a rejection or deferral invokes the non-comparable no-plan policy above. Gate B is never approved, no repair runs, and active repositories remain immutable inputs.
+It never approves Gate B, mutates reviewed source, publishes results, or authorizes source egress.
 
-For missed-contracts only, one zero-history coverage challenger runs per variant after declarative coverage recording and before candidate ingestion or Gate A. It sees frozen source plus change-unit, risk, obligation, assignment, machine-owned obligation check-contract, and limitation declarations. Candidate findings, candidate sets, check results, expected roots, variant identities, refs, prior output, and the other variant are forbidden. It reports only `NO_COVERAGE_GAP` or a bounded declarative gap and cannot add findings, repair artifacts, or independent validation weight. `NO_COVERAGE_GAP` says nothing about whether a check result or evidence item was performed, fresh, complete, unblocked, resolved, or safe; native controller and evaluator-root validation of assignments, obligations, check contracts, `check_results`, and Gate-A evidence remains mandatory and independent.
+Raw evidence remains under ignored `.evaluation-runs/`, may contain machine-specific or private data, and is not automatically sanitized.
 
-Before any missed-contracts worker is dispatched, the evaluator checks every worker-visible guidance and prompt input for private root IDs, exact private root definitions, and the retired one-to-one fixture guidance. A contamination match stops the run before dispatch. The frozen implementation source is excluded from this scan because it is the evidence from which workers must discover defects; the private oracle is applied only after durable blinded judgment and identity reveal.
+The evaluator skill, evaluation assets, and run data are excluded from every full and standalone release archive.
 
-Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history. Codex maps this contract to `fork_turns: "none"`; unavailable, unverifiable, or bounded non-empty isolation fails closed before dispatch with `INSUFFICIENT_EVIDENCE` and no winner.
+The default invocation uses the immutable Discogs range `361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957` defined by the [frozen Discogs case](evaluations/material-code-review/cases/discogs-custom-playlists.json). The second invocation selects the [frozen missed-contracts case](evaluations/material-code-review/cases/missed-contracts.json).
 
-Any rejection or deferral in either non-empty variant makes the comparison non-comparable. The evaluator preserves the exact native Gate-A receipt and lifecycle result, produces no plan evidence for that disposition state, and requires `INSUFFICIENT_EVIDENCE` without changing controller behavior.
-
-Judge responses are accepted only after root-side protocol validation. One corrected zero-history replacement is allowed only for a first identity leak; every other invalid first result and every invalid or leaking replacement ends with a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment and private `judge-invalid` reason.
-
-A fresh read-only judge checks anonymous artifacts against the frozen source and returns exactly `VARIANT_A_STRONGER`, `VARIANT_B_STRONGER`, `MATERIAL_TIE`, or `INSUFFICIENT_EVIDENCE`. Invalid or missing required reviewer evidence is preserved as a limitation, never reconstructed, and yields `INSUFFICIENT_EVIDENCE`. For missed-contracts, a challenger declarative gap, invalid assignment or obligation evidence, stale, incomplete, blocked, duplicated, or unresolved native check-result evidence, a missing required root, lost baseline material finding, unsupported high-severity addition, invalid Gate-A evidence, or mutation blocks a successful-strengthening claim. Identities are revealed only after the judgment is written. The committed evaluator skill, prompts, case contracts, and rubric own the detailed workflow and comparison semantics; this document only describes the boundary.
-
-The missed-contracts policy permits one comparison and at most one separately authorized repair-plus-confirmation when the first result identifies a concrete implementation defect. There is no resampling. A tie, baseline-stronger judgment, insufficient evidence, invalid judge, missing root, lost baseline finding, or challenger gap blocks the improvement claim. Deterministic validation remains release authority; the live case is bounded confirmation only.
-
-The result is trusted-local, directional evidence, not a publication-grade benchmark. The workflow has no Docker containment, CI/CD trigger, automatic resume, numeric score, or automatic publication. An interrupted run is preserved locally and a later attempt requires a new invocation. Raw ignored `.evaluation-runs/` artifacts may contain machine paths and are not automatically sanitized. Packaging excludes the evaluator skill, evaluation assets, and local run data from every full and standalone archive.
-
-### Targeted-review confirmation note
-
-In the prior single trial, the migration finding was mechanistically associated with adding a specialist lens, while the report-alias and precision results reflected attention variance converted into explicit checks. The base remained stronger overall in that run. These observations are directional and mechanistic evidence only, not causal proof or a claim of general performance.
-
-This explicit workflow invokes the selected materialized skill. It does not evaluate or prove implicit skill selection, which remains model-mediated. The full live comparison is manual because it consumes agent resources; `make validate` and CI exercise only source and package boundaries.
+The source-only [evaluator skill](.agents/skills/material-review-evaluation/SKILL.md) and [evaluator README](evaluations/material-code-review/README.md) own the detailed workflow, protocol, evidence, and trust boundaries.
 
 ### Known macOS packaging fixture failure
 

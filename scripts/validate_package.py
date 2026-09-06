@@ -180,16 +180,25 @@ EVALUATOR_PRIVATE_RECEIPT_REQUIREMENT = "Do not proceed if the dispatch receipt"
 EVALUATOR_CONTEXT_FREE_DOC_MARKER = (
     "Every reviewer, challenger, and judge dispatch uses a self-contained request with zero inherited task history."
 )
-EVALUATOR_CONTEXT_FREE_DOCS = (
-    "README.md",
-    "EVALUATION.md",
+EVALUATOR_OPERATIONAL_DOCS = (
     "evaluations/material-code-review/README.md",
 )
-RETIRED_MAINTAINER_SOURCE_PATHS = frozenset(
-    {
-        "docs/superpowers/plans/2026-07-27-material-review-version-evaluator.md",
-        "docs/superpowers/specs/2026-07-27-material-review-version-evaluation-design.md",
-    }
+EVALUATOR_ROOT_OVERVIEW_DOCS = (
+    "README.md",
+    "EVALUATION.md",
+)
+EVALUATOR_ROOT_OVERVIEW_MARKERS = (
+    "$material-review-evaluation base:<skill-ref> candidate:<skill-ref>",
+    "$material-review-evaluation case:missed-contracts base:<skill-ref> candidate:<skill-ref>",
+    "This maintainer-only evaluator is available only from a source checkout and produces trusted-local, directional evidence.",
+    "It never approves Gate B, mutates reviewed source, publishes results, or authorizes source egress.",
+    "Raw evidence remains under ignored `.evaluation-runs/`, may contain machine-specific or private data, and is not automatically sanitized.",
+    "The evaluator skill, evaluation assets, and run data are excluded from every full and standalone release archive.",
+)
+EVALUATOR_EVALUATION_OVERVIEW_MARKERS = (
+    "361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957",
+    "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
 )
 EVALUATOR_GATE_DISPOSITION_CONTRACT_START = (
     "<!-- evaluator-gate-disposition-contract:start"
@@ -625,19 +634,28 @@ def validate_obligation_workflow_contract(
     return None
 
 
-def validate_retired_maintainer_source_paths(errors: list[str]) -> None:
-    active_inventories = (
-        MAINTAINER_SOURCE_REQUIRED,
-        EVALUATOR_CONTEXT_FREE_DOCS,
-    )
-    active_paths = set().union(*map(set, active_inventories))
-    reactivated_paths = RETIRED_MAINTAINER_SOURCE_PATHS.intersection(active_paths)
-    for relative in sorted(reactivated_paths):
-        fail(
-            errors,
-            "retired maintainer-source path reintroduced into active inventory: "
-            f"{relative}",
-        )
+def validate_maintainer_evaluator_root_overviews(
+    root: Path,
+    errors: list[str],
+) -> None:
+    for relative in EVALUATOR_ROOT_OVERVIEW_DOCS:
+        path = root / relative
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(marker not in text for marker in EVALUATOR_ROOT_OVERVIEW_MARKERS):
+            fail(
+                errors,
+                f"{relative} lacks a required maintainer evaluator overview marker",
+            )
+        if relative == "EVALUATION.md" and any(
+            marker not in text
+            for marker in EVALUATOR_EVALUATION_OVERVIEW_MARKERS
+        ):
+            fail(
+                errors,
+                "EVALUATION.md lacks a required frozen-case overview marker",
+            )
 
 
 def parse_frontmatter(path: Path, errors: list[str]) -> dict[str, str]:
@@ -1210,7 +1228,7 @@ def validate_maintainer_evaluator_dispatch(root: Path, errors: list[str]) -> Non
         if EVALUATOR_PRIVATE_RECEIPT_REQUIREMENT in prompt_text:
             fail(errors, f"{label} prompt must not require a private dispatch receipt")
 
-    for relative in EVALUATOR_CONTEXT_FREE_DOCS:
+    for relative in EVALUATOR_OPERATIONAL_DOCS:
         path = root / relative
         if path.is_file() and EVALUATOR_CONTEXT_FREE_DOC_MARKER not in path.read_text(encoding="utf-8"):
             fail(errors, f"{relative} must reference the context-free evaluator dispatch contract")
@@ -1252,10 +1270,6 @@ def validate_maintainer_evaluator_challenger(root: Path, errors: list[str]) -> N
         "evaluations/material-code-review/rubric.md": (
             "audits only the declarative change-unit, risk, obligation, obligation-check-contract, assignment, and limitation bundle",
             "independently of the challenger",
-        ),
-        "EVALUATION.md": (
-            "before candidate ingestion or Gate A",
-            "remains mandatory and independent",
         ),
         "evaluations/material-code-review/README.md": (
             "before candidate ingestion",
@@ -1343,7 +1357,7 @@ def validate_maintainer_evaluator_dispositions(root: Path, errors: list[str]) ->
         if any(state not in text for state in EVALUATOR_DISPOSITION_STATES) or "DISPOSITION_NONCOMPARABLE" not in text:
             fail(errors, f"{relative} must define every evaluator disposition state")
 
-    for relative in EVALUATOR_CONTEXT_FREE_DOCS:
+    for relative in EVALUATOR_OPERATIONAL_DOCS:
         path = root / relative
         if path.is_file() and EVALUATOR_DISPOSITION_DOC_MARKER not in path.read_text(encoding="utf-8"):
             fail(errors, f"{relative} must state the evaluator rejection and deferral policy")
@@ -1455,7 +1469,7 @@ def validate_maintainer_evaluator_judge_protocol(root: Path, errors: list[str]) 
     ):
         fail(errors, "evaluator README must document side-qualified frozen-source citations")
 
-    for relative in EVALUATOR_CONTEXT_FREE_DOCS:
+    for relative in EVALUATOR_OPERATIONAL_DOCS:
         path = root / relative
         if path.is_file() and EVALUATOR_JUDGE_DOC_MARKER not in path.read_text(encoding="utf-8"):
             fail(errors, f"{relative} must state the bounded judge-validation protocol")
@@ -1491,7 +1505,6 @@ def check_source_package(
     distribution_layout: bool = False,
 ) -> list[str]:
     errors: list[str] = []
-    validate_retired_maintainer_source_paths(errors)
     if sys.version_info < (3, 10):
         return ["package validation requires Python 3.10+"]
     if not root.is_dir():
@@ -1610,6 +1623,7 @@ def check_source_package(
             fail(errors, "maintainer evaluator skill has wrong argument hint")
         validate_maintainer_evaluator_cases(root, errors)
         validate_maintainer_evaluator_assets(root, errors)
+        validate_maintainer_evaluator_root_overviews(root, errors)
         validate_maintainer_evaluator_dispatch(root, errors)
         validate_maintainer_evaluator_challenger(root, errors)
         validate_maintainer_evaluator_dispositions(root, errors)
