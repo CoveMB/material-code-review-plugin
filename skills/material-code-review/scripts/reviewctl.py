@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import copy
 import difflib
+import errno
 import hashlib
 import json
 import os
@@ -19,27 +20,79 @@ import re
 import signal
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
+
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+
+from obligation_contract import (  # noqa: E402
+    CANDIDATE_SET_SCHEMA as OBLIGATION_CANDIDATE_SET_SCHEMA,
+    COVERAGE_PLAN_SCHEMA as OBLIGATION_COVERAGE_PLAN_SCHEMA,
+    ObligationContractError,
+    canonical_git_path,
+    check_contracts_for_assignment,
+    required_assignment_ids,
+    scenario_checks_for_assignment,
+    validate_assignment_result,
+    validate_coverage_contract,
+)
 
 
-TOOL_VERSION = "1.2.0"
-STATE_SCHEMA = "material-review/state/v1"
+TOOL_VERSION = "1.7.0"
+MATERIAL_REVIEW_STATE_SCHEMA = "material-review/state/v6"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V5 = "material-review/state/v5"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V4 = "material-review/state/v4"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3 = "material-review/state/v3"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2 = "material-review/state/v2"
+LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1 = "material-review/state/v1"
+SIMPLIFICATION_STATE_SCHEMA = "material-review/state/v1"
 SCOPE_SCHEMA = "material-review/scope/v1"
 CANDIDATE_SCHEMA = "material-review/candidate-set/v1"
-NORMALIZED_CANDIDATES_SCHEMA = "material-review/candidates-normalized/v1"
-ADJUDICATION_SCHEMA = "material-review/adjudication/v3"
-LEDGER_SCHEMA = "material-review/ledger/v3"
+CANDIDATE_SCHEMA_REVIEW = OBLIGATION_CANDIDATE_SET_SCHEMA
+NORMALIZED_CANDIDATES_SCHEMA_REVIEW = "material-review/candidates-normalized/v6"
+NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION = "material-review/candidates-normalized/v1"
+ADJUDICATION_SCHEMA_REVIEW = "material-review/adjudication/v4"
+ADJUDICATION_SCHEMA_SIMPLIFICATION = "material-review/adjudication/v3"
+LEDGER_SCHEMA_REVIEW = "material-review/ledger/v4"
+LEDGER_SCHEMA_SIMPLIFICATION = "material-review/ledger/v3"
 FINDINGS_GATE_SCHEMA = "material-review/findings-gate/v1"
 FIX_PLAN_SCHEMA = "material-review/fix-plan/v2"
 PLAN_GATE_SCHEMA = "material-review/plan-gate/v1"
 FIX_SUMMARY_SCHEMA = "material-review/fix-summary/v1"
 VERIFICATION_SCHEMA = "material-review/verification/v1"
+COVERAGE_PLAN_SCHEMA = OBLIGATION_COVERAGE_PLAN_SCHEMA
+COVERAGE_CONTEXT_SCHEMA = "material-review/coverage-context/v1"
+CHECKPOINT_SCHEMA_V4 = "material-review/checkpoint/v4"
+SNAPSHOT_MATCHED_BYTES = "matched_bytes"
+SNAPSHOT_MATCHED_MISSING = "matched_missing"
+SNAPSHOT_NO_MATCH = "no_match"
+WORKFLOW_PROFILE_REVIEW = "material_review"
+SIMPLIFICATION_PROFILE = "material-code-simplification"
+STATE_CONTRACT_MATERIAL_REVIEW = "current_material_review"
+STATE_CONTRACT_SIMPLIFICATION = "current_simplification"
+STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1 = "finalizable_material_review_v1"
+STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2 = "finalizable_material_review_v2"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V5 = "legacy_material_review_v5"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4 = "legacy_material_review_v4"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3 = "legacy_material_review_v3"
+STATE_CONTRACT_LEGACY_MATERIAL_REVIEW = "legacy_material_review"
+
+RISK_ASSESSMENT_CODES = frozenset({"user_selectable_output_paths", "persisted_config_semantics"})
+CORE_REVIEW_LENSES = frozenset({"correctness", "test_adequacy", "standards_alignment"})
+REQUIRED_LENSES_BY_RISK = {
+    "user_selectable_output_paths": frozenset({"reliability"}),
+    "persisted_config_semantics": frozenset({"migration_data_safety", "api_config_compatibility"}),
+}
 
 PHASE_CONTEXT = "CONTEXT_FROZEN"
 PHASE_CANDIDATES = "CANDIDATES_CAPTURED"
@@ -133,6 +186,8 @@ TRANSIENT_RUNTIME_DIR_MARKERS = {
 }
 TRANSIENT_RUNTIME_FILE_NAMES = {".ds_store", "thumbs.db", ".coverage"}
 TRANSIENT_RUNTIME_SUFFIXES = (".pyc", ".pyo", ".pyd")
+CANDIDATE_AUTHORITY_LOCK_TIMEOUT_SECONDS = 10.0
+CANDIDATE_AUTHORITY_LOCK_POLL_SECONDS = 0.05
 
 
 def is_transient_runtime_path(path: str) -> bool:
@@ -146,6 +201,1295 @@ def is_transient_runtime_path(path: str) -> bool:
 
 class ReviewError(RuntimeError):
     """Expected control failure with an actionable message."""
+
+
+class _ArtifactTemporary:
+    def __init__(self, name: str, descriptor: int) -> None:
+        self.name = name
+        self.descriptor = descriptor
+
+
+class _PosixArtifactBackend:
+    """No-follow, descriptor-relative artifact operations for POSIX hosts."""
+
+    platform_name = "posix"
+
+    def __init__(self) -> None:
+        required_dir_fd = (os.open, os.stat, os.mkdir, os.unlink, os.rmdir)
+        missing = [
+            function.__name__
+            for function in required_dir_fd
+            if function not in os.supports_dir_fd
+        ]
+        if os.rename not in os.supports_dir_fd:
+            missing.append("rename")
+        if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+            missing.append("O_DIRECTORY/O_NOFOLLOW")
+        if missing:
+            raise ReviewError(
+                "Artifact identity backend is unavailable before mutation; missing "
+                + ", ".join(sorted(set(missing)))
+            )
+
+    @staticmethod
+    def _directory_flags() -> int:
+        return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    def open_absolute_directory(
+        self, path: Path, *, create: bool
+    ) -> tuple[int, int, str]:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        if not absolute.is_absolute() or absolute == Path(absolute.anchor):
+            raise ReviewError(f"Artifact authority requires a non-root absolute path: {path}")
+        components = absolute.parts[1:]
+        parent = os.open(absolute.anchor, self._directory_flags())
+        try:
+            for index, name in enumerate(components):
+                if name in {"", ".", ".."} or "/" in name:
+                    raise ReviewError(f"Unsafe artifact directory component: {name!r}")
+                try:
+                    child = os.open(name, self._directory_flags(), dir_fd=parent)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    os.mkdir(name, 0o700, dir_fd=parent)
+                    child = os.open(name, self._directory_flags(), dir_fd=parent)
+                if index == len(components) - 1:
+                    return parent, child, name
+                os.close(parent)
+                parent = child
+        except BaseException:
+            os.close(parent)
+            raise
+        raise AssertionError("artifact authority path had no components")
+
+    def open_directory(
+        self,
+        parent: int,
+        name: str,
+        *,
+        create: bool = False,
+        exclusive: bool = False,
+    ) -> int:
+        if create and exclusive:
+            os.mkdir(name, 0o700, dir_fd=parent)
+            return os.open(name, self._directory_flags(), dir_fd=parent)
+        try:
+            return os.open(name, self._directory_flags(), dir_fd=parent)
+        except FileNotFoundError:
+            if not create:
+                raise
+            os.mkdir(name, 0o700, dir_fd=parent)
+            return os.open(name, self._directory_flags(), dir_fd=parent)
+
+    @staticmethod
+    def close_directory(directory: int) -> None:
+        os.close(directory)
+
+    @staticmethod
+    def identity(directory: int) -> tuple[int, int]:
+        info = os.fstat(directory)
+        return info.st_dev, info.st_ino
+
+    @staticmethod
+    def entry_kind(parent: int, name: str) -> str | None:
+        try:
+            info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(info.st_mode):
+            return "symlink"
+        if stat.S_ISDIR(info.st_mode):
+            return "directory"
+        if stat.S_ISREG(info.st_mode):
+            return "file"
+        return "other"
+
+    @staticmethod
+    def read_bytes(parent: int, name: str) -> bytes:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(descriptor, "rb") as handle:
+            return handle.read()
+
+    @staticmethod
+    def open_lock_descriptor(parent: int, name: str) -> int:
+        return os.open(
+            name,
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent,
+        )
+
+    @staticmethod
+    def create_temporary(parent: int, target_name: str, data: bytes) -> _ArtifactTemporary:
+        temporary_name = f".{target_name}.{uuid.uuid4().hex}.tmp"
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent,
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            raise
+        return _ArtifactTemporary(temporary_name, descriptor)
+
+    @staticmethod
+    def replace_temporary(
+        parent: int, temporary: _ArtifactTemporary, target_name: str
+    ) -> None:
+        os.rename(
+            temporary.name,
+            target_name,
+            src_dir_fd=parent,
+            dst_dir_fd=parent,
+        )
+
+    @staticmethod
+    def close_temporary(temporary: _ArtifactTemporary) -> None:
+        os.close(temporary.descriptor)
+
+    @staticmethod
+    def cleanup_temporary(parent: int, temporary: _ArtifactTemporary) -> None:
+        try:
+            os.unlink(temporary.name, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def flush_directory(directory: int) -> None:
+        os.fsync(directory)
+
+    @staticmethod
+    def list_names(directory: int) -> list[str]:
+        return sorted(os.listdir(directory))
+
+    def remove_entry(self, parent: int, name: str, *, recursive: bool) -> None:
+        kind = self.entry_kind(parent, name)
+        if kind is None:
+            return
+        if kind == "directory":
+            directory = self.open_directory(parent, name)
+            try:
+                names = self.list_names(directory)
+                if names and not recursive:
+                    raise OSError(f"artifact directory is not empty: {name}")
+                for child_name in names:
+                    self.remove_entry(directory, child_name, recursive=True)
+            finally:
+                self.close_directory(directory)
+            os.rmdir(name, dir_fd=parent)
+            return
+        os.unlink(name, dir_fd=parent)
+
+    @staticmethod
+    def rename_entry(parent: int, source_name: str, target_name: str) -> None:
+        os.rename(
+            source_name,
+            target_name,
+            src_dir_fd=parent,
+            dst_dir_fd=parent,
+        )
+
+
+class _WindowsArtifactBackend:
+    """Windows handle-relative artifact operations backed by documented NT APIs."""
+
+    platform_name = "windows"
+
+    FILE_LIST_DIRECTORY = 0x0001
+    FILE_READ_DATA = 0x0001
+    FILE_WRITE_DATA = 0x0002
+    FILE_APPEND_DATA = 0x0004
+    FILE_READ_ATTRIBUTES = 0x0080
+    FILE_WRITE_ATTRIBUTES = 0x0100
+    DELETE = 0x00010000
+    SYNCHRONIZE = 0x00100000
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    FILE_OPEN = 0x00000001
+    FILE_CREATE = 0x00000002
+    FILE_OPEN_IF = 0x00000003
+    FILE_DIRECTORY_FILE = 0x00000001
+    FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+    FILE_NON_DIRECTORY_FILE = 0x00000040
+    FILE_OPEN_REPARSE_POINT = 0x00200000
+    FILE_ATTRIBUTE_NORMAL = 0x00000080
+    FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    OBJ_CASE_INSENSITIVE = 0x00000040
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    FILE_ID_INFO_CLASS = 18
+    FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
+    FILE_RENAME_INFO_CLASS = 3
+    FILE_DISPOSITION_INFO_CLASS = 4
+    FILE_DIRECTORY_INFORMATION_CLASS = 1
+    STATUS_NO_MORE_FILES = 0x80000006
+    STATUS_BUFFER_OVERFLOW = 0x80000005
+
+    def __init__(self) -> None:
+        if os.name != "nt":
+            raise ReviewError("Windows artifact backend is available only on Windows")
+        import ctypes
+        from ctypes import wintypes
+
+        self.ctypes = ctypes
+        self.wintypes = wintypes
+        self.ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class UnicodeString(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.USHORT),
+                ("MaximumLength", wintypes.USHORT),
+                ("Buffer", wintypes.LPWSTR),
+            ]
+
+        class ObjectAttributes(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.ULONG),
+                ("RootDirectory", wintypes.HANDLE),
+                ("ObjectName", ctypes.POINTER(UnicodeString)),
+                ("Attributes", wintypes.ULONG),
+                ("SecurityDescriptor", wintypes.LPVOID),
+                ("SecurityQualityOfService", wintypes.LPVOID),
+            ]
+
+        class IoStatusBlock(ctypes.Structure):
+            _fields_ = [("Status", wintypes.LPVOID), ("Information", ctypes.c_size_t)]
+
+        class FileId128(ctypes.Structure):
+            _fields_ = [("Identifier", wintypes.BYTE * 16)]
+
+        class FileIdInfo(ctypes.Structure):
+            _fields_ = [
+                ("VolumeSerialNumber", ctypes.c_ulonglong),
+                ("FileId", FileId128),
+            ]
+
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = [("FileAttributes", wintypes.DWORD), ("ReparseTag", wintypes.DWORD)]
+
+        class FileDispositionInfo(ctypes.Structure):
+            _fields_ = [("DeleteFile", wintypes.BOOL)]
+
+        class FileRenameChoice(ctypes.Union):
+            _fields_ = [
+                ("ReplaceIfExists", wintypes.BYTE),
+                ("Flags", wintypes.DWORD),
+            ]
+
+        class FileRenameHeader(ctypes.Structure):
+            _anonymous_ = ("Choice",)
+            _fields_ = [
+                ("Choice", FileRenameChoice),
+                ("RootDirectory", wintypes.HANDLE),
+                ("FileNameLength", wintypes.DWORD),
+            ]
+
+        self.UnicodeString = UnicodeString
+        self.ObjectAttributes = ObjectAttributes
+        self.IoStatusBlock = IoStatusBlock
+        self.FileIdInfo = FileIdInfo
+        self.FileAttributeTagInfo = FileAttributeTagInfo
+        self.FileDispositionInfo = FileDispositionInfo
+        self.FileRenameHeader = FileRenameHeader
+
+        self.ntdll.NtCreateFile.argtypes = [
+            ctypes.POINTER(wintypes.HANDLE),
+            wintypes.ULONG,
+            ctypes.POINTER(ObjectAttributes),
+            ctypes.POINTER(IoStatusBlock),
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.LPVOID,
+            wintypes.ULONG,
+        ]
+        self.ntdll.NtCreateFile.restype = ctypes.c_long
+        self.ntdll.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
+        self.ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
+        self.ntdll.NtQueryDirectoryFile.argtypes = [
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.LPVOID,
+            ctypes.POINTER(IoStatusBlock),
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            ctypes.c_ubyte,
+            ctypes.POINTER(UnicodeString),
+            ctypes.c_ubyte,
+        ]
+        self.ntdll.NtQueryDirectoryFile.restype = ctypes.c_long
+        self.kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        self.kernel32.CreateFileW.restype = wintypes.HANDLE
+        self.kernel32.GetFileInformationByHandleEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        self.kernel32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        self.kernel32.SetFileInformationByHandle.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        self.kernel32.SetFileInformationByHandle.restype = wintypes.BOOL
+        self.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+        self.kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+        self.kernel32.FlushFileBuffers.restype = wintypes.BOOL
+
+    def _raise_status(self, status: int, context: str) -> None:
+        code = int(self.ntdll.RtlNtStatusToDosError(status))
+        if code in {2, 3}:
+            raise FileNotFoundError(code, context)
+        if code in {80, 183}:
+            raise FileExistsError(code, context)
+        raise OSError(code, f"{context}: {self.ctypes.FormatError(code)}")
+
+    def _raise_last_error(self, context: str) -> None:
+        code = self.ctypes.get_last_error()
+        raise OSError(code, f"{context}: {self.ctypes.FormatError(code)}")
+
+    def _open_relative(
+        self,
+        parent: int,
+        name: str,
+        *,
+        directory: bool | None,
+        disposition: int,
+        access: int,
+    ) -> int:
+        if name in {"", ".", ".."} or "\\" in name or "/" in name:
+            raise ReviewError(f"Unsafe Windows artifact component: {name!r}")
+        buffer = self.ctypes.create_unicode_buffer(name)
+        encoded_length = len(name.encode("utf-16-le"))
+        unicode_name = self.UnicodeString(
+            encoded_length,
+            encoded_length + 2,
+            self.ctypes.cast(buffer, self.wintypes.LPWSTR),
+        )
+        attributes = self.ObjectAttributes(
+            self.ctypes.sizeof(self.ObjectAttributes),
+            self.wintypes.HANDLE(parent),
+            self.ctypes.pointer(unicode_name),
+            self.OBJ_CASE_INSENSITIVE,
+            None,
+            None,
+        )
+        io_status = self.IoStatusBlock()
+        handle = self.wintypes.HANDLE()
+        options = self.FILE_SYNCHRONOUS_IO_NONALERT | self.FILE_OPEN_REPARSE_POINT
+        if directory is True:
+            options |= self.FILE_DIRECTORY_FILE
+        elif directory is False:
+            options |= self.FILE_NON_DIRECTORY_FILE
+        status = int(
+            self.ntdll.NtCreateFile(
+                self.ctypes.byref(handle),
+                access,
+                self.ctypes.byref(attributes),
+                self.ctypes.byref(io_status),
+                None,
+                self.FILE_ATTRIBUTE_NORMAL,
+                self.FILE_SHARE_READ | self.FILE_SHARE_WRITE | self.FILE_SHARE_DELETE,
+                disposition,
+                options,
+                None,
+                0,
+            )
+        )
+        if status < 0:
+            self._raise_status(status, f"NtCreateFile({name})")
+        raw_handle = int(handle.value)
+        attribute_info = self.FileAttributeTagInfo()
+        if not self.kernel32.GetFileInformationByHandleEx(
+            self.wintypes.HANDLE(raw_handle),
+            self.FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            self.ctypes.byref(attribute_info),
+            self.ctypes.sizeof(attribute_info),
+        ):
+            self.kernel32.CloseHandle(self.wintypes.HANDLE(raw_handle))
+            self._raise_last_error(f"GetFileInformationByHandleEx({name})")
+        if attribute_info.FileAttributes & self.FILE_ATTRIBUTE_REPARSE_POINT:
+            self.kernel32.CloseHandle(self.wintypes.HANDLE(raw_handle))
+            raise ReviewError(f"Artifact path contains a Windows reparse point: {name}")
+        return raw_handle
+
+    def open_absolute_directory(
+        self, path: Path, *, create: bool
+    ) -> tuple[int, int, str]:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        anchor = absolute.anchor
+        components = absolute.parts[1:]
+        if not anchor or not components:
+            raise ReviewError(f"Artifact authority requires a non-root absolute path: {path}")
+        root_handle = self.kernel32.CreateFileW(
+            anchor,
+            self.FILE_LIST_DIRECTORY | self.FILE_READ_ATTRIBUTES | self.SYNCHRONIZE,
+            self.FILE_SHARE_READ | self.FILE_SHARE_WRITE | self.FILE_SHARE_DELETE,
+            None,
+            self.OPEN_EXISTING,
+            self.FILE_FLAG_BACKUP_SEMANTICS | self.FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        if int(root_handle) == self.ctypes.c_void_p(-1).value:
+            self._raise_last_error(f"CreateFileW({anchor})")
+        parent = int(root_handle)
+        try:
+            for index, name in enumerate(components):
+                try:
+                    child = self.open_directory(parent, name)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    child = self.open_directory(parent, name, create=True)
+                if index == len(components) - 1:
+                    return parent, child, name
+                self.close_directory(parent)
+                parent = child
+        except BaseException:
+            self.close_directory(parent)
+            raise
+        raise AssertionError("artifact authority path had no components")
+
+    def open_directory(
+        self,
+        parent: int,
+        name: str,
+        *,
+        create: bool = False,
+        exclusive: bool = False,
+    ) -> int:
+        disposition = self.FILE_CREATE if create and exclusive else (
+            self.FILE_OPEN_IF if create else self.FILE_OPEN
+        )
+        try:
+            return self._open_relative(
+                parent,
+                name,
+                directory=True,
+                disposition=disposition,
+                access=self.FILE_LIST_DIRECTORY
+                | self.FILE_READ_ATTRIBUTES
+                | self.SYNCHRONIZE,
+            )
+        except OSError as error:
+            if getattr(error, "winerror", error.errno) in {2, 3}:
+                raise FileNotFoundError(name) from error
+            if getattr(error, "winerror", error.errno) in {80, 183}:
+                raise FileExistsError(name) from error
+            raise
+
+    def close_directory(self, directory: int) -> None:
+        if not self.kernel32.CloseHandle(self.wintypes.HANDLE(directory)):
+            self._raise_last_error("CloseHandle(directory)")
+
+    def identity(self, directory: int) -> tuple[int, bytes]:
+        info = self.FileIdInfo()
+        if not self.kernel32.GetFileInformationByHandleEx(
+            self.wintypes.HANDLE(directory),
+            self.FILE_ID_INFO_CLASS,
+            self.ctypes.byref(info),
+            self.ctypes.sizeof(info),
+        ):
+            self._raise_last_error("GetFileInformationByHandleEx(FileIdInfo)")
+        return int(info.VolumeSerialNumber), bytes(info.FileId.Identifier)
+
+    def _open_any(self, parent: int, name: str, *, access: int) -> int:
+        return self._open_relative(
+            parent,
+            name,
+            directory=None,
+            disposition=self.FILE_OPEN,
+            access=access | self.FILE_READ_ATTRIBUTES | self.SYNCHRONIZE,
+        )
+
+    def entry_kind(self, parent: int, name: str) -> str | None:
+        try:
+            handle = self._open_any(parent, name, access=self.FILE_READ_ATTRIBUTES)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            if getattr(error, "winerror", error.errno) in {2, 3}:
+                return None
+            raise
+        try:
+            info = self.FileAttributeTagInfo()
+            if not self.kernel32.GetFileInformationByHandleEx(
+                self.wintypes.HANDLE(handle),
+                self.FILE_ATTRIBUTE_TAG_INFO_CLASS,
+                self.ctypes.byref(info),
+                self.ctypes.sizeof(info),
+            ):
+                self._raise_last_error("GetFileInformationByHandleEx(FileAttributeTagInfo)")
+            if info.FileAttributes & self.FILE_ATTRIBUTE_REPARSE_POINT:
+                return "symlink"
+            if info.FileAttributes & self.FILE_ATTRIBUTE_DIRECTORY:
+                return "directory"
+            return "file"
+        finally:
+            self.close_directory(handle)
+
+    def _descriptor_from_handle(self, handle: int, flags: int) -> int:
+        import msvcrt
+
+        return msvcrt.open_osfhandle(handle, flags)
+
+    def read_bytes(self, parent: int, name: str) -> bytes:
+        handle = self._open_relative(
+            parent,
+            name,
+            directory=False,
+            disposition=self.FILE_OPEN,
+            access=self.FILE_READ_DATA | self.FILE_READ_ATTRIBUTES | self.SYNCHRONIZE,
+        )
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        descriptor = self._descriptor_from_handle(handle, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            return stream.read()
+
+    def open_lock_descriptor(self, parent: int, name: str) -> int:
+        handle = self._open_relative(
+            parent,
+            name,
+            directory=False,
+            disposition=self.FILE_OPEN_IF,
+            access=self.FILE_READ_DATA
+            | self.FILE_WRITE_DATA
+            | self.FILE_READ_ATTRIBUTES
+            | self.SYNCHRONIZE,
+        )
+        return self._descriptor_from_handle(
+            handle, os.O_RDWR | getattr(os, "O_BINARY", 0)
+        )
+
+    def create_temporary(
+        self, parent: int, target_name: str, data: bytes
+    ) -> _ArtifactTemporary:
+        temporary_name = f".{target_name}.{uuid.uuid4().hex}.tmp"
+        handle = self._open_relative(
+            parent,
+            temporary_name,
+            directory=False,
+            disposition=self.FILE_CREATE,
+            access=self.FILE_WRITE_DATA
+            | self.FILE_READ_ATTRIBUTES
+            | self.DELETE
+            | self.SYNCHRONIZE,
+        )
+        descriptor = self._descriptor_from_handle(
+            handle, os.O_WRONLY | getattr(os, "O_BINARY", 0)
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return _ArtifactTemporary(temporary_name, descriptor)
+
+    def replace_temporary(
+        self, parent: int, temporary: _ArtifactTemporary, target_name: str
+    ) -> None:
+        import msvcrt
+
+        handle = int(msvcrt.get_osfhandle(temporary.descriptor))
+        encoded_name = target_name.encode("utf-16-le")
+        header_size = self.ctypes.sizeof(self.FileRenameHeader)
+        buffer = self.ctypes.create_string_buffer(header_size + len(encoded_name))
+        header = self.FileRenameHeader.from_buffer(buffer)
+        header.ReplaceIfExists = 1
+        header.RootDirectory = self.wintypes.HANDLE(parent)
+        header.FileNameLength = len(encoded_name)
+        self.ctypes.memmove(
+            self.ctypes.addressof(buffer) + header_size,
+            encoded_name,
+            len(encoded_name),
+        )
+        if not self.kernel32.SetFileInformationByHandle(
+            self.wintypes.HANDLE(handle),
+            self.FILE_RENAME_INFO_CLASS,
+            buffer,
+            len(buffer),
+        ):
+            self._raise_last_error("SetFileInformationByHandle(FileRenameInfo)")
+
+    @staticmethod
+    def close_temporary(temporary: _ArtifactTemporary) -> None:
+        os.close(temporary.descriptor)
+
+    def cleanup_temporary(self, parent: int, temporary: _ArtifactTemporary) -> None:
+        self._delete_named_entry(parent, temporary.name)
+
+    def flush_directory(self, directory: int) -> None:
+        self.kernel32.FlushFileBuffers(self.wintypes.HANDLE(directory))
+
+    def list_names(self, directory: int) -> list[str]:
+        names: list[str] = []
+        restart = True
+        while True:
+            buffer = self.ctypes.create_string_buffer(64 * 1024)
+            io_status = self.IoStatusBlock()
+            status = int(
+                self.ntdll.NtQueryDirectoryFile(
+                    self.wintypes.HANDLE(directory),
+                    None,
+                    None,
+                    None,
+                    self.ctypes.byref(io_status),
+                    buffer,
+                    len(buffer),
+                    self.FILE_DIRECTORY_INFORMATION_CLASS,
+                    False,
+                    None,
+                    restart,
+                )
+            )
+            unsigned_status = status & 0xFFFFFFFF
+            if unsigned_status == self.STATUS_NO_MORE_FILES:
+                break
+            if status < 0 and unsigned_status != self.STATUS_BUFFER_OVERFLOW:
+                self._raise_status(status, "NtQueryDirectoryFile")
+            raw = buffer.raw[: int(io_status.Information)]
+            offset = 0
+            while offset + 64 <= len(raw):
+                next_offset = struct.unpack_from("<I", raw, offset)[0]
+                name_length = struct.unpack_from("<I", raw, offset + 60)[0]
+                name = raw[offset + 64 : offset + 64 + name_length].decode("utf-16-le")
+                if name not in {".", ".."}:
+                    names.append(name)
+                if next_offset == 0:
+                    break
+                offset += next_offset
+            restart = False
+        return sorted(names)
+
+    def _delete_handle(self, handle: int) -> None:
+        disposition = self.FileDispositionInfo(True)
+        if not self.kernel32.SetFileInformationByHandle(
+            self.wintypes.HANDLE(handle),
+            self.FILE_DISPOSITION_INFO_CLASS,
+            self.ctypes.byref(disposition),
+            self.ctypes.sizeof(disposition),
+        ):
+            self._raise_last_error("SetFileInformationByHandle(FileDispositionInfo)")
+
+    def _delete_named_entry(self, parent: int, name: str) -> None:
+        try:
+            handle = self._open_any(parent, name, access=self.DELETE)
+        except FileNotFoundError:
+            return
+        try:
+            self._delete_handle(handle)
+        finally:
+            self.close_directory(handle)
+
+    def remove_entry(self, parent: int, name: str, *, recursive: bool) -> None:
+        kind = self.entry_kind(parent, name)
+        if kind is None:
+            return
+        if kind == "directory":
+            directory = self._open_relative(
+                parent,
+                name,
+                directory=True,
+                disposition=self.FILE_OPEN,
+                access=self.FILE_LIST_DIRECTORY
+                | self.FILE_READ_ATTRIBUTES
+                | self.DELETE
+                | self.SYNCHRONIZE,
+            )
+            try:
+                names = self.list_names(directory)
+                if names and not recursive:
+                    raise OSError(f"artifact directory is not empty: {name}")
+                for child_name in names:
+                    self.remove_entry(directory, child_name, recursive=True)
+                self._delete_handle(directory)
+            finally:
+                self.close_directory(directory)
+            return
+        self._delete_named_entry(parent, name)
+
+    def rename_entry(self, parent: int, source_name: str, target_name: str) -> None:
+        handle = self._open_any(parent, source_name, access=self.DELETE)
+        try:
+            encoded_name = target_name.encode("utf-16-le")
+            header_size = self.ctypes.sizeof(self.FileRenameHeader)
+            buffer = self.ctypes.create_string_buffer(header_size + len(encoded_name))
+            header = self.FileRenameHeader.from_buffer(buffer)
+            header.ReplaceIfExists = 1
+            header.RootDirectory = self.wintypes.HANDLE(parent)
+            header.FileNameLength = len(encoded_name)
+            self.ctypes.memmove(
+                self.ctypes.addressof(buffer) + header_size,
+                encoded_name,
+                len(encoded_name),
+            )
+            if not self.kernel32.SetFileInformationByHandle(
+                self.wintypes.HANDLE(handle),
+                self.FILE_RENAME_INFO_CLASS,
+                buffer,
+                len(buffer),
+            ):
+                self._raise_last_error("SetFileInformationByHandle(FileRenameInfo)")
+        finally:
+            self.close_directory(handle)
+
+
+_ARTIFACT_TEST_HOOK: Any = None
+
+
+class RunArtifactAuthority:
+    """Bind artifact reads and mutations to retained no-follow directory identities."""
+
+    def __init__(self, root_path: Path, *, create: bool = False, backend: Any = None) -> None:
+        requested_root = Path(os.path.abspath(os.fspath(root_path)))
+        self.root_path = requested_root.resolve(strict=False)
+        self._accepted_roots = tuple(dict.fromkeys((requested_root, self.root_path)))
+        self.backend = backend or (
+            _WindowsArtifactBackend() if os.name == "nt" else _PosixArtifactBackend()
+        )
+        try:
+            self._root_parent, self._root, self._root_name = (
+                self.backend.open_absolute_directory(self.root_path, create=create)
+            )
+        except (FileNotFoundError, NotADirectoryError, OSError) as error:
+            raise ReviewError(
+                f"Could not establish artifact directory authority for {self.root_path}: {error}"
+            ) from error
+        self._root_identity = self.backend.identity(self._root)
+        self._directories: dict[tuple[str, ...], Any] = {(): self._root}
+        self._closed = False
+
+    def _relative_parts(self, path: Path) -> tuple[str, ...] | None:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        relative: Path | None = None
+        for accepted_root in self._accepted_roots:
+            try:
+                relative = absolute.relative_to(accepted_root)
+                break
+            except ValueError:
+                continue
+        if relative is None:
+            return None
+        if relative == Path("."):
+            return ()
+        parts = relative.parts
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ReviewError(f"Unsafe artifact-relative path: {relative}")
+        return parts
+
+    def contains(self, path: Path) -> bool:
+        return self._relative_parts(path) is not None
+
+    def _require_parts(self, path: Path) -> tuple[str, ...]:
+        parts = self._relative_parts(path)
+        if parts is None:
+            raise ReviewError(f"Path is outside the active artifact authority: {path}")
+        return parts
+
+    def _verify_root(self) -> None:
+        try:
+            current = self.backend.open_directory(self._root_parent, self._root_name)
+        except BaseException as error:
+            raise ReviewError(
+                "Artifact run name no longer resolves to the retained directory identity"
+            ) from error
+        try:
+            if self.backend.identity(current) != self._root_identity:
+                raise ReviewError(
+                    "Artifact run name was rebound to a different directory identity"
+                )
+        finally:
+            self.backend.close_directory(current)
+
+    def _directory(
+        self, parts: tuple[str, ...], *, create: bool = False
+    ) -> Any:
+        current_parts: tuple[str, ...] = ()
+        current = self._root
+        for name in parts:
+            next_parts = (*current_parts, name)
+            cached = self._directories.get(next_parts)
+            if cached is None:
+                try:
+                    cached = self.backend.open_directory(current, name)
+                except FileNotFoundError as error:
+                    if not create:
+                        raise ReviewError(
+                            f"Artifact directory is missing: {'/'.join(next_parts)}"
+                        ) from error
+                    self.verify_reachable(current_parts)
+                    try:
+                        cached = self.backend.open_directory(
+                            current,
+                            name,
+                            create=True,
+                            exclusive=True,
+                        )
+                    except FileExistsError:
+                        cached = self.backend.open_directory(current, name)
+                self._directories[next_parts] = cached
+            current_parts = next_parts
+            current = cached
+        return current
+
+    def verify_reachable(self, parts: tuple[str, ...] = ()) -> None:
+        self._verify_root()
+        current_parts: tuple[str, ...] = ()
+        current = self._root
+        for name in parts:
+            next_parts = (*current_parts, name)
+            retained = self._directories.get(next_parts)
+            if retained is None:
+                retained = self._directory(next_parts)
+            try:
+                fresh = self.backend.open_directory(current, name)
+            except BaseException as error:
+                raise ReviewError(
+                    "Artifact descendant no longer resolves to its retained identity: "
+                    + "/".join(next_parts)
+                ) from error
+            try:
+                if self.backend.identity(fresh) != self.backend.identity(retained):
+                    raise ReviewError(
+                        "Artifact descendant was rebound to a different identity: "
+                        + "/".join(next_parts)
+                    )
+            finally:
+                self.backend.close_directory(fresh)
+            current_parts = next_parts
+            current = retained
+
+    def read_bytes(self, path: Path) -> bytes:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError(f"Cannot read artifact directory as bytes: {path}")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        return self.backend.read_bytes(parent, name)
+
+    def entry_kind(self, path: Path) -> str | None:
+        parts = self._require_parts(path)
+        if not parts:
+            return "directory"
+        parent_parts, name = parts[:-1], parts[-1]
+        try:
+            parent = self._directory(parent_parts)
+        except ReviewError:
+            return None
+        self.verify_reachable(parent_parts)
+        return self.backend.entry_kind(parent, name)
+
+    def atomic_write_bytes(self, path: Path, data: bytes) -> None:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError(f"Cannot replace artifact authority root: {path}")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts, create=True)
+        self.verify_reachable(parent_parts)
+        if _ARTIFACT_TEST_HOOK is not None:
+            _ARTIFACT_TEST_HOOK("before_temp_created", self, path)
+        temporary = self.backend.create_temporary(parent, name, data)
+        replaced = False
+        try:
+            if _ARTIFACT_TEST_HOOK is not None:
+                _ARTIFACT_TEST_HOOK("after_temp_created", self, path)
+            self.verify_reachable(parent_parts)
+            self.backend.replace_temporary(parent, temporary, name)
+            replaced = True
+            self.backend.flush_directory(parent)
+        finally:
+            try:
+                self.backend.close_temporary(temporary)
+            finally:
+                self.backend.cleanup_temporary(parent, temporary)
+        try:
+            self.verify_reachable(parent_parts)
+        except ReviewError as error:
+            if replaced:
+                raise ReviewError(
+                    "Artifact directory was renamed after an identity-bound write; "
+                    "a bounded mutation may exist in the retained original directory "
+                    "and no pathname rollback was attempted"
+                ) from error
+            raise
+
+    def open_lock_descriptor(self, path: Path) -> int:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError("Artifact lock path must name a file")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts, create=True)
+        self.verify_reachable(parent_parts)
+        return self.backend.open_lock_descriptor(parent, name)
+
+    def mkdir(self, path: Path, *, parents: bool, exist_ok: bool) -> None:
+        parts = self._require_parts(path)
+        if not parts:
+            if exist_ok:
+                return
+            raise FileExistsError(path)
+        if parents:
+            if not exist_ok and self.entry_kind(path) is not None:
+                raise FileExistsError(path)
+            self._directory(parts, create=True)
+            self.verify_reachable(parts)
+            return
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        if self.backend.entry_kind(parent, name) is not None:
+            if exist_ok and self.backend.entry_kind(parent, name) == "directory":
+                self._directory(parts)
+                return
+            raise FileExistsError(path)
+        directory = self.backend.open_directory(
+            parent, name, create=True, exclusive=True
+        )
+        self._directories[parts] = directory
+        self.verify_reachable(parts)
+
+    def remove(self, path: Path, *, recursive: bool, missing_ok: bool = False) -> None:
+        parts = self._require_parts(path)
+        if not parts:
+            raise ReviewError("Refusing to remove active artifact authority root")
+        parent_parts, name = parts[:-1], parts[-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        kind = self.backend.entry_kind(parent, name)
+        if kind is None:
+            if missing_ok:
+                return
+            raise FileNotFoundError(path)
+        for cached_parts in sorted(
+            [item for item in self._directories if item[: len(parts)] == parts],
+            key=len,
+            reverse=True,
+        ):
+            directory = self._directories.pop(cached_parts)
+            self.backend.close_directory(directory)
+        self.backend.remove_entry(parent, name, recursive=recursive)
+        self.verify_reachable(parent_parts)
+
+    def rename(self, source: Path, destination: Path) -> None:
+        source_parts = self._require_parts(source)
+        destination_parts = self._require_parts(destination)
+        if not source_parts or source_parts[:-1] != destination_parts[:-1]:
+            raise ReviewError("Artifact rename must remain within one retained parent")
+        parent_parts = source_parts[:-1]
+        parent = self._directory(parent_parts)
+        self.verify_reachable(parent_parts)
+        self.backend.rename_entry(parent, source_parts[-1], destination_parts[-1])
+        remapped: dict[tuple[str, ...], Any] = {}
+        for cached_parts in sorted(self._directories, key=len):
+            if cached_parts[: len(source_parts)] != source_parts:
+                continue
+            directory = self._directories.pop(cached_parts)
+            remapped[
+                (*destination_parts, *cached_parts[len(source_parts) :])
+            ] = directory
+        self._directories.update(remapped)
+        self.verify_reachable(destination_parts)
+
+    def list_names(self, path: Path) -> list[str]:
+        parts = self._require_parts(path)
+        directory = self._directory(parts)
+        self.verify_reachable(parts)
+        return self.backend.list_names(directory)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        seen: set[Any] = set()
+        for parts in sorted(self._directories, key=len, reverse=True):
+            directory = self._directories[parts]
+            if directory in seen:
+                continue
+            seen.add(directory)
+            self.backend.close_directory(directory)
+        if self._root_parent not in seen:
+            self.backend.close_directory(self._root_parent)
+
+
+_ACTIVE_ARTIFACT_AUTHORITY: RunArtifactAuthority | None = None
+
+
+@contextmanager
+def active_artifact_authority(authority: RunArtifactAuthority) -> Iterator[None]:
+    global _ACTIVE_ARTIFACT_AUTHORITY
+    if _ACTIVE_ARTIFACT_AUTHORITY is not None:
+        raise ReviewError("Nested artifact authorities are not supported")
+    _ACTIVE_ARTIFACT_AUTHORITY = authority
+    try:
+        yield
+    finally:
+        _ACTIVE_ARTIFACT_AUTHORITY = None
+        authority.close()
+
+
+def _authority_for_path(path: Path) -> RunArtifactAuthority | None:
+    authority = _ACTIVE_ARTIFACT_AUTHORITY
+    if authority is not None and authority.contains(path):
+        return authority
+    return None
+
+
+def _install_active_artifact_authority(authority: RunArtifactAuthority) -> None:
+    global _ACTIVE_ARTIFACT_AUTHORITY
+    if _ACTIVE_ARTIFACT_AUTHORITY is not None:
+        authority.close()
+        raise ReviewError("An artifact authority is already active")
+    _ACTIVE_ARTIFACT_AUTHORITY = authority
+
+
+def _close_active_artifact_authority() -> None:
+    global _ACTIVE_ARTIFACT_AUTHORITY
+    authority = _ACTIVE_ARTIFACT_AUTHORITY
+    _ACTIVE_ARTIFACT_AUTHORITY = None
+    if authority is not None:
+        authority.close()
+
+
+def artifact_read_bytes(path: Path) -> bytes:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        return authority.read_bytes(path)
+    return path.read_bytes()
+
+
+def artifact_read_text(
+    path: Path, *, encoding: str = "utf-8", errors: str = "strict"
+) -> str:
+    return artifact_read_bytes(path).decode(encoding, errors)
+
+
+def artifact_entry_kind(path: Path) -> str | None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        return authority.entry_kind(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink"
+    if stat.S_ISDIR(info.st_mode):
+        return "directory"
+    if stat.S_ISREG(info.st_mode):
+        return "file"
+    return "other"
+
+
+def artifact_exists(path: Path) -> bool:
+    return artifact_entry_kind(path) is not None
+
+
+def artifact_is_file(path: Path) -> bool:
+    return artifact_entry_kind(path) == "file"
+
+
+def artifact_is_dir(path: Path) -> bool:
+    return artifact_entry_kind(path) == "directory"
+
+
+def artifact_is_symlink(path: Path) -> bool:
+    return artifact_entry_kind(path) == "symlink"
+
+
+def artifact_mkdir(
+    path: Path, *, parents: bool = False, exist_ok: bool = False
+) -> None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        authority.mkdir(path, parents=parents, exist_ok=exist_ok)
+        return
+    path.mkdir(parents=parents, exist_ok=exist_ok)
+
+
+def artifact_remove(
+    path: Path, *, recursive: bool = False, missing_ok: bool = False
+) -> None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        authority.remove(path, recursive=recursive, missing_ok=missing_ok)
+        return
+    kind = artifact_entry_kind(path)
+    if kind is None:
+        if missing_ok:
+            return
+        raise FileNotFoundError(path)
+    if kind == "directory":
+        if recursive:
+            shutil.rmtree(path)
+        else:
+            path.rmdir()
+    else:
+        path.unlink()
+
+
+def artifact_rename(source: Path, destination: Path) -> None:
+    authority = _authority_for_path(source)
+    if authority is not None and authority.contains(destination):
+        authority.rename(source, destination)
+        return
+    os.replace(source, destination)
+
+
+def artifact_list_names(path: Path) -> list[str]:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        return authority.list_names(path)
+    return sorted(item.name for item in path.iterdir())
+
+
+def artifact_iterdir(path: Path) -> list[Path]:
+    return [path / name for name in artifact_list_names(path)]
+
+
+def _candidate_lock_is_contended(error: OSError) -> bool:
+    return error.errno in {errno.EACCES, errno.EAGAIN}
+
+
+def _acquire_candidate_lock(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        return
+    raise ReviewError(
+        f"Candidate authority locking is unsupported on platform {os.name!r}"
+    )
+
+
+def _release_candidate_lock(descriptor: int) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        return
+    raise ReviewError(
+        f"Candidate authority locking is unsupported on platform {os.name!r}"
+    )
+
+
+@contextmanager
+def candidate_authority_lock(run_dir: Path) -> Iterator[None]:
+    """Serialize current-v5 first candidate authority for one stable run."""
+
+    lock_path = run_dir / ".candidate-ingestion.lock"
+    authority = _authority_for_path(lock_path)
+    if authority is not None:
+        descriptor = authority.open_lock_descriptor(lock_path)
+    else:
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(lock_path, flags, 0o600)
+    acquired = False
+    primary_error: BaseException | None = None
+    try:
+        if os.name == "nt" and os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+        deadline = time.monotonic() + CANDIDATE_AUTHORITY_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                _acquire_candidate_lock(descriptor)
+            except OSError as error:
+                if not _candidate_lock_is_contended(error):
+                    raise ReviewError(
+                        f"Could not acquire candidate authority lock: {error}"
+                    ) from error
+                if time.monotonic() >= deadline:
+                    raise ReviewError(
+                        "Timed out acquiring candidate authority lock; no candidate "
+                        "authority was published by this attempt"
+                    ) from error
+                time.sleep(
+                    min(
+                        CANDIDATE_AUTHORITY_LOCK_POLL_SECONDS,
+                        max(0.0, deadline - time.monotonic()),
+                    )
+                )
+                continue
+            acquired = True
+            break
+        yield
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        release_error: BaseException | None = None
+        if acquired:
+            try:
+                _release_candidate_lock(descriptor)
+            except BaseException as error:
+                release_error = error
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if release_error is None:
+                release_error = error
+        if release_error is not None:
+            if primary_error is not None:
+                try:
+                    setattr(
+                        primary_error,
+                        "candidate_lock_release_error",
+                        repr(release_error),
+                    )
+                except BaseException:
+                    pass
+            else:
+                raise ReviewError(
+                    f"Candidate authority committed but lock release failed: {release_error}"
+                ) from release_error
 
 
 def utc_now() -> str:
@@ -167,9 +1511,7 @@ def sha256_bytes(data: bytes) -> str:
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     try:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+        digest.update(artifact_read_bytes(path))
     except FileNotFoundError as exc:
         raise ReviewError(f"Expected artifact file is missing: {path}") from exc
     except OSError as exc:
@@ -178,6 +1520,10 @@ def sha256_file(path: Path) -> str:
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
+    authority = _authority_for_path(path)
+    if authority is not None:
+        authority.atomic_write_bytes(path, data)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
@@ -203,7 +1549,7 @@ def atomic_write_json(path: Path, value: Any) -> None:
 
 def load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(artifact_read_text(path, encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ReviewError(f"File not found: {path}") from exc
     except json.JSONDecodeError as exc:
@@ -346,6 +1692,37 @@ def normalize_repo_path(raw: str, *, allow_dot: bool = False) -> str:
     return "/".join(parts)
 
 
+def require_canonical_repo_path(raw: Any, context: str) -> str:
+    if not isinstance(raw, str):
+        raise ReviewError(f"{context} must be a string")
+    if "\0" in raw or re.match(r"^[A-Za-z]:", raw):
+        raise ReviewError(
+            f"{context} must be a canonical repository-relative forward-slash Git path: {raw!r}"
+        )
+    try:
+        normalized = normalize_repo_path(raw)
+    except ReviewError as exc:
+        raise ReviewError(
+            f"{context} must be a canonical repository-relative forward-slash Git path: {raw!r}"
+        ) from exc
+    if raw != normalized or raw[:1] == "\ufeff" or raw[-1:] == "\ufeff":
+        raise ReviewError(
+            f"{context} must be a canonical repository-relative forward-slash Git path: {raw!r}"
+        )
+    return raw
+
+
+def require_canonical_repo_path_array(value: Any, context: str) -> list[str]:
+    values = require_array(value, context)
+    result = [
+        require_canonical_repo_path(item, f"{context}[{index}]")
+        for index, item in enumerate(values)
+    ]
+    if len(set(result)) != len(result):
+        raise ReviewError(f"{context} must contain unique values")
+    return result
+
+
 def repo_path(repo: Path, relative: str) -> Path:
     normalized = normalize_repo_path(relative)
     # Canonicalize the repository root before containment checks. On macOS,
@@ -396,6 +1773,160 @@ def require_bool(value: Any, context: str) -> bool:
     if not isinstance(value, bool):
         raise ReviewError(f"{context} must be a boolean")
     return value
+
+
+def is_current_material_review_state(state: dict[str, Any]) -> bool:
+    return (
+        state.get("schema_version") == MATERIAL_REVIEW_STATE_SCHEMA
+        and state.get("workflow_profile") == WORKFLOW_PROFILE_REVIEW
+        and state.get("coverage_required") is True
+        and "profile" not in state
+    )
+
+
+def classify_state_contract(
+    state: dict[str, Any], *, run_dir: Path | None = None
+) -> str:
+    schema_version = state.get("schema_version")
+    profile = state.get("profile")
+    profile_present = "profile" in state
+    coverage_required = state.get("coverage_required")
+    workflow_profile = state.get("workflow_profile")
+
+    if is_current_material_review_state(state):
+        return STATE_CONTRACT_MATERIAL_REVIEW
+    if (
+        schema_version == SIMPLIFICATION_STATE_SCHEMA
+        and profile == SIMPLIFICATION_PROFILE
+        and "coverage_required" not in state
+        and "workflow_profile" not in state
+    ):
+        return STATE_CONTRACT_SIMPLIFICATION
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V5
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V5
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V4
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V3
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V2
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1
+        and not profile_present
+        and coverage_required is True
+        and workflow_profile == WORKFLOW_PROFILE_REVIEW
+    ):
+        return STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1
+    if (
+        schema_version == LEGACY_MATERIAL_REVIEW_STATE_SCHEMA_V1
+        and not profile_present
+        and "coverage_required" not in state
+        and "workflow_profile" not in state
+    ):
+        return STATE_CONTRACT_LEGACY_MATERIAL_REVIEW
+
+    location = f" in {run_dir}" if run_dir is not None else ""
+    raise ReviewError(f"Unsupported or contradictory state identity{location}")
+
+
+def is_simplification_state(state: dict[str, Any]) -> bool:
+    return classify_state_contract(state) == STATE_CONTRACT_SIMPLIFICATION
+
+
+def expected_normalized_candidates_schema(state: dict[str, Any]) -> str:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return NORMALIZED_CANDIDATES_SCHEMA_REVIEW
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        return NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION
+    raise ReviewError("Run predates required coverage; start a new run.")
+
+
+def expected_adjudication_schema(state: dict[str, Any]) -> str:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return ADJUDICATION_SCHEMA_REVIEW
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        return ADJUDICATION_SCHEMA_SIMPLIFICATION
+    raise ReviewError("Run predates required coverage; start a new run.")
+
+
+def expected_ledger_schema(state: dict[str, Any]) -> str:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return LEDGER_SCHEMA_REVIEW
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        return LEDGER_SCHEMA_SIMPLIFICATION
+    raise ReviewError("Run predates required coverage; start a new run.")
+
+
+LEGACY_OBSERVATION_COMMANDS = frozenset({"status", "check-scope"})
+LEGACY_RESTORATION_COMMANDS = frozenset({"rollback-finding", "abort-fixes"})
+LEGACY_ALLOWED_COMMANDS = LEGACY_OBSERVATION_COMMANDS | LEGACY_RESTORATION_COMMANDS
+def enforce_command_compatibility(args: argparse.Namespace) -> None:
+    if args.command == "init":
+        return
+    workflow_profile = getattr(args, "_workflow_profile", None)
+    if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
+        raise ReviewError("Controller caller has no valid workflow profile")
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    contract = classify_state_contract(state, run_dir=run_dir)
+    if workflow_profile == SIMPLIFICATION_PROFILE:
+        if contract != STATE_CONTRACT_SIMPLIFICATION:
+            raise ReviewError(
+                "Run workflow profile does not match the material-code-simplification entrypoint"
+            )
+        return
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        raise ReviewError(
+            "Run workflow profile does not match the material-review entrypoint"
+        )
+    if contract == STATE_CONTRACT_MATERIAL_REVIEW:
+        return
+    if (
+        contract
+        in {
+            STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V4,
+            STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V5,
+            STATE_CONTRACT_LEGACY_MATERIAL_REVIEW_V3,
+            STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V1,
+            STATE_CONTRACT_FINALIZABLE_MATERIAL_REVIEW_V2,
+        }
+        and args.command in LEGACY_ALLOWED_COMMANDS
+    ):
+        return
+    if args.command not in LEGACY_ALLOWED_COMMANDS:
+        raise ReviewError("Run predates required coverage; start a new run.")
+
+
+def require_current_material_review_contract(state: dict[str, Any]) -> None:
+    contract = classify_state_contract(state)
+    if contract == STATE_CONTRACT_SIMPLIFICATION:
+        raise ReviewError("Material-review coverage is not used for material simplification")
+    if contract != STATE_CONTRACT_MATERIAL_REVIEW:
+        raise ReviewError("Run predates required coverage; start a new run.")
 
 
 def require_int(value: Any, context: str, *, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -539,6 +2070,52 @@ def current_branch(repo: Path) -> str:
     if result.returncode != 0:
         return "DETACHED"
     return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def current_head_attachment(repo: Path) -> str | None:
+    result = run_process(
+        ["git", "symbolic-ref", "--quiet", "HEAD"], cwd=repo, check=False
+    )
+    if result.returncode != 0:
+        return None
+    ref = result.stdout.decode("utf-8", errors="replace").strip()
+    if not ref.startswith("refs/heads/") or ref == "refs/heads/":
+        raise ReviewError(f"HEAD has an unsupported symbolic target: {ref!r}")
+    return ref
+
+
+def local_head_refs(repo: Path) -> dict[str, str]:
+    return {
+        ref: object_id
+        for ref, object_id in repository_refs(repo).items()
+        if ref.startswith("refs/heads/")
+    }
+
+
+def repository_refs(repo: Path) -> dict[str, str]:
+    raw = git_text(
+        repo,
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)",
+        "refs",
+    )
+    refs: dict[str, str] = {}
+    for line in raw.splitlines():
+        if not line:
+            continue
+        parts = line.split("\x00")
+        if len(parts) != 2:
+            raise ReviewError("Git returned malformed local branch-ref data")
+        ref, object_id = parts
+        if (
+            not ref.startswith("refs/")
+            or ref == "refs/"
+            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
+            or ref in refs
+        ):
+            raise ReviewError("Git returned invalid ref data")
+        refs[ref] = object_id
+    return dict(sorted(refs.items()))
 
 
 def resolve_commit(repo: Path, ref: str) -> str:
@@ -733,6 +2310,185 @@ def all_scope_paths(scope_identity: dict[str, Any]) -> set[str]:
     return result
 
 
+def collect_coverage_context_paths(plan: dict[str, Any]) -> set[str]:
+    paths: set[str] = set()
+    for raw_unit in plan.get("change_units", []):
+        if not isinstance(raw_unit, dict):
+            continue
+        for raw_path in raw_unit.get("context_paths", []):
+            if isinstance(raw_path, str):
+                paths.add(raw_path)
+    return paths
+
+
+def _git_tree_regular_paths(repo: Path, commit: str) -> set[str]:
+    paths: set[str] = set()
+    for record in git_bytes(repo, "ls-tree", "-r", "-z", "--full-tree", commit).split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, object_type, _ = metadata.split(b" ", 2)
+            path = os.fsdecode(raw_path)
+            if object_type != b"blob" or mode not in {b"100644", b"100755"}:
+                continue
+            paths.add(canonical_git_path(path, "comparison-tree path"))
+        except (ValueError, ObligationContractError):
+            continue
+    return paths
+
+
+def discover_comparison_context_paths(
+    repo: Path, scope_identity: dict[str, Any]
+) -> set[str]:
+    if scope_identity["comparison_kind"] == "commit":
+        return _git_tree_regular_paths(repo, scope_identity["comparison_sha"])
+
+    paths: set[str] = set()
+    for raw_path in git_bytes(repo, "ls-files", "-z").split(b"\0"):
+        if not raw_path:
+            continue
+        try:
+            path = canonical_git_path(os.fsdecode(raw_path), "tracked context path")
+            target = repo_path(repo, path)
+            info = target.lstat()
+        except (FileNotFoundError, OSError, ObligationContractError, ReviewError):
+            continue
+        if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+            paths.add(path)
+    return paths
+
+
+def _read_comparison_context_source(
+    repo: Path, scope_identity: dict[str, Any], path: str
+) -> bytes:
+    if scope_identity["comparison_kind"] == "commit":
+        commit = scope_identity["comparison_sha"]
+        tree = git_bytes(repo, "ls-tree", "-z", commit, "--", path)
+        records = [record for record in tree.split(b"\0") if record]
+        if len(records) != 1:
+            raise ReviewError(f"Context path is missing from the comparison tree: {path}")
+        try:
+            metadata, raw_tree_path = records[0].split(b"\t", 1)
+            mode, object_type, _ = metadata.split(b" ", 2)
+        except ValueError as exc:
+            raise ReviewError(f"Malformed Git tree entry for context path: {path}") from exc
+        if os.fsdecode(raw_tree_path) != path or object_type != b"blob" or mode not in {b"100644", b"100755"}:
+            raise ReviewError(f"Context path is not a tracked regular file in the comparison tree: {path}")
+        data = git_object_bytes(repo, commit, path)
+        if data is None:
+            raise ReviewError(f"Could not freeze comparison-tree context path: {path}")
+        return data
+
+    tracked = run_process(
+        ["git", "ls-files", "--error-unmatch", "--", path],
+        cwd=repo,
+        check=False,
+    )
+    if tracked.returncode != 0:
+        raise ReviewError(f"Context path is not tracked in the comparison worktree: {path}")
+    target = repo_path(repo, path)
+    try:
+        info = target.lstat()
+    except OSError as exc:
+        raise ReviewError(f"Could not inspect context path {path}: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise ReviewError(f"Context path is not a regular non-symlink file: {path}")
+    try:
+        return target.read_bytes()
+    except OSError as exc:
+        raise ReviewError(f"Could not freeze context path {path}: {exc}") from exc
+
+
+def _build_coverage_context(
+    repo: Path,
+    run_dir: Path,
+    scope_identity: dict[str, Any],
+    context_paths: set[str],
+    *,
+    max_files: int,
+    max_file_bytes: int,
+    max_total_bytes: int,
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    canonical_paths = sorted(
+        canonical_git_path(path, "coverage context path") for path in context_paths
+    )
+    if len(canonical_paths) > max_files:
+        raise ReviewError(f"Coverage context may contain at most {max_files} files")
+    if scope_identity["comparison_kind"] == "working-tree":
+        check_scope_fresh(repo, run_dir, load_state(run_dir))
+
+    sources: list[dict[str, Any]] = []
+    source_bytes: dict[str, bytes] = {}
+    total_bytes = 0
+    for path in canonical_paths:
+        data = _read_comparison_context_source(repo, scope_identity, path)
+        if len(data) > max_file_bytes:
+            raise ReviewError(
+                f"Coverage context file {path} exceeds the 2 MiB per-file limit"
+            )
+        total_bytes += len(data)
+        if total_bytes > max_total_bytes:
+            raise ReviewError("Coverage context exceeds the 25 MiB total limit")
+        source_bytes[path] = data
+        sources.append(
+            {
+                "path": path,
+                "sha256": sha256_bytes(data),
+                "size": len(data),
+                "snapshot_path": f"coverage-context/sources/{path}",
+            }
+        )
+
+    if scope_identity["comparison_kind"] == "working-tree":
+        check_scope_fresh(repo, run_dir, load_state(run_dir))
+    context = {
+        "schema_version": COVERAGE_CONTEXT_SCHEMA,
+        "scope_hash": scope_identity_hash(scope_identity),
+        "comparison_kind": scope_identity["comparison_kind"],
+        "comparison_sha": scope_identity["comparison_sha"],
+        "sources": sources,
+    }
+    return context, source_bytes
+
+
+def snapshot_coverage_context(
+    repo: Path,
+    run_dir: Path,
+    scope_identity: dict[str, Any],
+    context_paths: set[str],
+    *,
+    max_files: int = 32,
+    max_file_bytes: int = 2 * 1024 * 1024,
+    max_total_bytes: int = 25 * 1024 * 1024,
+) -> dict[str, Any]:
+    context, source_bytes = _build_coverage_context(
+        repo,
+        run_dir,
+        scope_identity,
+        context_paths,
+        max_files=max_files,
+        max_file_bytes=max_file_bytes,
+        max_total_bytes=max_total_bytes,
+    )
+    destination = run_dir / "coverage-context"
+    if artifact_exists(destination):
+        raise ReviewError(
+            "Coverage context artifact exists without a valid state binding; start a new run"
+        )
+    temporary = run_dir / f".coverage-context.initializing-{uuid.uuid4().hex[:8]}"
+    artifact_mkdir(temporary, parents=False, exist_ok=False)
+    try:
+        for path, data in source_bytes.items():
+            atomic_write_bytes(temporary / "sources" / path, data)
+        artifact_rename(temporary, destination)
+    except BaseException:
+        artifact_remove(temporary, recursive=True, missing_ok=True)
+        raise
+    context_hash = canonical_hash(context)
+    return {**context, "coverage_context_hash": context_hash}
+
+
 def snapshot_sources(
     repo: Path,
     run_dir: Path,
@@ -789,8 +2545,7 @@ def state_path(run_dir: Path) -> Path:
 
 def load_state(run_dir: Path) -> dict[str, Any]:
     state = require_object(load_json(state_path(run_dir)), "state")
-    if state.get("schema_version") != STATE_SCHEMA:
-        raise ReviewError(f"Unsupported state schema in {run_dir}")
+    classify_state_contract(state, run_dir=run_dir)
     return state
 
 
@@ -822,6 +2577,378 @@ def load_verified_scope(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     return scope
 
 
+def load_verified_coverage_context(
+    run_dir: Path,
+    state: dict[str, Any],
+    *,
+    expected_paths: set[str],
+) -> dict[str, Any]:
+    artifact = require_object(
+        load_json(run_dir / "coverage-context.json"), "coverage context"
+    )
+    context = copy.deepcopy(artifact)
+    embedded_hash = require_sha256(
+        context.pop("coverage_context_hash", None),
+        "coverage context.coverage_context_hash",
+    )
+    recomputed_hash = canonical_hash(context)
+    if recomputed_hash != embedded_hash:
+        raise ReviewError(
+            "Coverage context failed its embedded hash check: "
+            f"expected {embedded_hash}, recomputed {recomputed_hash}"
+        )
+    require_state_hash(state, "coverage_context_hash", embedded_hash, "coverage context")
+    require_exact_keys(
+        context,
+        {"schema_version", "scope_hash", "comparison_kind", "comparison_sha", "sources"},
+        "coverage context",
+    )
+    if context["schema_version"] != COVERAGE_CONTEXT_SCHEMA:
+        raise ReviewError("Coverage context has an unsupported schema_version")
+    if context["scope_hash"] != state.get("scope_hash"):
+        raise ReviewError("Coverage context scope_hash does not match the active run")
+    scope_identity = load_verified_scope(run_dir, state)["identity"]
+    if (
+        context["comparison_kind"] != scope_identity["comparison_kind"]
+        or context["comparison_sha"] != scope_identity["comparison_sha"]
+    ):
+        raise ReviewError("Coverage context comparison identity does not match the frozen scope")
+
+    sources = require_array(context["sources"], "coverage context.sources")
+    seen: set[str] = set()
+    for index, raw_source in enumerate(sources):
+        source_context = f"coverage context.sources[{index}]"
+        source = require_object(raw_source, source_context)
+        require_exact_keys(
+            source,
+            {"path", "sha256", "size", "snapshot_path"},
+            source_context,
+        )
+        try:
+            path = canonical_git_path(source["path"], f"{source_context}.path")
+            snapshot_path = canonical_git_path(
+                source["snapshot_path"], f"{source_context}.snapshot_path"
+            )
+        except ObligationContractError as exc:
+            raise ReviewError(str(exc)) from exc
+        expected_snapshot_path = f"coverage-context/sources/{path}"
+        if snapshot_path != expected_snapshot_path:
+            raise ReviewError(
+                f"{source_context}.snapshot_path must equal {expected_snapshot_path}"
+            )
+        if path in seen:
+            raise ReviewError("Coverage context source paths must be unique")
+        seen.add(path)
+        expected_sha = require_sha256(source["sha256"], f"{source_context}.sha256")
+        expected_size = require_int(source["size"], f"{source_context}.size", minimum=0)
+        snapshot = run_dir / snapshot_path
+        try:
+            data = artifact_read_bytes(snapshot)
+        except OSError as exc:
+            raise ReviewError(f"Could not read frozen coverage context {snapshot}: {exc}") from exc
+        if len(data) != expected_size or sha256_bytes(data) != expected_sha:
+            raise ReviewError(f"Frozen coverage context failed integrity validation: {path}")
+    if seen != expected_paths:
+        raise ReviewError(
+            "Coverage context sources do not equal the coverage plan context paths"
+        )
+    return artifact
+
+
+def load_recorded_coverage_plan(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    artifact = require_object(load_json(run_dir / "coverage-plan.json"), "coverage plan")
+    plan = copy.deepcopy(artifact)
+    embedded_hash = require_sha256(
+        plan.pop("coverage_plan_hash", None), "coverage plan.coverage_plan_hash"
+    )
+    context_hash = require_sha256(
+        plan.pop("coverage_context_hash", None), "coverage plan.coverage_context_hash"
+    )
+    context_paths = collect_coverage_context_paths(plan)
+    context = load_verified_coverage_context(
+        run_dir,
+        state,
+        expected_paths=context_paths,
+    )
+    if context["coverage_context_hash"] != context_hash:
+        raise ReviewError("Coverage plan context hash does not match coverage-context.json")
+    recomputed_hash = canonical_hash(
+        {"plan": plan, "coverage_context_hash": context_hash}
+    )
+    if recomputed_hash != embedded_hash:
+        raise ReviewError(
+            f"Coverage plan failed its embedded hash check: expected {embedded_hash}, recomputed {recomputed_hash}"
+        )
+    require_state_hash(state, "coverage_plan_hash", embedded_hash, "coverage plan")
+    validated = validate_coverage_plan(
+        plan,
+        run_dir=run_dir,
+        state=state,
+        allowed_context_paths=context_paths,
+    )
+    if validated != plan:
+        raise ReviewError("Coverage plan is not stored in canonical normalized form")
+    return validated
+
+
+def validate_normalized_candidates_profile(
+    bundle: dict[str, Any], *, state: dict[str, Any], plan: dict[str, Any] | None = None
+) -> None:
+    expected_schema = expected_normalized_candidates_schema(state)
+    schema_version = require_string(
+        bundle.get("schema_version"), "normalized candidates.schema_version"
+    )
+    if schema_version != expected_schema:
+        raise ReviewError(
+            "normalized candidates schema_version does not match the active workflow profile: "
+            f"expected {expected_schema}, got {schema_version}"
+        )
+    if bundle.get("scope_hash") != state.get("scope_hash"):
+        raise ReviewError("Normalized candidates scope_hash does not match the active run")
+
+    reviewer_sets = require_array(
+        bundle.get("reviewer_sets"), "normalized candidates.reviewer_sets"
+    )
+    candidates = require_array(bundle.get("candidates"), "normalized candidates.candidates")
+    material_review = schema_version == NORMALIZED_CANDIDATES_SCHEMA_REVIEW
+
+    if not material_review:
+        for field in ("coverage_plan_hash", "coverage_context_hash"):
+            if field in bundle:
+                raise ReviewError(
+                    f"Simplification normalized candidates must not contain {field}"
+                )
+        for index, raw_reviewer_set in enumerate(reviewer_sets):
+            reviewer_set = require_object(
+                raw_reviewer_set, f"normalized candidates.reviewer_sets[{index}]"
+            )
+            for field in (
+                "lens_id",
+                "assignment_id",
+                "assignment_kind",
+                "obligation_id",
+                "check_results",
+            ):
+                if field in reviewer_set:
+                    raise ReviewError(
+                        f"Simplification normalized reviewer sets must not contain {field}"
+                    )
+        for index, raw_candidate in enumerate(candidates):
+            candidate = require_object(
+                raw_candidate, f"normalized candidates.candidates[{index}]"
+            )
+            for field in ("lens_id", "assignment_id"):
+                if field in candidate:
+                    raise ReviewError(
+                        f"Simplification normalized candidates must not contain {field}"
+                    )
+        return
+
+    if plan is None:
+        raise ReviewError("Normalized material-review candidates require a coverage plan")
+
+    coverage_plan_hash = require_sha256(
+        bundle.get("coverage_plan_hash"),
+        "normalized candidates.coverage_plan_hash",
+    )
+    if coverage_plan_hash != state.get("hashes", {}).get("coverage_plan_hash"):
+        raise ReviewError(
+            "Normalized candidates coverage_plan_hash does not match the recorded coverage plan"
+        )
+    coverage_context_hash = require_sha256(
+        bundle.get("coverage_context_hash"),
+        "normalized candidates.coverage_context_hash",
+    )
+    if coverage_context_hash != state.get("hashes", {}).get("coverage_context_hash"):
+        raise ReviewError(
+            "Normalized candidates coverage_context_hash does not match the recorded coverage context"
+        )
+
+    assignments = {item["assignment_id"]: item for item in plan["assignments"]}
+    reviewer_sets_by_assignment: dict[str, dict[str, Any]] = {}
+    for index, raw_reviewer_set in enumerate(reviewer_sets):
+        context = f"normalized candidates.reviewer_sets[{index}]"
+        reviewer_set = require_object(raw_reviewer_set, context)
+        assignment_id = require_string(
+            reviewer_set.get("assignment_id"), f"{context}.assignment_id"
+        )
+        if assignment_id in reviewer_sets_by_assignment:
+            raise ReviewError(
+                f"Duplicate normalized reviewer-set assignment_id: {assignment_id}"
+            )
+        assignment = assignments.get(assignment_id)
+        if assignment is None:
+            raise ReviewError(f"{context}.assignment_id is absent from the coverage plan")
+        for field in (
+            "assignment_kind",
+            "lens_id",
+            "reviewer_id",
+            "independence_group",
+            "review_mode",
+        ):
+            if reviewer_set.get(field) != assignment.get(field):
+                raise ReviewError(f"{context}.{field} does not match the coverage assignment")
+        expected_obligation_id = assignment.get("obligation_id")
+        if reviewer_set.get("obligation_id") != expected_obligation_id:
+            if expected_obligation_id is not None or "obligation_id" in reviewer_set:
+                raise ReviewError(
+                    f"{context}.obligation_id does not match the coverage assignment"
+                )
+        specialist_fields = ("unit_ids", "primary_paths", "context_paths")
+        if assignment["assignment_kind"] == "specialist":
+            for field in specialist_fields:
+                if reviewer_set.get(field) != assignment[field]:
+                    raise ReviewError(
+                        f"{context}.{field} does not match the coverage assignment"
+                    )
+        else:
+            unexpected_specialist_fields = [
+                field for field in specialist_fields if field in reviewer_set
+            ]
+            if unexpected_specialist_fields:
+                raise ReviewError(
+                    f"{context} has specialist provenance for a non-specialist assignment"
+                )
+        for field in ("required_review_paths", "required_checks"):
+            if reviewer_set.get(field) != assignment[field]:
+                raise ReviewError(
+                    f"{context}.{field} does not match the coverage assignment"
+                )
+        expected_scenarios = scenario_checks_for_assignment(plan, assignment)
+        if reviewer_set.get("scenario_checks") != expected_scenarios:
+            raise ReviewError(
+                f"{context}.scenario_checks do not match the coverage plan"
+            )
+        expected_check_contracts = check_contracts_for_assignment(plan, assignment)
+        if reviewer_set.get("check_contracts") != expected_check_contracts:
+            raise ReviewError(
+                f"{context}.check_contracts do not match the machine-owned obligation contracts"
+            )
+        reviewer_coverage_hash = require_sha256(
+            reviewer_set.get("coverage_plan_hash"), f"{context}.coverage_plan_hash"
+        )
+        if reviewer_coverage_hash != coverage_plan_hash:
+            raise ReviewError(
+                f"{context}.coverage_plan_hash does not match the normalized bundle"
+            )
+        reviewer_context_hash = require_sha256(
+            reviewer_set.get("coverage_context_hash"),
+            f"{context}.coverage_context_hash",
+        )
+        if reviewer_context_hash != coverage_context_hash:
+            raise ReviewError(
+                f"{context}.coverage_context_hash does not match the normalized bundle"
+            )
+        reviewer_sets_by_assignment[assignment_id] = reviewer_set
+
+    missing_assignments = sorted(
+        required_assignment_ids(plan) - set(reviewer_sets_by_assignment)
+    )
+    if missing_assignments:
+        raise ReviewError(
+            "Normalized candidates are missing assignments: "
+            + ", ".join(missing_assignments)
+        )
+
+    candidate_ids: set[str] = set()
+    for index, raw_candidate in enumerate(candidates):
+        context = f"normalized candidates.candidates[{index}]"
+        candidate = require_object(raw_candidate, context)
+        candidate_id = require_string(candidate.get("candidate_id"), f"{context}.candidate_id")
+        if candidate_id in candidate_ids:
+            raise ReviewError(f"Duplicate normalized candidate_id: {candidate_id}")
+        candidate_ids.add(candidate_id)
+        assignment_id = require_string(
+            candidate.get("assignment_id"), f"{context}.assignment_id"
+        )
+        reviewer_set = reviewer_sets_by_assignment.get(assignment_id)
+        if reviewer_set is None:
+            raise ReviewError(
+                f"{context}.assignment_id has no validated reviewer-set source"
+            )
+        candidate_identity = (
+            candidate.get("lens_id"),
+            candidate.get("reviewer_id"),
+            candidate.get("independence_group"),
+            candidate.get("review_mode"),
+        )
+        reviewer_set_identity = (
+            reviewer_set.get("lens_id"),
+            reviewer_set.get("reviewer_id"),
+            reviewer_set.get("independence_group"),
+            reviewer_set.get("review_mode"),
+        )
+        if candidate_identity != reviewer_set_identity:
+            raise ReviewError(
+                f"{context} identity does not match its validated assignment source"
+            )
+        if "coverage_plan_hash" in candidate or "coverage_context_hash" in candidate:
+            raise ReviewError(
+                f"{context} must not duplicate the bundle coverage hashes"
+            )
+
+    for assignment_id, reviewer_set in reviewer_sets_by_assignment.items():
+        check_results = require_array(
+            reviewer_set.get("check_results"),
+            f"normalized reviewer set {assignment_id}.check_results",
+        )
+        for check_index, raw_check in enumerate(check_results):
+            check = require_object(
+                raw_check,
+                f"normalized reviewer set {assignment_id}.check_results[{check_index}]",
+            )
+            if "finding_local_ids" in check:
+                raise ReviewError(
+                    "Normalized obligation checks must resolve finding_local_ids to candidate_ids"
+                )
+            referenced = set(
+                require_string_array(
+                    check.get("candidate_ids"),
+                    f"normalized reviewer set {assignment_id}.check_results[{check_index}].candidate_ids",
+                )
+            )
+            unknown = sorted(referenced - candidate_ids)
+            if unknown:
+                raise ReviewError(
+                    "Normalized obligation check references unknown candidate IDs: "
+                    + ", ".join(unknown)
+                )
+
+
+def load_verified_candidates_bundle(
+    run_dir: Path, state: dict[str, Any]
+) -> dict[str, Any]:
+    bundle = require_object(
+        load_json(run_dir / "candidates.json"), "normalized candidates"
+    )
+    plan = None
+    if classify_state_contract(state) == STATE_CONTRACT_MATERIAL_REVIEW:
+        plan = load_recorded_coverage_plan(run_dir, state)
+    validate_normalized_candidates_profile(bundle, state=state, plan=plan)
+    bundle_hash = verify_embedded_hash(
+        bundle,
+        hash_field="candidate_bundle_hash",
+        context="normalized candidates",
+        unhashed_fields={"generated_at"},
+    )
+    require_state_hash(
+        state, "candidate_bundle_hash", bundle_hash, "normalized candidates"
+    )
+    return bundle
+
+
+def require_compatible_existing_candidate_authority(
+    run_dir: Path, state: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        return load_verified_candidates_bundle(run_dir, state)
+    except ReviewError as exc:
+        raise ReviewError(
+            "Existing normalized candidate authority is incompatible with the active "
+            "workflow profile; start a new run. Cause: " + str(exc)
+        ) from exc
+
+
 def load_verified_findings_gate(run_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     receipt = require_object(load_json(run_dir / "gates" / "findings.json"), "Gate A receipt")
     receipt_hash = verify_embedded_hash(
@@ -841,6 +2968,51 @@ def load_verified_ledger(
     findings_gate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ledger = require_object(load_json(run_dir / "ledger.json"), "ledger")
+    expected_schema = expected_ledger_schema(state)
+    schema_version = require_string(ledger.get("schema_version"), "ledger.schema_version")
+    if schema_version != expected_schema:
+        raise ReviewError(
+            "ledger schema_version does not match the active workflow profile: "
+            f"expected {expected_schema}, got {schema_version}"
+        )
+    entries = [
+        *require_array(ledger.get("findings"), "ledger.findings"),
+        *require_array(ledger.get("discarded"), "ledger.discarded"),
+    ]
+    if schema_version == LEDGER_SCHEMA_REVIEW:
+        candidates_bundle = load_verified_candidates_bundle(run_dir, state)
+        candidates_by_id = {
+            candidate["candidate_id"]: candidate
+            for candidate in candidates_bundle["candidates"]
+        }
+        for index, raw_entry in enumerate(entries):
+            context = f"ledger provenance entry[{index}]"
+            entry = require_object(raw_entry, context)
+            candidate_ids = require_string_array(
+                entry.get("candidate_ids"), f"{context}.candidate_ids"
+            )
+            unknown = sorted(set(candidate_ids) - set(candidates_by_id))
+            if unknown:
+                raise ReviewError(
+                    f"{context} references unknown candidate IDs: {', '.join(unknown)}"
+                )
+            expected_lenses = sorted(
+                {candidates_by_id[candidate_id]["lens_id"] for candidate_id in candidate_ids}
+            )
+            source_lenses = require_string_array(
+                entry.get("source_lenses"), f"{context}.source_lenses"
+            )
+            if source_lenses != expected_lenses:
+                raise ReviewError(
+                    f"{context}.source_lenses must be the exact sorted candidate-source lenses"
+                )
+    else:
+        for index, raw_entry in enumerate(entries):
+            entry = require_object(raw_entry, f"ledger provenance entry[{index}]")
+            if "source_lenses" in entry:
+                raise ReviewError(
+                    "Simplification ledger/v3 entries must not contain source_lenses"
+                )
     ledger_hash = verify_embedded_hash(
         ledger,
         hash_field="ledger_hash",
@@ -896,9 +3068,28 @@ def resolve_run_dir(args: argparse.Namespace, repo: Path) -> tuple[Path, Path]:
     runs_root = artifact_root / "runs"
     raw_run_id = getattr(args, "run_id", None) or os.environ.get("MATERIAL_REVIEW_RUN_ID")
     run_id = normalize_run_id(raw_run_id) if raw_run_id else None
+    active_authority = _ACTIVE_ARTIFACT_AUTHORITY
+    if active_authority is not None:
+        run_dir = runs_root / run_id if run_id else active_authority.root_path
+        if active_authority._relative_parts(run_dir) != ():
+            raise ReviewError(
+                "The active artifact authority does not match the requested run"
+            )
+        state = load_state(run_dir)
+        if Path(state.get("repo_root", "")).resolve() != repo:
+            raise ReviewError(
+                f"Run {state.get('run_id')} belongs to {state.get('repo_root')}, "
+                f"not the requested repository {repo}"
+            )
+        return artifact_root, run_dir
     if run_id:
         run_dir = runs_root / run_id
-        if not state_path(run_dir).exists():
+        try:
+            authority = RunArtifactAuthority(run_dir)
+        except ReviewError as error:
+            raise ReviewError(f"Run not found: {run_id} under {runs_root}") from error
+        _install_active_artifact_authority(authority)
+        if not artifact_exists(state_path(run_dir)):
             raise ReviewError(f"Run not found: {run_id} under {runs_root}")
         state = load_state(run_dir)
         if Path(state.get("repo_root", "")).resolve() != repo:
@@ -907,35 +3098,45 @@ def resolve_run_dir(args: argparse.Namespace, repo: Path) -> tuple[Path, Path]:
             )
         return artifact_root, run_dir
 
-    if not runs_root.exists():
-        raise ReviewError("No material-code-review runs exist; run init first or pass --run-id")
+    try:
+        runs_authority = RunArtifactAuthority(runs_root)
+    except ReviewError as error:
+        raise ReviewError(
+            "No material-code-review runs exist; run init first or pass --run-id"
+        ) from error
     candidates: list[Path] = []
-    for path in sorted(runs_root.iterdir()):
-        if not state_path(path).exists():
-            continue
-        try:
-            state = load_state(path)
-        except ReviewError:
-            continue
-        if Path(state.get("repo_root", "")).resolve() != repo:
-            continue
-        if state.get("phase") not in {PHASE_COMPLETE, PHASE_ABORTED}:
-            candidates.append(path)
+    all_repo_runs: list[Path] = []
+    with active_artifact_authority(runs_authority):
+        for name in artifact_list_names(runs_root):
+            path = runs_root / name
+            if not artifact_exists(state_path(path)):
+                continue
+            try:
+                state = load_state(path)
+            except ReviewError:
+                continue
+            if Path(state.get("repo_root", "")).resolve() != repo:
+                continue
+            all_repo_runs.append(path)
+            if state.get("phase") not in {PHASE_COMPLETE, PHASE_ABORTED}:
+                candidates.append(path)
+    selected: Path | None = None
     if len(candidates) == 1:
-        return artifact_root, candidates[0]
-    if not candidates:
-        all_repo_runs = [
-            path
-            for path in sorted(runs_root.iterdir())
-            if state_path(path).exists()
-            and Path(load_state(path).get("repo_root", "")).resolve() == repo
-        ]
-        if len(all_repo_runs) == 1:
-            return artifact_root, all_repo_runs[0]
-        raise ReviewError("No unique active run found; pass --run-id or set MATERIAL_REVIEW_RUN_ID")
-    raise ReviewError(
-        "Multiple active runs found: " + ", ".join(path.name for path in candidates) + ". Pass --run-id."
-    )
+        selected = candidates[0]
+    elif not candidates and len(all_repo_runs) == 1:
+        selected = all_repo_runs[0]
+    elif not candidates:
+        raise ReviewError(
+            "No unique active run found; pass --run-id or set MATERIAL_REVIEW_RUN_ID"
+        )
+    else:
+        raise ReviewError(
+            "Multiple active runs found: "
+            + ", ".join(path.name for path in candidates)
+            + ". Pass --run-id."
+        )
+    _install_active_artifact_authority(RunArtifactAuthority(selected))
+    return artifact_root, selected
 
 
 def write_source_bundle_files(run_dir: Path, scope: dict[str, Any], limitations: list[str]) -> None:
@@ -1029,11 +3230,61 @@ def workspace_guard(repo: Path) -> dict[str, Any]:
     return {"identity": identity, "guard_hash": canonical_hash(identity)}
 
 
+def index_identity(repo: Path) -> dict[str, Any]:
+    raw_path = git_text(repo, "rev-parse", "--git-path", "index")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = repo / path
+    path = path.resolve(strict=False)
+    if not path.exists():
+        return {"path": str(path), "present": False, "sha256": None, "size": None}
+    if not path.is_file():
+        raise ReviewError("Git index path is not a regular file")
+    staged_entries = git_bytes(repo, "ls-files", "--stage", "-z")
+    entry_flags = git_bytes(repo, "ls-files", "-v", "-z")
+    content = staged_entries + b"\0--entry-flags--\0" + entry_flags
+    return {
+        "path": str(path),
+        "present": True,
+        "sha256": sha256_bytes(content),
+        "size": len(content),
+    }
+
+
+def repository_authority(repo: Path) -> dict[str, Any]:
+    guard = workspace_guard(repo)
+    identity = {
+        "head_attachment": current_head_attachment(repo),
+        "head_sha": resolve_commit(repo, "HEAD"),
+        "refs": repository_refs(repo),
+        "index": index_identity(repo),
+        "workspace_guard": guard,
+    }
+    return {"identity": identity, "authority_hash": canonical_hash(identity)}
+
+
 def diff_guard_paths(before: dict[str, Any], after: dict[str, Any]) -> set[str]:
     before_states = before["identity"]["path_states"]
     after_states = after["identity"]["path_states"]
     paths = set(before_states) | set(after_states)
     return {path for path in paths if before_states.get(path, {"type": "clean"}) != after_states.get(path, {"type": "clean"})}
+
+
+def repository_control_mutations(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[str]:
+    before_identity = before["identity"]
+    after_identity = after["identity"]
+    labels: list[str] = []
+    if before_identity["head_sha"] != after_identity["head_sha"]:
+        labels.append("HEAD")
+    if before_identity["head_attachment"] != after_identity["head_attachment"]:
+        labels.append("HEAD attachment")
+    if before_identity["refs"] != after_identity["refs"]:
+        labels.append("refs namespace")
+    if before_identity["index"] != after_identity["index"]:
+        labels.append("Git index")
+    return labels
 
 
 def ensure_expected_workspace(repo: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -1050,59 +3301,71 @@ def snapshot_copy_path(repo: Path, snapshot_root: Path, path: str, state_info: d
     source = repo_path(repo, path)
     destination = snapshot_root / "content" / path
     if state_info["type"] == "file":
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        atomic_write_bytes(destination, source.read_bytes())
     elif state_info["type"] == "symlink":
-        destination.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(destination.with_suffix(destination.suffix + ".symlink"), state_info["target"])
 
 
 def create_checkpoint(repo: Path, checkpoint_dir: Path, extra_paths: Iterable[str]) -> dict[str, Any]:
-    if checkpoint_dir.exists():
+    if artifact_exists(checkpoint_dir):
         raise ReviewError(f"Checkpoint already exists: {checkpoint_dir}")
-    checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    guard = workspace_guard(repo)
-    paths = set(guard["identity"]["path_states"])
-    paths.update(normalize_repo_path(path) for path in extra_paths)
-    path_states: dict[str, Any] = {}
-    for path in sorted(paths):
-        info = path_state(repo_path(repo, path))
-        path_states[path] = info
-        snapshot_copy_path(repo, checkpoint_dir, path, info)
+    artifact_mkdir(checkpoint_dir, parents=True, exist_ok=False)
+    try:
+        authority = repository_authority(repo)
+        authority_identity = authority["identity"]
+        guard = authority_identity["workspace_guard"]
+        paths = set(guard["identity"]["path_states"])
+        paths.update(normalize_repo_path(path) for path in extra_paths)
+        path_states: dict[str, Any] = {}
+        for path in sorted(paths):
+            info = path_state(repo_path(repo, path))
+            path_states[path] = info
+            snapshot_copy_path(repo, checkpoint_dir, path, info)
 
-    index_raw = git_text(repo, "rev-parse", "--git-path", "index")
-    index_path = Path(index_raw)
-    if not index_path.is_absolute():
-        index_path = repo / index_path
-    index_backup = checkpoint_dir / "index.backup"
-    if index_path.exists():
-        shutil.copyfile(index_path, index_backup)
-        index_present = True
-        index_sha256 = sha256_file(index_backup)
-    else:
-        index_present = False
-        index_sha256 = None
+        index = authority_identity["index"]
+        index_path = Path(index["path"])
+        index_backup = checkpoint_dir / "index.backup"
+        if index["present"]:
+            atomic_write_bytes(index_backup, index_path.read_bytes())
+            index_backup_sha256 = sha256_file(index_backup)
+        else:
+            index_backup_sha256 = None
 
-    metadata = {
-        "created_at": utc_now(),
-        "head_sha": guard["identity"]["head_sha"],
-        "branch": guard["identity"]["branch"],
-        "workspace_guard": guard,
-        "path_states": path_states,
-        "index_path": str(index_path),
-        "index_present": index_present,
-        "index_sha256": index_sha256,
-    }
-    metadata["checkpoint_hash"] = canonical_hash({key: value for key, value in metadata.items() if key != "created_at"})
-    atomic_write_json(checkpoint_dir / "checkpoint.json", metadata)
-    return metadata
+        if repository_authority(repo) != authority:
+            raise ReviewError("Repository authority changed while the checkpoint was captured")
+
+        refs = authority_identity["refs"]
+        metadata = {
+            "schema_version": CHECKPOINT_SCHEMA_V4,
+            "created_at": utc_now(),
+            "head_sha": authority_identity["head_sha"],
+            "branch": guard["identity"]["branch"],
+            "head_attachment": authority_identity["head_attachment"],
+            "refs": refs,
+            "local_head_refs": {
+                ref: object_id
+                for ref, object_id in refs.items()
+                if ref.startswith("refs/heads/")
+            },
+            "repository_authority": authority,
+            "workspace_guard": guard,
+            "path_states": path_states,
+            "index_path": index["path"],
+            "index_present": index["present"],
+            "index_sha256": index_backup_sha256,
+        }
+        metadata["checkpoint_hash"] = canonical_hash(
+            {key: value for key, value in metadata.items() if key != "created_at"}
+        )
+        atomic_write_json(checkpoint_dir / "checkpoint.json", metadata)
+        return metadata
+    except BaseException:
+        artifact_remove(checkpoint_dir, recursive=True, missing_ok=True)
+        raise
 
 
 def remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink(missing_ok=True)
-    elif path.is_dir():
-        shutil.rmtree(path)
+    artifact_remove(path, recursive=True, missing_ok=True)
 
 
 def restore_one_snapshot_path(repo: Path, checkpoint_dir: Path, path: str, info: dict[str, Any]) -> None:
@@ -1112,24 +3375,27 @@ def restore_one_snapshot_path(repo: Path, checkpoint_dir: Path, path: str, info:
         remove_path(target)
         return
     if kind == "directory":
-        if target.exists() and not target.is_dir():
+        if artifact_exists(target) and not artifact_is_dir(target):
             remove_path(target)
-        target.mkdir(parents=True, exist_ok=True)
+        artifact_mkdir(target, parents=True, exist_ok=True)
         os.chmod(target, info.get("mode", 0o755))
         return
     if kind == "file":
-        if target.exists() or target.is_symlink():
+        if artifact_exists(target) or artifact_is_symlink(target):
             remove_path(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        artifact_mkdir(target.parent, parents=True, exist_ok=True)
         source = checkpoint_dir / "content" / path
-        shutil.copyfile(source, target)
+        target.write_bytes(artifact_read_bytes(source))
         os.chmod(target, info.get("mode", 0o644))
         return
     if kind == "symlink":
-        if target.exists() or target.is_symlink():
+        if artifact_exists(target) or artifact_is_symlink(target):
             remove_path(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        link_target = (checkpoint_dir / "content" / path).with_suffix((checkpoint_dir / "content" / path).suffix + ".symlink").read_text(encoding="utf-8")
+        artifact_mkdir(target.parent, parents=True, exist_ok=True)
+        link_target_path = (checkpoint_dir / "content" / path).with_suffix(
+            (checkpoint_dir / "content" / path).suffix + ".symlink"
+        )
+        link_target = artifact_read_text(link_target_path, encoding="utf-8")
         os.symlink(link_target, target)
         return
     raise ReviewError(f"Cannot restore unsupported file type for {path}: {kind}")
@@ -1138,6 +3404,74 @@ def restore_one_snapshot_path(repo: Path, checkpoint_dir: Path, path: str, info:
 def path_exists_in_head(repo: Path, path: str) -> bool:
     result = run_process(["git", "cat-file", "-e", f"HEAD:{path}"], cwd=repo, check=False)
     return result.returncode == 0
+
+
+def validate_ref_map(value: Any, context: str) -> dict[str, str]:
+    raw_refs = require_object(value, context)
+    refs: dict[str, str] = {}
+    for raw_ref, raw_object_id in raw_refs.items():
+        ref = require_string(raw_ref, f"{context} ref")
+        object_id = require_string(raw_object_id, f"{context}.{ref}")
+        if (
+            not ref.startswith("refs/")
+            or ref == "refs/"
+            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
+            or ref in refs
+        ):
+            raise ReviewError(f"{context} contains invalid ref data")
+        refs[ref] = object_id
+    return dict(sorted(refs.items()))
+
+
+def validate_repository_authority(value: Any, context: str) -> dict[str, Any]:
+    authority = require_object(value, context)
+    require_exact_keys(authority, {"identity", "authority_hash"}, context)
+    identity = require_object(authority.get("identity"), f"{context}.identity")
+    require_exact_keys(
+        identity,
+        {"head_attachment", "head_sha", "refs", "index", "workspace_guard"},
+        f"{context}.identity",
+    )
+    authority_hash = require_sha256(
+        authority.get("authority_hash"), f"{context}.authority_hash"
+    )
+    if authority_hash != canonical_hash(identity):
+        raise ReviewError(f"{context} failed its embedded hash check")
+    attachment = identity.get("head_attachment")
+    if attachment is not None:
+        attachment = require_string(attachment, f"{context}.identity.head_attachment")
+        if not attachment.startswith("refs/heads/") or attachment == "refs/heads/":
+            raise ReviewError(f"{context} has an invalid HEAD attachment")
+    head_sha = require_string(identity.get("head_sha"), f"{context}.identity.head_sha")
+    if re.fullmatch(r"[0-9a-f]{40,64}", head_sha) is None:
+        raise ReviewError(f"{context}.identity.head_sha is not an object ID")
+    refs = validate_ref_map(identity.get("refs"), f"{context}.identity.refs")
+    if attachment is not None and refs.get(attachment) != head_sha:
+        raise ReviewError(f"{context} attached HEAD does not match its saved ref")
+    index = require_object(identity.get("index"), f"{context}.identity.index")
+    require_exact_keys(index, {"path", "present", "sha256", "size"}, f"{context}.identity.index")
+    require_string(index.get("path"), f"{context}.identity.index.path")
+    present = require_bool(index.get("present"), f"{context}.identity.index.present")
+    if present:
+        require_sha256(index.get("sha256"), f"{context}.identity.index.sha256")
+        require_int(index.get("size"), f"{context}.identity.index.size", minimum=0)
+    elif index.get("sha256") is not None or index.get("size") is not None:
+        raise ReviewError(f"{context}.identity.index has content metadata while absent")
+    guard = require_object(
+        identity.get("workspace_guard"), f"{context}.identity.workspace_guard"
+    )
+    guard_identity = require_object(
+        guard.get("identity"), f"{context}.identity.workspace_guard.identity"
+    )
+    if guard.get("guard_hash") != canonical_hash(guard_identity):
+        raise ReviewError(f"{context} workspace guard failed its embedded hash check")
+    if (
+        guard_identity.get("head_sha") != head_sha
+        or guard_identity.get("branch")
+        != (attachment.removeprefix("refs/heads/") if attachment else "DETACHED")
+    ):
+        raise ReviewError(f"{context} workspace guard has contradictory HEAD identity")
+    return authority
 
 
 def verify_checkpoint_integrity(
@@ -1167,6 +3501,21 @@ def verify_checkpoint_integrity(
     checkpoint_branch = require_string(metadata.get("branch"), "checkpoint.branch")
     if guard_identity.get("head_sha") != checkpoint_head or guard_identity.get("branch") != checkpoint_branch:
         raise ReviewError("Checkpoint top-level Git identity does not match its workspace guard")
+    if metadata.get("schema_version") is not None:
+        if metadata.get("schema_version") != CHECKPOINT_SCHEMA_V4:
+            raise ReviewError("Checkpoint has an unsupported schema_version")
+        authority = validate_repository_authority(
+            metadata.get("repository_authority"), "checkpoint.repository_authority"
+        )
+        authority_identity = authority["identity"]
+        refs = validate_ref_map(metadata.get("refs"), "checkpoint.refs")
+        if (
+            authority_identity["head_sha"] != checkpoint_head
+            or authority_identity["head_attachment"] != metadata.get("head_attachment")
+            or authority_identity["refs"] != refs
+            or authority_identity["workspace_guard"] != guard
+        ):
+            raise ReviewError("Checkpoint repository authority contradicts top-level metadata")
     if require_current_ref and (
         resolve_commit(repo, "HEAD") != checkpoint_head or current_branch(repo) != checkpoint_branch
     ):
@@ -1180,6 +3529,13 @@ def verify_checkpoint_integrity(
     recorded_index_path = Path(require_string(metadata.get("index_path"), "checkpoint.index_path")).resolve(strict=False)
     if current_index_path != recorded_index_path:
         raise ReviewError("Checkpoint index path does not match the repository's current Git index")
+    if metadata.get("schema_version") == CHECKPOINT_SCHEMA_V4:
+        recorded_index = metadata["repository_authority"]["identity"]["index"]
+        if (
+            recorded_index["path"] != str(recorded_index_path)
+            or recorded_index["present"] != metadata.get("index_present")
+        ):
+            raise ReviewError("Checkpoint index authority contradicts top-level metadata")
 
     raw_path_states = require_object(metadata.get("path_states"), "checkpoint.path_states")
     path_states: dict[str, Any] = {}
@@ -1192,26 +3548,26 @@ def verify_checkpoint_integrity(
         kind = require_string(info.get("type"), f"checkpoint.path_states.{path}.type")
         if kind == "file":
             source = checkpoint_dir / "content" / path
-            if not source.is_file() or source.is_symlink():
+            if not artifact_is_file(source) or artifact_is_symlink(source):
                 raise ReviewError(f"Checkpoint file snapshot is missing or invalid: {path}")
             if info.get("sha256") and sha256_file(source) != info["sha256"]:
                 raise ReviewError(f"Checkpoint file snapshot failed its hash check: {path}")
-            if info.get("size") is not None and source.stat().st_size != info["size"]:
+            if info.get("size") is not None and len(artifact_read_bytes(source)) != info["size"]:
                 raise ReviewError(f"Checkpoint file snapshot failed its size check: {path}")
         elif kind == "symlink":
             source = (checkpoint_dir / "content" / path).with_suffix(
                 (checkpoint_dir / "content" / path).suffix + ".symlink"
             )
-            if not source.is_file():
+            if not artifact_is_file(source):
                 raise ReviewError(f"Checkpoint symlink snapshot is missing: {path}")
-            if source.read_text(encoding="utf-8") != info.get("target"):
+            if artifact_read_text(source, encoding="utf-8") != info.get("target"):
                 raise ReviewError(f"Checkpoint symlink snapshot failed its target check: {path}")
         elif kind not in {"missing", "directory"}:
             raise ReviewError(f"Checkpoint contains unsupported file type for {path}: {kind}")
 
     if require_bool(metadata.get("index_present"), "checkpoint.index_present"):
         backup = checkpoint_dir / "index.backup"
-        if not backup.is_file():
+        if not artifact_is_file(backup):
             raise ReviewError("Checkpoint Git index backup is missing")
         if sha256_file(backup) != metadata.get("index_sha256"):
             raise ReviewError("Checkpoint Git index backup failed its hash check")
@@ -1221,7 +3577,7 @@ def verify_checkpoint_integrity(
     return metadata, path_states, current_index_path
 
 
-def restore_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
+def restore_legacy_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
     metadata, path_states, current_index_path = verify_checkpoint_integrity(
         repo,
         checkpoint_dir,
@@ -1239,12 +3595,12 @@ def restore_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
 
     index_path = current_index_path
     if metadata["index_present"]:
-        index_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_mkdir(index_path.parent, parents=True, exist_ok=True)
         temp_index = index_path.with_name(f".{index_path.name}.material-review.tmp")
-        shutil.copyfile(checkpoint_dir / "index.backup", temp_index)
-        os.replace(temp_index, index_path)
+        temp_index.write_bytes(artifact_read_bytes(checkpoint_dir / "index.backup"))
+        artifact_rename(temp_index, index_path)
     else:
-        index_path.unlink(missing_ok=True)
+        artifact_remove(index_path, missing_ok=True)
 
     for path, info in path_states.items():
         restore_one_snapshot_path(repo, checkpoint_dir, normalize_repo_path(path), info)
@@ -1264,6 +3620,503 @@ def restore_checkpoint(repo: Path, checkpoint_dir: Path) -> dict[str, Any]:
     return current
 
 
+def verify_v4_checkpoint(
+    repo: Path, checkpoint_dir: Path
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    metadata, path_states, index_path = verify_checkpoint_integrity(
+        repo, checkpoint_dir, require_current_ref=False
+    )
+    if metadata.get("schema_version") != CHECKPOINT_SCHEMA_V4:
+        raise ReviewError("Checkpoint predates v4 repository-authority recovery")
+    return metadata, path_states, index_path
+
+
+def write_recovery_evidence(
+    checkpoint_dir: Path,
+    filename: str,
+    *,
+    checkpoint_authority: dict[str, Any],
+    expected_post: dict[str, Any],
+    observed_current: dict[str, Any],
+    reason: str,
+) -> None:
+    atomic_write_json(
+        checkpoint_dir / filename,
+        {
+            "schema_version": "material-review/recovery-evidence/v1",
+            "reason": reason,
+            "checkpoint_authority": checkpoint_authority,
+            "expected_post": expected_post,
+            "observed_current": observed_current,
+            "checked_at": utc_now(),
+        },
+    )
+
+
+def observe_repository_after_recovery_failure(
+    repo: Path, primary_error: BaseException
+) -> dict[str, Any]:
+    """Best-effort authority evidence that cannot mask a recovery failure."""
+    try:
+        return repository_authority(repo)
+    except BaseException as observation_error:
+        observed: dict[str, Any] = {
+            "observation_incomplete": True,
+            "observation_error": (
+                f"{type(observation_error).__name__}: {observation_error}"
+            ),
+            "primary_error": f"{type(primary_error).__name__}: {primary_error}",
+        }
+        probes = (
+            ("head_attachment", current_head_attachment),
+            ("refs", repository_refs),
+            ("index", index_identity),
+        )
+        for field, probe in probes:
+            try:
+                observed[field] = probe(repo)
+            except BaseException as probe_error:
+                observed[f"{field}_error"] = (
+                    f"{type(probe_error).__name__}: {probe_error}"
+                )
+        try:
+            paths = sorted(workspace_status_paths(repo))
+            observed["workspace_paths"] = paths
+            observed["workspace_path_states"] = {
+                path: path_state(repo_path(repo, path)) for path in paths
+            }
+        except BaseException as probe_error:
+            observed["workspace_error"] = (
+                f"{type(probe_error).__name__}: {probe_error}"
+            )
+        return observed
+
+
+def manual_recovery_observation(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    allowed_paths: Iterable[str],
+    context: str,
+) -> dict[str, Any]:
+    """Bind manual recovery only to repository state the plan authorized."""
+    metadata = require_object(
+        load_json(checkpoint_dir / "checkpoint.json"), "checkpoint"
+    )
+    if metadata.get("schema_version") != CHECKPOINT_SCHEMA_V4:
+        return repository_authority(repo)
+
+    metadata, _, _ = verify_v4_checkpoint(repo, checkpoint_dir)
+    checkpoint_authority = validate_repository_authority(
+        metadata.get("repository_authority"), "checkpoint.repository_authority"
+    )
+    current = repository_authority(repo)
+    checkpoint_guard = checkpoint_authority["identity"]["workspace_guard"]
+    current_guard = current["identity"]["workspace_guard"]
+    normalized_allowed = {
+        normalize_repo_path(path) for path in allowed_paths
+    }
+    changed_paths = diff_guard_paths(checkpoint_guard, current_guard)
+    outside_paths = changed_paths - normalized_allowed
+    control_mutations = repository_control_mutations(checkpoint_authority, current)
+    if not outside_paths and not control_mutations:
+        return current
+
+    details: list[str] = []
+    if control_mutations:
+        details.append("repository controls: " + ", ".join(control_mutations))
+    if outside_paths:
+        details.append("paths: " + ", ".join(sorted(outside_paths)))
+    expected_boundary = {
+        "schema_version": "material-review/manual-recovery-boundary/v1",
+        "allowed_paths": sorted(normalized_allowed),
+        "checkpoint_repository_controls": {
+            key: checkpoint_authority["identity"][key]
+            for key in ("head_attachment", "head_sha", "refs", "index")
+        },
+    }
+    reason = (
+        f"{context} includes changes not authorized for automatic recovery ("
+        + "; ".join(details)
+        + ")"
+    )
+    write_recovery_evidence(
+        checkpoint_dir,
+        "recovery-conflict.json",
+        checkpoint_authority=checkpoint_authority,
+        expected_post=expected_boundary,
+        observed_current=current,
+        reason=reason,
+    )
+    raise ReviewError(reason + "; repository state was preserved for human reconciliation")
+
+
+def plan_v4_worktree_recovery(
+    repo: Path,
+    path_states: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Plan only worktree writes that can prove an expected-missing boundary."""
+
+    snapshot_paths = set(path_states)
+    unexpected_paths = sorted(workspace_status_paths(repo) - snapshot_paths)
+    conflicts = [f"{path}: not present in the checkpoint" for path in unexpected_paths]
+    actions: list[tuple[str, dict[str, Any]]] = []
+    for path, desired in sorted(path_states.items()):
+        target = repo_path(repo, path)
+        current = path_state(target)
+        if current == desired:
+            continue
+        if current["type"] != "missing":
+            conflicts.append(
+                f"{path}: {current['type']} to {desired['type']} requires existing-path replacement or deletion"
+            )
+            continue
+        if desired["type"] == "missing":
+            continue
+        if desired["type"] not in {"file", "directory", "symlink"}:
+            conflicts.append(
+                f"{path}: unsupported checkpoint type {desired['type']}"
+            )
+            continue
+        if path_state(target.parent)["type"] != "directory":
+            conflicts.append(f"{path}: parent directory is not present and unchanged")
+            continue
+        actions.append((path, desired))
+    if conflicts:
+        raise ReviewError(
+            "Automatic worktree recovery cannot conditionally apply: "
+            + "; ".join(conflicts)
+        )
+    return actions
+
+
+def probe_v4_symbolic_ref_transactions(
+    repo: Path,
+    observed_identity: dict[str, Any],
+) -> None:
+    """Verify symbolic-ref transaction support without committing a ref change."""
+
+    observed_attachment = observed_identity["head_attachment"]
+    if observed_attachment is None:
+        command = (
+            "symref-update HEAD refs/heads/material-review-capability-probe "
+            f"oid {observed_identity['head_sha']}"
+        )
+    else:
+        command = (
+            f"symref-update HEAD {observed_attachment} ref {observed_attachment}"
+        )
+    transaction = f"start\noption no-deref\n{command}\nprepare\nabort\n".encode(
+        "utf-8"
+    )
+    try:
+        run_process(
+            ["git", "update-ref", "--stdin"],
+            cwd=repo,
+            input_bytes=transaction,
+        )
+    except BaseException as exc:
+        raise ReviewError(
+            "Git lacks the required conditional symbolic-ref transaction support"
+        ) from exc
+
+
+def v4_ref_transaction(
+    saved_identity: dict[str, Any],
+    observed_identity: dict[str, Any],
+) -> bytes:
+    """Build ordered expected-old transactions for HEAD and the complete ref delta."""
+
+    saved_attachment = saved_identity["head_attachment"]
+    observed_attachment = observed_identity["head_attachment"]
+    saved_refs = saved_identity["refs"]
+    observed_refs = observed_identity["refs"]
+
+    def ref_command(ref: str) -> str | None:
+        saved = saved_refs.get(ref)
+        observed = observed_refs.get(ref)
+        if saved == observed:
+            return None
+        if saved is None:
+            return f"delete {ref} {observed}"
+        if observed is None:
+            return f"create {ref} {saved}"
+        return f"update {ref} {saved} {observed}"
+
+    deferred_ref = (
+        observed_attachment
+        if observed_attachment is not None and observed_attachment != saved_attachment
+        else None
+    )
+    prepared_ref_commands = [
+        command
+        for ref in sorted(set(saved_refs) | set(observed_refs))
+        if ref != deferred_ref
+        if (command := ref_command(ref)) is not None
+    ]
+
+    transaction: list[str] = []
+
+    def append_transaction(commands: list[str]) -> None:
+        if commands:
+            transaction.extend(["start", *commands, "prepare", "commit"])
+
+    append_transaction(prepared_ref_commands)
+    if saved_attachment is None:
+        head_commands = [
+            "option no-deref",
+            (
+                f"update HEAD {saved_identity['head_sha']} "
+                f"{observed_identity['head_sha']}"
+            ),
+        ]
+    else:
+        expected = (
+            f"ref {observed_attachment}"
+            if observed_attachment is not None
+            else f"oid {observed_identity['head_sha']}"
+        )
+        head_commands = [
+            "option no-deref",
+            f"symref-update HEAD {saved_attachment} {expected}",
+        ]
+    append_transaction(head_commands)
+
+    if deferred_ref is not None:
+        deferred_command = ref_command(deferred_ref)
+        if deferred_command is not None:
+            append_transaction([deferred_command])
+
+    return ("\n".join(transaction) + "\n").encode("utf-8")
+
+
+def acquire_v4_index_lock(
+    repo: Path,
+    index_path: Path,
+    expected_index: dict[str, Any],
+) -> tuple[int, Path]:
+    """Acquire Git's cooperative index lock and recheck semantic identity."""
+
+    lock_path = index_path.with_name(f"{index_path.name}.lock")
+    try:
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise ReviewError(f"Git index lock is already held: {lock_path}") from exc
+    try:
+        if index_identity(repo) != expected_index:
+            raise ReviewError("Git index changed before its conditional recovery boundary")
+    except BaseException:
+        os.close(descriptor)
+        lock_path.unlink(missing_ok=True)
+        raise
+    return descriptor, lock_path
+
+
+def restore_v4_index(
+    checkpoint_dir: Path,
+    index_path: Path,
+    saved_index: dict[str, Any],
+    observed_index: dict[str, Any],
+    descriptor: int,
+    lock_path: Path,
+) -> None:
+    """Restore the index while holding the canonical cooperative Git lock."""
+
+    if saved_index == observed_index:
+        os.close(descriptor)
+        lock_path.unlink(missing_ok=True)
+        return
+    if saved_index["present"]:
+        with os.fdopen(descriptor, "wb") as locked_index:
+            locked_index.write(
+                artifact_read_bytes(checkpoint_dir / "index.backup")
+            )
+            locked_index.flush()
+            os.fsync(locked_index.fileno())
+        os.replace(lock_path, index_path)
+        return
+
+    os.close(descriptor)
+    if index_path.exists():
+        index_path.unlink()
+    lock_path.unlink(missing_ok=True)
+
+
+def execute_v4_worktree_recovery(
+    repo: Path,
+    checkpoint_dir: Path,
+    actions: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """Create checkpoint paths only when the destination is still absent."""
+
+    for path, desired in actions:
+        target = repo_path(repo, path)
+        kind = desired["type"]
+        if kind == "directory":
+            target.mkdir(mode=desired.get("mode", 0o755), exist_ok=False)
+            os.chmod(target, desired.get("mode", 0o755))
+        elif kind == "symlink":
+            os.symlink(desired["target"], target)
+        elif kind == "file":
+            temporary = target.with_name(
+                f".{target.name}.material-review-v4-{uuid.uuid4().hex}.tmp"
+            )
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                desired.get("mode", 0o644),
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as destination:
+                    destination.write(
+                        artifact_read_bytes(checkpoint_dir / "content" / path)
+                    )
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                os.chmod(temporary, desired.get("mode", 0o644))
+                os.link(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        else:
+            raise ReviewError(f"Unsupported conditional worktree action for {path}: {kind}")
+
+
+def restore_checkpoint_v4(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    expected_post: dict[str, Any],
+) -> dict[str, Any]:
+    metadata, path_states, index_path = verify_v4_checkpoint(repo, checkpoint_dir)
+    checkpoint_authority = validate_repository_authority(
+        metadata["repository_authority"], "checkpoint.repository_authority"
+    )
+    expected_post = validate_repository_authority(
+        expected_post, "recovery expected_post"
+    )
+    observed_current = repository_authority(repo)
+    if observed_current != expected_post:
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-conflict.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=observed_current,
+            reason="Repository authority changed after the recovery observation",
+        )
+        raise ReviewError(
+            "Repository authority changed after the recovery observation; no recovery write was attempted"
+        )
+
+    saved_identity = checkpoint_authority["identity"]
+    observed_identity = expected_post["identity"]
+    try:
+        worktree_actions = plan_v4_worktree_recovery(repo, path_states)
+        probe_v4_symbolic_ref_transactions(repo, observed_identity)
+        index_descriptor, index_lock_path = acquire_v4_index_lock(
+            repo,
+            index_path,
+            observed_identity["index"],
+        )
+    except BaseException as exc:
+        observed_after_conflict = observe_repository_after_recovery_failure(repo, exc)
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-conflict.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=observed_after_conflict,
+            reason=f"Conditional recovery preflight failed: {exc}",
+        )
+        raise ReviewError(
+            f"Conditional recovery preflight failed; repository authority was preserved for human reconciliation: {exc}"
+        ) from exc
+
+    index_lock_owned = True
+    try:
+        run_process(
+            ["git", "update-ref", "--stdin"],
+            cwd=repo,
+            input_bytes=v4_ref_transaction(saved_identity, observed_identity),
+        )
+        restore_v4_index(
+            checkpoint_dir,
+            index_path,
+            saved_identity["index"],
+            observed_identity["index"],
+            index_descriptor,
+            index_lock_path,
+        )
+        index_lock_owned = False
+        execute_v4_worktree_recovery(repo, checkpoint_dir, worktree_actions)
+    except BaseException as exc:
+        if index_lock_owned:
+            try:
+                os.close(index_descriptor)
+            except OSError:
+                pass
+            index_lock_path.unlink(missing_ok=True)
+        current_after_failure = observe_repository_after_recovery_failure(repo, exc)
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-failure.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=current_after_failure,
+            reason=f"Recovery write failed: {exc}",
+        )
+        raise ReviewError(
+            f"Checkpoint recovery was incomplete; human recovery is required: {exc}"
+        ) from exc
+
+    restored = repository_authority(repo)
+    if restored != checkpoint_authority:
+        write_recovery_evidence(
+            checkpoint_dir,
+            "recovery-mismatch.json",
+            checkpoint_authority=checkpoint_authority,
+            expected_post=expected_post,
+            observed_current=restored,
+            reason="Recovery did not reproduce the checkpoint authority",
+        )
+        raise ReviewError(
+            "Checkpoint recovery did not reproduce the saved repository authority; human recovery is required"
+        )
+    return restored
+
+
+def restore_checkpoint(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    expected_post: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = require_object(
+        load_json(checkpoint_dir / "checkpoint.json"), "checkpoint"
+    )
+    if metadata.get("schema_version") == CHECKPOINT_SCHEMA_V4:
+        if expected_post is None:
+            raise ReviewError(
+                "v4 checkpoint recovery requires a caller-bound expected post-command observation"
+            )
+        return restore_checkpoint_v4(
+            repo, checkpoint_dir, expected_post=expected_post
+        )
+    if metadata.get("schema_version") is not None:
+        raise ReviewError("Checkpoint has an unsupported schema_version")
+    return restore_legacy_checkpoint(repo, checkpoint_dir)
+
+
+def restore_refresh_checkpoint(
+    repo: Path,
+    checkpoint_dir: Path,
+    *,
+    expected_post: dict[str, Any],
+) -> dict[str, Any]:
+    """Compatibility alias for the single v4 recovery engine."""
+    return restore_checkpoint(repo, checkpoint_dir, expected_post=expected_post)
+
+
 def verify_frozen_source_bytes(
     data: bytes | None, state_info: dict[str, Any], *, label: str
 ) -> bytes | None:
@@ -1279,34 +4132,76 @@ def verify_frozen_source_bytes(
     return data
 
 
-def read_snapshot_source(run_dir: Path, scope_identity: dict[str, Any], side: str, path: str, repo: Path) -> bytes | None:
-    for entry in scope_identity["files"]:
-        candidates = [entry["path"]]
-        if entry.get("old_path"):
-            candidates.append(entry["old_path"])
-        if path not in candidates:
-            continue
-        state_key = f"{side}_state"
-        state_info = entry[state_key]
-        snapshot_path = state_info.get("snapshot_path")
-        if snapshot_path:
-            data = (run_dir / snapshot_path).read_bytes()
-            return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        if side == "baseline":
-            source_path = entry.get("old_path") if entry.get("old_path") and path == entry.get("old_path") else path
-            data = git_object_bytes(repo, scope_identity["baseline_sha"], source_path)
-            return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        if scope_identity["comparison_kind"] == "commit":
-            data = git_object_bytes(repo, scope_identity["comparison_sha"], path)
-            return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
-        target = repo_path(repo, path)
+def snapshot_entry_for_side(
+    scope_identity: dict[str, Any], side: str, path: str
+) -> dict[str, Any] | None:
+    entries = scope_identity["files"]
+    if side == "comparison":
+        matches = [entry for entry in entries if entry["path"] == path]
+    elif side == "baseline":
+        renamed_or_copied = [
+            entry for entry in entries if entry.get("old_path") == path
+        ]
+        matches = renamed_or_copied or [
+            entry
+            for entry in entries
+            if entry.get("old_path") is None and entry["path"] == path
+        ]
+    else:
+        raise ReviewError(f"Unsupported frozen source side: {side}")
+    if not matches:
+        return None
+    first_state = matches[0][f"{side}_state"]
+    if any(entry[f"{side}_state"] != first_state for entry in matches[1:]):
+        raise ReviewError(f"Frozen scope has contradictory {side} identity for path: {path}")
+    return matches[0]
+
+
+def read_snapshot_source(
+    run_dir: Path,
+    scope_identity: dict[str, Any],
+    side: str,
+    path: str,
+    repo: Path,
+) -> tuple[str, bytes | None]:
+    entry = snapshot_entry_for_side(scope_identity, side, path)
+    if entry is None:
+        return SNAPSHOT_NO_MATCH, None
+    state_info = entry[f"{side}_state"]
+    if state_info.get("type") == "missing":
+        verify_frozen_source_bytes(None, state_info, label=f"{side}:{path}")
+        return SNAPSHOT_MATCHED_MISSING, None
+    snapshot_path = state_info.get("snapshot_path")
+    if snapshot_path:
+        data = artifact_read_bytes(run_dir / snapshot_path)
+    elif side == "baseline":
+        source_path = entry.get("old_path") or entry["path"]
+        data = git_object_bytes(repo, scope_identity["baseline_sha"], source_path)
+    elif scope_identity["comparison_kind"] == "commit":
+        data = git_object_bytes(repo, scope_identity["comparison_sha"], entry["path"])
+    else:
+        target = repo_path(repo, entry["path"])
         if target.is_file() and not target.is_symlink():
             data = target.read_bytes()
         elif target.is_symlink():
             data = os.fsencode(os.readlink(target))
         else:
             data = None
-        return verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
+    verified = verify_frozen_source_bytes(data, state_info, label=f"{side}:{path}")
+    assert verified is not None
+    return SNAPSHOT_MATCHED_BYTES, verified
+
+
+def read_coverage_context_source(
+    run_dir: Path, coverage_context: dict[str, Any], path: str
+) -> bytes | None:
+    for source in coverage_context["sources"]:
+        if source["path"] != path:
+            continue
+        data = artifact_read_bytes(run_dir / source["snapshot_path"])
+        if len(data) != source["size"] or sha256_bytes(data) != source["sha256"]:
+            raise ReviewError(f"Frozen coverage context failed integrity validation: {path}")
+        return data
     return None
 
 def verify_evidence_quote(
@@ -1319,15 +4214,26 @@ def verify_evidence_quote(
     line_end: int,
     side: str,
     quote: str,
+    coverage_context: dict[str, Any] | None = None,
 ) -> None:
     if side == "diff":
-        patch = (run_dir / "scope.patch").read_text(encoding="utf-8", errors="replace")
+        patch = artifact_read_text(
+            run_dir / "scope.patch", encoding="utf-8", errors="replace"
+        )
         stripped = "\n".join(line[1:] if line[:1] in {"+", "-", " "} else line for line in patch.splitlines())
         if quote not in patch and quote not in stripped:
             raise ReviewError(f"Evidence quote for {file}:{line_start} was not found in the frozen diff")
         return
 
-    data = read_snapshot_source(run_dir, scope_identity, side, file, repo)
+    snapshot_outcome, data = read_snapshot_source(
+        run_dir, scope_identity, side, file, repo
+    )
+    if (
+        snapshot_outcome == SNAPSHOT_NO_MATCH
+        and side == "comparison"
+        and coverage_context is not None
+    ):
+        data = read_coverage_context_source(run_dir, coverage_context, file)
     if data is None:
         raise ReviewError(f"Evidence source is missing for {side}:{file}")
     text = data.decode("utf-8", errors="replace")
@@ -1347,7 +4253,7 @@ def render_path_diff(checkpoint_dir: Path, repo: Path, path: str, before: dict[s
     if before == after:
         return ""
     if before.get("type") == "file":
-        before_bytes = (checkpoint_dir / "content" / path).read_bytes()
+        before_bytes = artifact_read_bytes(checkpoint_dir / "content" / path)
     elif before.get("type") == "symlink":
         before_bytes = before.get("target", "").encode("utf-8")
     else:
@@ -1384,6 +4290,32 @@ def render_checkpoint_diff(checkpoint_dir: Path, repo: Path, changed_paths: Iter
     return "\n".join(chunks)
 
 
+def validate_coverage_plan(
+    raw: object,
+    *,
+    run_dir: Path,
+    state: dict[str, Any],
+    allowed_context_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    scope = load_verified_scope(run_dir, state)
+    changed_paths = {entry["path"] for entry in scope["identity"]["files"]}
+    if allowed_context_paths is None:
+        allowed_context_paths = collect_coverage_context_paths(
+            require_object(raw, "coverage plan")
+        )
+    try:
+        plan = validate_coverage_contract(
+            raw,
+            changed_paths=changed_paths,
+            allowed_context_paths=allowed_context_paths,
+        )
+    except ObligationContractError as exc:
+        raise ReviewError(str(exc)) from exc
+    if plan["scope_hash"] != state.get("scope_hash"):
+        raise ReviewError("coverage plan scope hash does not match the active frozen scope")
+    return plan
+
+
 def validate_candidate_set(
     raw: Any,
     *,
@@ -1391,22 +4323,108 @@ def validate_candidate_set(
     repo: Path,
     run_dir: Path,
     state: dict[str, Any],
+    plan: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     obj = require_object(raw, f"candidate set {source_file}")
-    expected_top = {
-        "schema_version",
-        "scope_hash",
-        "reviewer_id",
-        "independence_group",
-        "review_mode",
-        "findings",
-        "coverage",
-    }
-    require_exact_keys(obj, expected_top, f"candidate set {source_file}")
-    if obj["schema_version"] != CANDIDATE_SCHEMA:
+    material_review = not is_simplification_state(state)
+    expected_schema = CANDIDATE_SCHEMA_REVIEW if material_review else CANDIDATE_SCHEMA
+    schema_version = require_string(obj.get("schema_version"), f"{source_file}.schema_version")
+    if schema_version != expected_schema:
         raise ReviewError(f"{source_file}: unsupported schema_version")
+    assignment: dict[str, Any] | None = None
+    obligation: dict[str, Any] | None = None
+    assignment_id: str | None = None
+    assignment_kind: str | None = None
+    coverage_plan_hash: str | None = None
+    coverage_context_hash: str | None = None
+    lens_id: str | None = None
+    check_results: list[dict[str, Any]] = []
+    if material_review:
+        if plan is None:
+            raise ReviewError("Material-review candidate validation requires a coverage plan")
+        assignment_id = require_string(
+            obj.get("assignment_id"), f"{source_file}.assignment_id"
+        )
+        assignment = next(
+            (
+                item
+                for item in plan["assignments"]
+                if item["assignment_id"] == assignment_id
+            ),
+            None,
+        )
+        if assignment is None:
+            raise ReviewError(f"{source_file}: assignment_id is absent from the coverage plan")
+        if assignment["assignment_kind"] == "obligation":
+            obligation = next(
+                (
+                    item
+                    for item in plan["review_obligations"]
+                    if item["obligation_id"] == assignment["obligation_id"]
+                ),
+                None,
+            )
+        try:
+            obj = validate_assignment_result(
+                obj,
+                assignment=assignment,
+                obligation=obligation,
+            )
+        except ObligationContractError as exc:
+            raise ReviewError(f"{source_file}: {exc}") from exc
+        assignment_kind = obj["assignment_kind"]
+        coverage_plan_hash = obj["coverage_plan_hash"]
+        coverage_context_hash = obj["coverage_context_hash"]
+        lens_id = obj["lens_id"]
+        check_results = obj["check_results"]
+    else:
+        expected_top = {
+            "schema_version",
+            "scope_hash",
+            "reviewer_id",
+            "independence_group",
+            "review_mode",
+            "findings",
+            "coverage",
+        }
+        require_exact_keys(obj, expected_top, f"candidate set {source_file}")
+    prevalidated_coverage_files: list[str] | None = None
+    prevalidated_finding_paths: dict[int, dict[str, Any]] = {}
+    if material_review:
+        coverage_for_path_preflight = require_object(
+            obj["coverage"], f"{source_file}.coverage"
+        )
+        if "files_reviewed" in coverage_for_path_preflight:
+            prevalidated_coverage_files = require_canonical_repo_path_array(
+                coverage_for_path_preflight["files_reviewed"],
+                f"{source_file}.coverage.files_reviewed",
+            )
+        findings_for_path_preflight = require_array(
+            obj["findings"], f"{source_file}.findings"
+        )
+        for index, raw_finding in enumerate(findings_for_path_preflight):
+            context = f"{source_file}.findings[{index}]"
+            finding = require_object(raw_finding, context)
+            path_fields: dict[str, Any] = {}
+            if "file" in finding:
+                path_fields["file"] = require_canonical_repo_path(
+                    finding["file"], f"{context}.file"
+                )
+            if "related_changed_files" in finding:
+                path_fields["related_changed_files"] = require_canonical_repo_path_array(
+                    finding["related_changed_files"],
+                    f"{context}.related_changed_files",
+                )
+            prevalidated_finding_paths[index] = path_fields
     if obj["scope_hash"] != state["scope_hash"]:
         raise ReviewError(f"{source_file}: scope_hash does not match the active frozen scope")
+    if material_review:
+        if coverage_plan_hash != state["hashes"].get("coverage_plan_hash"):
+            raise ReviewError(f"{source_file}: coverage_plan_hash does not match the recorded coverage plan")
+        if coverage_context_hash != state["hashes"].get("coverage_context_hash"):
+            raise ReviewError(
+                f"{source_file}: coverage_context_hash does not match the recorded coverage context"
+            )
     reviewer_id = require_string(obj["reviewer_id"], f"{source_file}.reviewer_id")
     independence_group = require_string(obj["independence_group"], f"{source_file}.independence_group")
     review_mode = require_string(obj["review_mode"], f"{source_file}.review_mode")
@@ -1415,13 +4433,44 @@ def validate_candidate_set(
 
     coverage = require_object(obj["coverage"], f"{source_file}.coverage")
     require_exact_keys(coverage, {"files_reviewed", "areas", "limitations"}, f"{source_file}.coverage")
-    coverage_files = [normalize_repo_path(item) for item in require_string_array(coverage["files_reviewed"], f"{source_file}.coverage.files_reviewed")]
+    if material_review:
+        assert prevalidated_coverage_files is not None
+        coverage_files = prevalidated_coverage_files
+    else:
+        coverage_files = [
+            normalize_repo_path(item)
+            for item in require_string_array(
+                coverage["files_reviewed"], f"{source_file}.coverage.files_reviewed"
+            )
+        ]
+    if material_review and not coverage_files:
+        raise ReviewError(
+            f"{source_file}.coverage.files_reviewed must name at least one frozen-scope path"
+        )
     coverage_areas = require_string_array(coverage["areas"], f"{source_file}.coverage.areas")
-    coverage_limitations = require_string_array(coverage["limitations"], f"{source_file}.coverage.limitations")
+    coverage_limitations = (
+        copy.deepcopy(coverage["limitations"])
+        if material_review
+        else require_string_array(
+            coverage["limitations"], f"{source_file}.coverage.limitations"
+        )
+    )
 
     scope_info = load_verified_scope(run_dir, state)
     scope_identity = scope_info["identity"]
     scope_paths = all_scope_paths(scope_identity)
+    coverage_context: dict[str, Any] | None = None
+    if material_review:
+        assert plan is not None
+        coverage_context = load_verified_coverage_context(
+            run_dir,
+            state,
+            expected_paths=collect_coverage_context_paths(plan),
+        )
+        if coverage_context["coverage_context_hash"] != coverage_context_hash:
+            raise ReviewError(
+                f"{source_file}: coverage_context_hash does not match verified frozen context"
+            )
     findings_raw = require_array(obj["findings"], f"{source_file}.findings")
     valid_findings: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
@@ -1478,7 +4527,10 @@ def validate_candidate_set(
             if confidence == "low" and severity != "blocker":
                 raise ReviewError(f"{context}: low-confidence non-blocker candidates must be suppressed")
 
-            file = normalize_repo_path(require_string(finding["file"], f"{context}.file"))
+            if material_review:
+                file = prevalidated_finding_paths[index]["file"]
+            else:
+                file = normalize_repo_path(require_string(finding["file"], f"{context}.file"))
             line_start = require_int(finding["line_start"], f"{context}.line_start", minimum=1)
             line_end = require_int(finding["line_end"], f"{context}.line_end", minimum=1)
             if line_end < line_start:
@@ -1490,7 +4542,15 @@ def validate_candidate_set(
             scope_relation = require_string(finding["scope_relation"], f"{context}.scope_relation")
             if scope_relation not in SCOPE_RELATIONS:
                 raise ReviewError(f"{context}.scope_relation must be one of {sorted(SCOPE_RELATIONS)}")
-            related = [normalize_repo_path(item) for item in require_string_array(finding["related_changed_files"], f"{context}.related_changed_files")]
+            if material_review:
+                related = prevalidated_finding_paths[index]["related_changed_files"]
+            else:
+                related = [
+                    normalize_repo_path(item)
+                    for item in require_string_array(
+                        finding["related_changed_files"], f"{context}.related_changed_files"
+                    )
+                ]
             direct_dependency = require_bool(finding["direct_dependency"], f"{context}.direct_dependency")
             if scope_relation == "primary" and file not in scope_paths:
                 raise ReviewError(f"{context}: primary file is not part of the frozen changed-file set")
@@ -1518,6 +4578,7 @@ def validate_candidate_set(
                 line_end=line_end,
                 side=evidence_side,
                 quote=evidence_quote,
+                coverage_context=coverage_context,
             )
 
             normalized = {
@@ -1557,6 +4618,10 @@ def validate_candidate_set(
         reasons = "; ".join(item["reason"] for item in rejections[:3])
         suffix = f": {reasons}" if reasons else ""
         raise ReviewError(f"{source_file}: every submitted finding failed validation{suffix}")
+    if material_review and rejections:
+        raise ReviewError(
+            f"{source_file}: candidate set includes invalid finding: {rejections[0]['reason']}"
+        )
 
     normalized_set = {
         "reviewer_id": reviewer_id,
@@ -1569,7 +4634,84 @@ def validate_candidate_set(
         },
         "findings": valid_findings,
     }
+    if material_review:
+        normalized_set.update(
+            {
+                "coverage_plan_hash": coverage_plan_hash,
+                "coverage_context_hash": coverage_context_hash,
+                "assignment_id": assignment_id,
+                "assignment_kind": assignment_kind,
+                "lens_id": lens_id,
+                "check_results": check_results,
+                "required_review_paths": assignment["required_review_paths"],
+                "required_checks": assignment["required_checks"],
+                "scenario_checks": scenario_checks_for_assignment(plan, assignment),
+                "check_contracts": check_contracts_for_assignment(plan, assignment),
+            }
+        )
+        if obligation is not None:
+            normalized_set["obligation_id"] = obligation["obligation_id"]
+        if assignment_kind == "specialist":
+            assert assignment is not None
+            for field in ("unit_ids", "primary_paths", "context_paths"):
+                normalized_set[field] = assignment[field]
     return normalized_set, rejections
+
+
+def required_paths_by_assignment(plan: dict[str, Any]) -> dict[str, set[str]]:
+    return {
+        assignment["assignment_id"]: set(assignment["required_review_paths"])
+        for assignment in plan["assignments"]
+    }
+
+
+def validate_candidate_wave_against_coverage(
+    plan: dict[str, Any], candidate_sets: list[dict[str, Any]]
+) -> None:
+    assignments = {item["assignment_id"]: item for item in plan["assignments"]}
+    required_paths = required_paths_by_assignment(plan)
+    seen: set[str] = set()
+    for candidate_set in candidate_sets:
+        assignment_id = candidate_set["assignment_id"]
+        if assignment_id in seen:
+            raise ReviewError(f"Duplicate candidate assignment_id: {assignment_id}")
+        seen.add(assignment_id)
+        assignment = assignments.get(assignment_id)
+        if assignment is None:
+            raise ReviewError(f"Assignment is absent from coverage plan: {assignment_id}")
+        blocked_checks = [
+            item["check_code"]
+            for item in candidate_set["check_results"]
+            if item["outcome"] == "blocked"
+        ]
+        if blocked_checks:
+            raise ReviewError(
+                f"Assignment {assignment_id} has blocked required checks: "
+                + ", ".join(sorted(blocked_checks))
+            )
+        missing_paths = required_paths[assignment_id] - set(
+            candidate_set["coverage"]["files_reviewed"]
+        )
+        if missing_paths:
+            raise ReviewError(
+                f"{assignment_id} did not review required assignment paths: "
+                + ", ".join(sorted(missing_paths))
+            )
+    missing = sorted(required_assignment_ids(plan) - seen)
+    if missing:
+        raise ReviewError("Missing required assignment coverage: " + ", ".join(missing))
+
+
+def validate_material_review_coverage_paths(
+    candidate_sets: list[dict[str, Any]], *, allowed_paths: set[str]
+) -> None:
+    for candidate_set in candidate_sets:
+        out_of_scope = set(candidate_set["coverage"]["files_reviewed"]) - allowed_paths
+        if out_of_scope:
+            raise ReviewError(
+                "coverage.files_reviewed contains a path outside the frozen scope: "
+                + ", ".join(sorted(out_of_scope))
+            )
 
 
 def validate_validation_object(value: Any, context: str) -> dict[str, Any]:
@@ -1819,6 +4961,8 @@ def validate_repair_audit(
 
 def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     obj = require_object(raw, "adjudication")
+    expected_schema = expected_adjudication_schema(state)
+    material_review = expected_schema == ADJUDICATION_SCHEMA_REVIEW
     top_keys = {
         "schema_version",
         "scope_hash",
@@ -1830,8 +4974,11 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "limitations",
     }
     require_exact_keys(obj, top_keys, "adjudication")
-    if obj["schema_version"] != ADJUDICATION_SCHEMA:
-        raise ReviewError("Unsupported adjudication schema_version")
+    if obj["schema_version"] != expected_schema:
+        raise ReviewError(
+            "Adjudication schema_version does not match the active workflow profile: "
+            f"expected {expected_schema}, got {obj['schema_version']}"
+        )
     if obj["scope_hash"] != state["scope_hash"]:
         raise ReviewError("Adjudication scope_hash does not match the run")
     if obj["candidate_bundle_hash"] != candidates_bundle["candidate_bundle_hash"]:
@@ -1869,6 +5016,8 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "repair_direction",
         "repair_audit",
     }
+    if material_review:
+        group_keys.add("source_lenses")
 
     for index, raw_group in enumerate(groups_raw):
         context = f"adjudication.groups[{index}]"
@@ -1896,7 +5045,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         confidence = require_string(group["confidence"], f"{context}.confidence")
         if nature not in NATURES or category not in CATEGORIES or severity not in SEVERITIES or confidence not in CONFIDENCES:
             raise ReviewError(f"{context} contains an invalid nature/category/severity/confidence")
-        file = normalize_repo_path(require_string(group["file"], f"{context}.file"))
+        file = require_canonical_repo_path(group["file"], f"{context}.file")
         line_start = require_int(group["line_start"], f"{context}.line_start", minimum=1)
         line_end = require_int(group["line_end"], f"{context}.line_end", minimum=1)
         if line_end < line_start:
@@ -1928,6 +5077,16 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             raise ReviewError(f"{context}.source_reviewers must exactly match candidate sources")
         if source_independence != expected_groups:
             raise ReviewError(f"{context}.source_independence_groups must exactly match candidate sources")
+        source_lenses: list[str] | None = None
+        if material_review:
+            expected_lenses = sorted({candidate["lens_id"] for candidate in source_candidates})
+            source_lenses = require_string_array(
+                group["source_lenses"], f"{context}.source_lenses"
+            )
+            if source_lenses != expected_lenses:
+                raise ReviewError(
+                    f"{context}.source_lenses must be the exact sorted candidate-source lenses"
+                )
 
         validation = validate_validation_object(group["validation"], f"{context}.validation")
         if validation["mode"] == "independent" and validation["independence_group"] in expected_groups:
@@ -2025,6 +5184,8 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             "repair_direction_hash": canonical_hash(repair_direction) if repair_direction is not None else None,
             "repair_audit": repair_audit,
         }
+        if source_lenses is not None:
+            normalized_group["source_lenses"] = source_lenses
         groups.append(normalized_group)
 
     missing = sorted(set(candidates_by_id) - seen_candidate_ids)
@@ -2048,7 +5209,7 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
             raise ReviewError("High/fix-now findings require SHOULD FIX BEFORE MERGE or NOT READY")
 
     return {
-        "schema_version": ADJUDICATION_SCHEMA,
+        "schema_version": expected_schema,
         "scope_hash": state["scope_hash"],
         "candidate_bundle_hash": candidates_bundle["candidate_bundle_hash"],
         "adjudicator_id": require_string(obj["adjudicator_id"], "adjudication.adjudicator_id"),
@@ -2057,6 +5218,40 @@ def validate_adjudication(raw: Any, *, candidates_bundle: dict[str, Any], state:
         "summary": require_string(obj["summary"], "adjudication.summary"),
         "limitations": require_string_array(obj["limitations"], "adjudication.limitations"),
     }
+
+
+def require_compatible_existing_adjudicated_authority(
+    run_dir: Path,
+    state: dict[str, Any],
+    *,
+    candidates_bundle: dict[str, Any],
+) -> None:
+    try:
+        persisted_adjudication = require_object(
+            load_json(run_dir / "adjudication.normalized.json"),
+            "normalized adjudication",
+        )
+        validation_input = copy.deepcopy(persisted_adjudication)
+        for index, raw_group in enumerate(
+            require_array(validation_input.get("groups"), "normalized adjudication.groups")
+        ):
+            group = require_object(raw_group, f"normalized adjudication.groups[{index}]")
+            group.pop("repair_direction_hash", None)
+        normalized_adjudication = validate_adjudication(
+            validation_input,
+            candidates_bundle=candidates_bundle,
+            state=state,
+        )
+        if persisted_adjudication != normalized_adjudication:
+            raise ReviewError(
+                "Existing normalized adjudication does not match its canonical profile"
+            )
+        load_verified_ledger(run_dir, state)
+    except ReviewError as exc:
+        raise ReviewError(
+            "Existing normalized adjudication or ledger authority is incompatible with "
+            "the active workflow profile; start a new run. Cause: " + str(exc)
+        ) from exc
 
 
 def validate_test_spec(value: Any, context: str, repo: Path) -> dict[str, Any]:
@@ -2347,25 +5542,47 @@ def validate_fix_plan(
 
 
 def render_candidates_markdown(bundle: dict[str, Any], rejections: list[dict[str, Any]]) -> str:
+    material_review_bundle = (
+        bundle.get("schema_version") == NORMALIZED_CANDIDATES_SCHEMA_REVIEW
+    )
+    candidate_count_label = (
+        "candidate_records" if material_review_bundle else "Candidates accepted"
+    )
     lines = [
         "# Candidate ingestion",
         "",
         f"- Scope hash: `{bundle['scope_hash']}`",
         f"- Candidate bundle hash: `{bundle['candidate_bundle_hash']}`",
         f"- Reviewer sets accepted: `{len(bundle['reviewer_sets'])}`",
-        f"- Candidates accepted: `{len(bundle['candidates'])}`",
-        f"- Candidate/input rejections: `{len(rejections)}`",
-        "",
-        "## Accepted candidates",
-        "",
+        f"- {candidate_count_label}: `{len(bundle['candidates'])}`",
     ]
+    if material_review_bundle:
+        completed_atomic_checks = sum(
+            len(reviewer_set["check_results"])
+            for reviewer_set in bundle["reviewer_sets"]
+        )
+        lines.append(f"- completed_atomic_checks: `{completed_atomic_checks}`")
+    lines.extend(
+        [
+            f"- Candidate/input rejections: `{len(rejections)}`",
+            "",
+            "## Candidate records" if material_review_bundle else "## Accepted candidates",
+            "",
+        ]
+    )
     if not bundle["candidates"]:
         lines.append("- none")
     for candidate in bundle["candidates"]:
+        lens = (
+            f"lens `{candidate['lens_id']}`, "
+            if "lens_id" in candidate
+            else ""
+        )
         lines.append(
             f"- **{candidate['candidate_id']}** [{candidate['severity']}/{candidate['confidence']}] "
             f"`{candidate['file']}:{candidate['line_start']}` — {candidate['title']} "
-            f"(reviewer `{candidate['reviewer_id']}`, group `{candidate['independence_group']}`)"
+            f"({lens}reviewer `{candidate['reviewer_id']}`, "
+            f"group `{candidate['independence_group']}`)"
         )
     lines.extend(["", "## Rejected reviewer output", ""])
     if not rejections:
@@ -2432,6 +5649,8 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
                 f"- Candidate sources: {', '.join(finding['candidate_ids'])}",
             ]
         )
+        if "source_lenses" in finding:
+            lines.append(f"- Source lenses: {', '.join(finding['source_lenses'])}")
         direction = finding["repair_direction"]
         lines.extend(
             [
@@ -2478,8 +5697,14 @@ def render_ledger_markdown(ledger: dict[str, Any]) -> str:
     if not ledger["discarded"]:
         lines.append("- none")
     for group in ledger["discarded"]:
+        lens_suffix = (
+            f"; lenses {', '.join(group['source_lenses'])}"
+            if "source_lenses" in group
+            else ""
+        )
         lines.append(
-            f"- **{group['group_id']}** ({', '.join(group['candidate_ids'])}) — {group['canonical_title']} "
+            f"- **{group['group_id']}** ({', '.join(group['candidate_ids'])}{lens_suffix}) — "
+            f"{group['canonical_title']} "
             f"-> `{group['discard_reason_code']}`: {group['decision_reason']}"
         )
     if ledger["limitations"]:
@@ -2581,8 +5806,6 @@ def command_init(args: argparse.Namespace) -> int:
     run_id = normalize_run_id(args.run_id) if args.run_id else make_run_id()
     runs_root = artifact_root / "runs"
     run_dir = runs_root / run_id
-    if run_dir.exists():
-        raise ReviewError(f"Run already exists: {run_dir}")
 
     # Freeze the Git scope before creating any artifact directory. This avoids
     # contaminating the scope when a caller supplies an invalid in-worktree
@@ -2594,59 +5817,74 @@ def command_init(args: argparse.Namespace) -> int:
         head_ref=args.head,
         include_untracked=not args.exclude_untracked,
     )
-    runs_root.mkdir(parents=True, exist_ok=True)
+    workflow_profile = getattr(args, "_workflow_profile", WORKFLOW_PROFILE_REVIEW)
+    if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
+        raise ReviewError(f"Unsupported internal workflow profile: {workflow_profile}")
     temp_run_dir = runs_root / f".{run_id}.initializing-{uuid.uuid4().hex[:8]}"
-    temp_run_dir.mkdir(parents=False, exist_ok=False)
-    try:
-        limitations = snapshot_sources(
-            repo,
-            temp_run_dir,
-            scope,
-            max_file_bytes=args.max_snapshot_file_bytes,
-            max_total_bytes=args.max_snapshot_total_bytes,
-        )
-        write_source_bundle_files(temp_run_dir, scope, limitations)
-        identity = scope["identity"]
-        state = {
-            "schema_version": STATE_SCHEMA,
-            "tool_version": TOOL_VERSION,
-            "run_id": run_id,
-            "repo_root": str(repo),
-            "artifact_root": str(artifact_root),
-            "phase": PHASE_CONTEXT,
-            "created_at": utc_now(),
-            "updated_at": utc_now(),
-            "scope_hash": scope["scope_hash"],
-            "scope_params": {
-                "actual_scope": identity["actual_scope"],
-                "base_reference": identity["base_reference"],
-                "head_reference": identity.get("head_reference"),
-                "include_untracked": identity["include_untracked"],
-            },
-            "mutation_allowed": identity["mutable"],
-            "hashes": {},
-            "gates": {},
-            "approved_findings": [],
-            "finding_status": {},
-            "global_test_results": {},
-            "active_finding": None,
-            "repair_round": 0,
-            "repair_targets": [],
-            "expected_workspace_guard_hash": None,
-            "pre_fix_checkpoint": None,
-            "events": [
-                {
-                    "at": utc_now(),
-                    "event": "scope_frozen",
-                    "scope_hash": scope["scope_hash"],
-                }
-            ],
-        }
-        save_state(temp_run_dir, state)
-        os.replace(temp_run_dir, run_dir)
-    except Exception:
-        shutil.rmtree(temp_run_dir, ignore_errors=True)
-        raise
+    runs_authority = RunArtifactAuthority(runs_root, create=True)
+    with active_artifact_authority(runs_authority):
+        if artifact_exists(run_dir):
+            raise ReviewError(f"Run already exists: {run_dir}")
+        artifact_mkdir(temp_run_dir, parents=False, exist_ok=False)
+        try:
+            limitations = snapshot_sources(
+                repo,
+                temp_run_dir,
+                scope,
+                max_file_bytes=args.max_snapshot_file_bytes,
+                max_total_bytes=args.max_snapshot_total_bytes,
+            )
+            write_source_bundle_files(temp_run_dir, scope, limitations)
+            identity = scope["identity"]
+            state = {
+                "schema_version": (
+                    MATERIAL_REVIEW_STATE_SCHEMA
+                    if workflow_profile == WORKFLOW_PROFILE_REVIEW
+                    else SIMPLIFICATION_STATE_SCHEMA
+                ),
+                "tool_version": TOOL_VERSION,
+                "run_id": run_id,
+                "repo_root": str(repo),
+                "artifact_root": str(artifact_root),
+                "phase": PHASE_CONTEXT,
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
+                "scope_hash": scope["scope_hash"],
+                "scope_params": {
+                    "actual_scope": identity["actual_scope"],
+                    "base_reference": identity["base_reference"],
+                    "head_reference": identity.get("head_reference"),
+                    "include_untracked": identity["include_untracked"],
+                },
+                "mutation_allowed": identity["mutable"],
+                "hashes": {},
+                "gates": {},
+                "approved_findings": [],
+                "finding_status": {},
+                "global_test_results": {},
+                "active_finding": None,
+                "repair_round": 0,
+                "repair_targets": [],
+                "expected_workspace_guard_hash": None,
+                "pre_fix_checkpoint": None,
+                "events": [
+                    {
+                        "at": utc_now(),
+                        "event": "scope_frozen",
+                        "scope_hash": scope["scope_hash"],
+                    }
+                ],
+            }
+            if workflow_profile == WORKFLOW_PROFILE_REVIEW:
+                state["workflow_profile"] = WORKFLOW_PROFILE_REVIEW
+                state["coverage_required"] = True
+            else:
+                state["profile"] = SIMPLIFICATION_PROFILE
+            save_state(temp_run_dir, state)
+            artifact_rename(temp_run_dir, run_dir)
+        except BaseException:
+            artifact_remove(temp_run_dir, recursive=True, missing_ok=True)
+            raise
 
     print(f"[OK] Frozen review scope: {scope['scope_hash']}")
     print(f"Run ID: {run_id}")
@@ -2656,6 +5894,87 @@ def command_init(args: argparse.Namespace) -> int:
     print(f"Mutation aligned: {str(identity['mutable']).lower()}")
     return 0
 
+
+def command_record_coverage(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_CONTEXT:
+        raise ReviewError(f"Cannot record coverage in phase {state['phase']}")
+    require_current_material_review_contract(state)
+    check_scope_fresh(repo, run_dir, state)
+    scope_identity = load_verified_scope(run_dir, state)["identity"]
+    allowed_context_paths = discover_comparison_context_paths(repo, scope_identity)
+    plan = validate_coverage_plan(
+        load_json(Path(args.input).expanduser().resolve()),
+        run_dir=run_dir,
+        state=state,
+        allowed_context_paths=allowed_context_paths,
+    )
+    context_paths = collect_coverage_context_paths(plan)
+    existing_hash = state["hashes"].get("coverage_plan_hash")
+    if existing_hash:
+        existing = load_recorded_coverage_plan(run_dir, state)
+        live_context, _ = _build_coverage_context(
+            repo,
+            run_dir,
+            scope_identity,
+            context_paths,
+            max_files=32,
+            max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=25 * 1024 * 1024,
+        )
+        live_context_hash = canonical_hash(live_context)
+        plan_hash = canonical_hash(
+            {"plan": plan, "coverage_context_hash": live_context_hash}
+        )
+        if (
+            existing == plan
+            and existing_hash == plan_hash
+            and state["hashes"].get("coverage_context_hash") == live_context_hash
+        ):
+            print(f"[OK] Coverage plan already recorded: {existing_hash}")
+            return 0
+        raise ReviewError("Coverage plan is already recorded; start a new run to change it")
+    if (
+        "coverage_context_hash" in state["hashes"]
+        or artifact_exists(run_dir / "coverage-plan.json")
+        or artifact_exists(run_dir / "coverage-context.json")
+        or artifact_exists(run_dir / "coverage-context")
+    ):
+        raise ReviewError(
+            "Coverage artifacts exist without valid state bindings; start a new run"
+        )
+    context = snapshot_coverage_context(
+        repo,
+        run_dir,
+        scope_identity,
+        context_paths,
+    )
+    context_hash = context["coverage_context_hash"]
+    plan_hash = canonical_hash({"plan": plan, "coverage_context_hash": context_hash})
+    artifact = {
+        **plan,
+        "coverage_context_hash": context_hash,
+        "coverage_plan_hash": plan_hash,
+    }
+    atomic_write_json(run_dir / "coverage-context.json", context)
+    atomic_write_json(run_dir / "coverage-plan.json", artifact)
+    state["hashes"]["coverage_context_hash"] = context_hash
+    state["hashes"]["coverage_plan_hash"] = plan_hash
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "coverage_plan_recorded",
+            "coverage_plan_hash": plan_hash,
+            "coverage_context_hash": context_hash,
+        }
+    )
+    save_state(run_dir, state)
+    print(f"[OK] Coverage plan recorded: {plan_hash}")
+    return 0
+
+
 def command_check_scope(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -2663,6 +5982,168 @@ def command_check_scope(args: argparse.Namespace) -> int:
     current = check_scope_fresh(repo, run_dir, state)
     print(f"[OK] Scope is fresh: {current['scope_hash']}")
     print(f"Run ID: {state['run_id']}")
+    return 0
+
+
+def command_ingest_material_review_candidates(
+    args: argparse.Namespace, *, repo: Path, run_dir: Path, state: dict[str, Any]
+) -> int:
+    sources = [Path(raw).expanduser().resolve() for raw in args.input]
+    input_hashes: list[str] = []
+    reviewer_sets: list[dict[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    try:
+        plan = load_recorded_coverage_plan(run_dir, state)
+        for source in sources:
+            try:
+                input_hashes.append(sha256_file(source))
+                normalized_set, finding_rejections = validate_candidate_set(
+                    load_json(source),
+                    source_file=source,
+                    repo=repo,
+                    run_dir=run_dir,
+                    state=state,
+                    plan=plan,
+                )
+                reviewer_sets.append(normalized_set)
+                rejections.extend(finding_rejections)
+            except ReviewError as exc:
+                rejections.append({"source_file": str(source), "reason": str(exc)})
+        if rejections:
+            raise ReviewError("Candidate ingestion failed: " + "; ".join(item["reason"] for item in rejections))
+        validate_candidate_wave_against_coverage(plan, reviewer_sets)
+        allowed_paths = all_scope_paths(load_verified_scope(run_dir, state)["identity"])
+        allowed_paths.update(collect_coverage_context_paths(plan))
+        validate_material_review_coverage_paths(
+            reviewer_sets, allowed_paths=allowed_paths
+        )
+        for reviewer_set in reviewer_sets:
+            for finding in reviewer_set["findings"]:
+                finding["lens_id"] = reviewer_set["lens_id"]
+                finding["assignment_id"] = reviewer_set["assignment_id"]
+    except ReviewError as exc:
+        if not rejections or rejections[-1].get("reason") != str(exc):
+            rejections.append({"reason": str(exc)})
+        failure = {
+            "schema_version": "material-review/candidate-ingestion-failure/v1",
+            "scope_hash": state["scope_hash"],
+            "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+            "coverage_context_hash": state["hashes"]["coverage_context_hash"],
+            "input_hashes": input_hashes,
+            "rejections": rejections,
+        }
+        atomic_write_json(run_dir / "candidate-ingestion-failure.json", failure)
+        raise
+
+    reviewer_sets.sort(
+        key=lambda item: (
+            item["assignment_id"],
+            item["lens_id"],
+            item["reviewer_id"],
+            item["independence_group"],
+            item["review_mode"],
+        )
+    )
+    candidates: list[dict[str, Any]] = []
+    for reviewer_set in reviewer_sets:
+        candidates.extend(reviewer_set.pop("findings"))
+    for candidate in candidates:
+        candidate.pop("source_file", None)
+    candidates.sort(
+        key=lambda item: (
+            item["reviewer_id"],
+            item["independence_group"],
+            item["local_id"],
+            item["file"],
+            item["line_start"],
+            item["lens_id"],
+            item["assignment_id"],
+        )
+    )
+    for index, candidate in enumerate(candidates, start=1):
+        candidate["candidate_id"] = f"C{index:03d}"
+
+    local_to_candidate = {
+        (candidate["assignment_id"], candidate["local_id"]): candidate["candidate_id"]
+        for candidate in candidates
+    }
+    for reviewer_set in reviewer_sets:
+        for check_result in reviewer_set["check_results"]:
+            local_ids = check_result.pop("finding_local_ids")
+            check_result["candidate_ids"] = sorted(
+                {
+                    local_to_candidate[(reviewer_set["assignment_id"], local_id)]
+                    for local_id in local_ids
+                }
+            )
+
+    payload = {
+        "schema_version": NORMALIZED_CANDIDATES_SCHEMA_REVIEW,
+        "scope_hash": state["scope_hash"],
+        "coverage_plan_hash": state["hashes"]["coverage_plan_hash"],
+        "coverage_context_hash": state["hashes"]["coverage_context_hash"],
+        "reviewer_sets": reviewer_sets,
+        "candidates": candidates,
+        "rejections": rejections,
+    }
+    bundle_hash = canonical_hash(payload)
+
+    with candidate_authority_lock(run_dir):
+        state = load_state(run_dir)
+        require_current_material_review_contract(state)
+        if state["phase"] not in {PHASE_CONTEXT, PHASE_CANDIDATES}:
+            raise ReviewError(f"Cannot ingest candidates in phase {state['phase']}")
+        check_scope_fresh(repo, run_dir, state)
+        load_recorded_coverage_plan(run_dir, state)
+        if (
+            state["scope_hash"] != payload["scope_hash"]
+            or state["hashes"]["coverage_plan_hash"]
+            != payload["coverage_plan_hash"]
+            or state["hashes"]["coverage_context_hash"]
+            != payload["coverage_context_hash"]
+        ):
+            raise ReviewError(
+                "Candidate authority inputs changed before publication; rerun validation"
+            )
+
+        if state["phase"] == PHASE_CANDIDATES:
+            existing = require_compatible_existing_candidate_authority(run_dir, state)
+            if existing["candidate_bundle_hash"] == bundle_hash:
+                print(f"[OK] Candidate bundle already captured: {bundle_hash}")
+                print("Exact validated retry made no changes")
+                return 0
+            raise ReviewError(
+                "Candidate bundle is already captured and differs from this complete valid "
+                "wave; start a new run"
+            )
+
+        payload["candidate_bundle_hash"] = bundle_hash
+        payload["generated_at"] = utc_now()
+        atomic_write_json(run_dir / "candidates.json", payload)
+        atomic_write_json(run_dir / "candidate-rejections.json", rejections)
+        atomic_write_text(
+            run_dir / "candidates.md",
+            render_candidates_markdown(payload, rejections),
+        )
+
+        state["phase"] = PHASE_CANDIDATES
+        state["hashes"]["candidate_bundle_hash"] = bundle_hash
+        state["events"].append(
+            {
+                "at": utc_now(),
+                "event": "candidates_ingested",
+                "reviewer_sets": len(reviewer_sets),
+                "candidates": len(candidates),
+                "rejections": len(rejections),
+                "candidate_bundle_hash": bundle_hash,
+            }
+        )
+        save_state(run_dir, state)
+    print(f"[OK] Candidate bundle written: {bundle_hash}")
+    print(f"Accepted reviewer sets: {len(reviewer_sets)}")
+    print(f"Accepted candidates: {len(candidates)}")
+    print(f"Rejected candidate/input records: {len(rejections)}")
+    print(f"Artifact: {run_dir / 'candidates.md'}")
     return 0
 
 
@@ -2675,6 +6156,14 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
     check_scope_fresh(repo, run_dir, state)
     if not args.input:
         raise ReviewError("At least one --input candidate JSON file is required")
+    if not is_simplification_state(state):
+        require_current_material_review_contract(state)
+        if "coverage_plan_hash" not in state["hashes"]:
+            raise ReviewError("Coverage plan is not recorded")
+        return command_ingest_material_review_candidates(args, repo=repo, run_dir=run_dir, state=state)
+
+    if state["phase"] == PHASE_CANDIDATES:
+        require_compatible_existing_candidate_authority(run_dir, state)
 
     reviewer_sets: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
@@ -2708,7 +6197,7 @@ def command_ingest_candidates(args: argparse.Namespace) -> int:
         candidate["candidate_id"] = f"C{index:03d}"
 
     payload = {
-        "schema_version": NORMALIZED_CANDIDATES_SCHEMA,
+        "schema_version": NORMALIZED_CANDIDATES_SCHEMA_SIMPLIFICATION,
         "scope_hash": state["scope_hash"],
         "reviewer_sets": reviewer_sets,
         "candidates": candidates,
@@ -2749,14 +6238,17 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
     if state["phase"] not in {PHASE_CANDIDATES, PHASE_ADJUDICATED}:
         raise ReviewError(f"Cannot compile ledger in phase {state['phase']}")
     check_scope_fresh(repo, run_dir, state)
-    candidates_bundle = require_object(load_json(run_dir / "candidates.json"), "normalized candidates")
-    candidate_hash = verify_embedded_hash(
-        candidates_bundle,
-        hash_field="candidate_bundle_hash",
-        context="normalized candidates",
-        unhashed_fields={"generated_at"},
-    )
-    require_state_hash(state, "candidate_bundle_hash", candidate_hash, "normalized candidates")
+    material_review = not is_simplification_state(state)
+    if material_review:
+        require_current_material_review_contract(state)
+        load_recorded_coverage_plan(run_dir, state)
+    candidates_bundle = load_verified_candidates_bundle(run_dir, state)
+    if state["phase"] == PHASE_ADJUDICATED:
+        require_compatible_existing_adjudicated_authority(
+            run_dir,
+            state,
+            candidates_bundle=candidates_bundle,
+        )
     adjudication = validate_adjudication(load_json(Path(args.input).expanduser().resolve()), candidates_bundle=candidates_bundle, state=state)
     candidates_by_id = {item["candidate_id"]: item for item in candidates_bundle["candidates"]}
     kept_groups = [group for group in adjudication["groups"] if group["disposition"] == "keep"]
@@ -2772,41 +6264,42 @@ def command_compile_ledger(args: argparse.Namespace) -> int:
     findings: list[dict[str, Any]] = []
     for index, group in enumerate(kept_groups, start=1):
         representative = representative_candidate(group, candidates_by_id)
-        findings.append(
-            {
-                "finding_id": f"F{index:03d}",
-                "group_id": group["group_id"],
-                "candidate_ids": group["candidate_ids"],
-                "title": group["canonical_title"],
-                "nature": group["nature"],
-                "category": group["category"],
-                "severity": group["severity"],
-                "confidence": group["confidence"],
-                "file": group["file"],
-                "line_start": group["line_start"],
-                "line_end": group["line_end"],
-                "evidence_side": group["evidence_side"],
-                "evidence_quote": group["evidence_quote"],
-                "observable_consequence": representative["observable_consequence"],
-                "trigger_conditions": representative["trigger_conditions"],
-                "repair_direction": group["repair_direction"],
-                "repair_direction_hash": group["repair_direction_hash"],
-                "repair_audit": group["repair_audit"],
-                "estimated_fix_risk": representative["estimated_fix_risk"],
-                "requires_user_decision": bool(group["repair_direction"]["open_user_decisions"]),
-                "assumptions": representative["assumptions"],
-                "source_reviewers": group["source_reviewers"],
-                "source_independence_groups": group["source_independence_groups"],
-                "validation": group["validation"],
-                "materiality": group["materiality"],
-                "decision_reason": group["decision_reason"],
-                "recommended_action": group["recommended_action"],
-                "required_pre_fix_verification": group["required_pre_fix_verification"],
-            }
-        )
+        finding = {
+            "finding_id": f"F{index:03d}",
+            "group_id": group["group_id"],
+            "candidate_ids": group["candidate_ids"],
+            "title": group["canonical_title"],
+            "nature": group["nature"],
+            "category": group["category"],
+            "severity": group["severity"],
+            "confidence": group["confidence"],
+            "file": group["file"],
+            "line_start": group["line_start"],
+            "line_end": group["line_end"],
+            "evidence_side": group["evidence_side"],
+            "evidence_quote": group["evidence_quote"],
+            "observable_consequence": representative["observable_consequence"],
+            "trigger_conditions": representative["trigger_conditions"],
+            "repair_direction": group["repair_direction"],
+            "repair_direction_hash": group["repair_direction_hash"],
+            "repair_audit": group["repair_audit"],
+            "estimated_fix_risk": representative["estimated_fix_risk"],
+            "requires_user_decision": bool(group["repair_direction"]["open_user_decisions"]),
+            "assumptions": representative["assumptions"],
+            "source_reviewers": group["source_reviewers"],
+            "source_independence_groups": group["source_independence_groups"],
+            "validation": group["validation"],
+            "materiality": group["materiality"],
+            "decision_reason": group["decision_reason"],
+            "recommended_action": group["recommended_action"],
+            "required_pre_fix_verification": group["required_pre_fix_verification"],
+        }
+        if material_review:
+            finding["source_lenses"] = group["source_lenses"]
+        findings.append(finding)
     discarded = [group for group in adjudication["groups"] if group["disposition"] == "discard"]
     payload = {
-        "schema_version": LEDGER_SCHEMA,
+        "schema_version": expected_ledger_schema(state),
         "scope_hash": state["scope_hash"],
         "candidate_bundle_hash": candidates_bundle["candidate_bundle_hash"],
         "adjudicator_id": adjudication["adjudicator_id"],
@@ -2851,14 +6344,7 @@ def command_gate_findings(args: argparse.Namespace) -> int:
     if state["phase"] != PHASE_ADJUDICATED:
         raise ReviewError(f"Gate A requires phase {PHASE_ADJUDICATED}; current phase is {state['phase']}")
     check_scope_fresh(repo, run_dir, state)
-    ledger = require_object(load_json(run_dir / "ledger.json"), "ledger")
-    ledger_hash = verify_embedded_hash(
-        ledger,
-        hash_field="ledger_hash",
-        context="ledger",
-        unhashed_fields={"generated_at"},
-    )
-    require_state_hash(state, "ledger_hash", ledger_hash, "ledger")
+    ledger = load_verified_ledger(run_dir, state)
     finding_ids = {item["finding_id"] for item in ledger["findings"]}
     approved = parse_csv_ids(args.approve)
     rejected = parse_csv_ids(args.reject)
@@ -2968,10 +6454,13 @@ def command_validate_plan(args: argparse.Namespace) -> int:
     atomic_write_json(run_dir / "fix-plan.json", plan)
     atomic_write_text(run_dir / "fix-plan.md", render_plan_markdown(plan))
     old_gate = run_dir / "gates" / "plan.json"
-    if old_gate.exists():
+    if artifact_exists(old_gate):
         archive = run_dir / "gates" / "archive"
-        archive.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(old_gate), str(archive / f"plan-{utc_now().replace(':', '')}.json"))
+        artifact_mkdir(archive, parents=True, exist_ok=True)
+        artifact_rename(
+            old_gate,
+            archive / f"plan-{utc_now().replace(':', '')}.json",
+        )
     state["phase"] = PHASE_PLAN_VALIDATED
     state["hashes"]["plan_hash"] = plan_hash
     state["gates"].pop("plan", None)
@@ -3265,34 +6754,25 @@ def execute_test_command(
 
         finished_at = utc_now()
         log_path = run_dir / log_relative
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=f".{log_path.name}.", dir=str(log_path.parent))
-        try:
-            with os.fdopen(fd, "wb") as log_handle:
-                header = (
-                    f"Command: {command}\n"
-                    f"Working directory: {working_directory}\n"
-                    f"Timeout seconds: {timeout_seconds}\n"
-                    f"Started: {started_at}\n"
-                    f"Finished: {finished_at}\n"
-                    f"Timed out: {str(timed_out).lower()}\n"
-                    f"Exit code: {exit_code if exit_code is not None else 'timeout'}\n"
-                    "\n--- STDOUT ---\n"
-                ).encode("utf-8")
-                log_handle.write(header)
-                stdout_handle.seek(0)
-                shutil.copyfileobj(stdout_handle, log_handle, length=1024 * 1024)
-                log_handle.write(b"\n--- STDERR ---\n")
-                stderr_handle.seek(0)
-                shutil.copyfileobj(stderr_handle, log_handle, length=1024 * 1024)
-                log_handle.flush()
-                os.fsync(log_handle.fileno())
-            os.replace(temp_name, log_path)
-        finally:
-            try:
-                os.unlink(temp_name)
-            except FileNotFoundError:
-                pass
+        header = (
+            f"Command: {command}\n"
+            f"Working directory: {working_directory}\n"
+            f"Timeout seconds: {timeout_seconds}\n"
+            f"Started: {started_at}\n"
+            f"Finished: {finished_at}\n"
+            f"Timed out: {str(timed_out).lower()}\n"
+            f"Exit code: {exit_code if exit_code is not None else 'timeout'}\n"
+            "\n--- STDOUT ---\n"
+        ).encode("utf-8")
+        stdout_handle.seek(0)
+        stderr_handle.seek(0)
+        log_bytes = (
+            header
+            + stdout_handle.read()
+            + b"\n--- STDERR ---\n"
+            + stderr_handle.read()
+        )
+        atomic_write_bytes(log_path, log_bytes)
 
     return {
         "command": command,
@@ -3337,17 +6817,14 @@ def command_run_test(args: argparse.Namespace) -> int:
         log_relative=Path("tests") / args.finding / args.test / f"run-{run_number}.log",
     )
 
-    after_test = workspace_guard(repo)
-    before_test = test_checkpoint["workspace_guard"]
+    after_authority = repository_authority(repo)
+    after_test = after_authority["identity"]["workspace_guard"]
+    before_authority = test_checkpoint["repository_authority"]
+    before_test = before_authority["identity"]["workspace_guard"]
     changed_by_test = diff_guard_paths(before_test, after_test)
-    control_mutations: list[str] = []
-    for key, label in (
-        ("head_sha", "HEAD"),
-        ("branch", "branch"),
-        ("staged_patch_sha256", "Git index"),
-    ):
-        if after_test["identity"][key] != before_test["identity"][key]:
-            control_mutations.append(label)
+    control_mutations = repository_control_mutations(
+        before_authority, after_authority
+    )
 
     result["changed_paths_by_test"] = sorted(changed_by_test)
     result["control_mutations_by_test"] = control_mutations
@@ -3355,9 +6832,13 @@ def command_run_test(args: argparse.Namespace) -> int:
     if changed_by_test or control_mutations:
         # A test is evidence, not an implicit edit step. Restore the exact
         # pre-test state even when the mutation stayed within approved paths.
-        restored = restore_checkpoint(repo, test_checkpoint_dir)
+        restored_authority = restore_checkpoint(
+            repo,
+            test_checkpoint_dir,
+            expected_post=after_authority,
+        )
         result["restored_after_mutation"] = True
-        after_test = restored
+        after_test = restored_authority["identity"]["workspace_guard"]
 
     current, changed_paths, outside_after = active_boundary_audit(repo, state)
     result["workspace_guard_hash"] = current["guard_hash"]
@@ -3514,7 +6995,16 @@ def command_rollback_finding(args: argparse.Namespace) -> int:
         raise ReviewError(f"Active finding is {active['finding_id']}, not {args.finding}")
     reason = require_string(args.reason, "--reason")
     checkpoint_dir = run_dir / active["checkpoint"]
-    restored_guard = restore_checkpoint(repo, checkpoint_dir)
+    expected_post = manual_recovery_observation(
+        repo,
+        checkpoint_dir,
+        allowed_paths=active["allowed_paths"],
+        context="The active finding attempt",
+    )
+    restored_authority = restore_checkpoint(
+        repo, checkpoint_dir, expected_post=expected_post
+    )
+    restored_guard = restored_authority["identity"]["workspace_guard"]
     status_record = state["finding_status"][args.finding]
     outcome = {
         "attempt": active["attempt"],
@@ -3557,7 +7047,21 @@ def command_abort_fixes(args: argparse.Namespace) -> int:
     pre_fix = state.get("pre_fix_checkpoint")
     if not pre_fix:
         raise ReviewError("Pre-fix checkpoint is missing")
-    restored = restore_checkpoint(repo, run_dir / pre_fix)
+    plan = load_verified_plan(run_dir, state)
+    allowed_paths = {
+        path for item in plan["items"] for path in item["allowed_paths"]
+    }
+    checkpoint_dir = run_dir / pre_fix
+    expected_post = manual_recovery_observation(
+        repo,
+        checkpoint_dir,
+        allowed_paths=allowed_paths,
+        context="The repair layer",
+    )
+    restored_authority = restore_checkpoint(
+        repo, checkpoint_dir, expected_post=expected_post
+    )
+    restored = restored_authority["identity"]["workspace_guard"]
     state["phase"] = PHASE_ABORTED
     state["active_finding"] = None
     state["expected_workspace_guard_hash"] = restored["guard_hash"]
@@ -3619,7 +7123,7 @@ def command_run_global_test(args: argparse.Namespace) -> int:
     prior_runs = state["global_test_results"].get(args.test, [])
     run_number = len(prior_runs) + 1
     checkpoint_dir = run_dir / "checkpoints" / "global-tests" / args.test / f"run-{run_number}"
-    create_checkpoint(repo, checkpoint_dir, {path for item in plan["items"] for path in item["allowed_paths"]})
+    checkpoint = create_checkpoint(repo, checkpoint_dir, {path for item in plan["items"] for path in item["allowed_paths"]})
     result = execute_test_command(
         repo=repo,
         run_dir=run_dir,
@@ -3628,23 +7132,25 @@ def command_run_global_test(args: argparse.Namespace) -> int:
         timeout_seconds=test["timeout_seconds"],
         log_relative=Path("tests") / "global" / args.test / f"run-{run_number}.log",
     )
-    after = workspace_guard(repo)
-    changed_by_test = diff_guard_paths(current, after)
-    control_mutations_by_test: list[str] = []
-    for field, label in (
-        ("head_sha", "HEAD"),
-        ("branch", "branch"),
-        ("staged_patch_sha256", "Git index"),
-    ):
-        if after["identity"][field] != current["identity"][field]:
-            control_mutations_by_test.append(label)
+    after_authority = repository_authority(repo)
+    after = after_authority["identity"]["workspace_guard"]
+    before_authority = checkpoint["repository_authority"]
+    before_guard = before_authority["identity"]["workspace_guard"]
+    changed_by_test = diff_guard_paths(before_guard, after)
+    control_mutations_by_test = repository_control_mutations(
+        before_authority, after_authority
+    )
     result["workspace_guard_hash"] = after["guard_hash"]
     result["changed_paths_by_test"] = sorted(changed_by_test)
     result["control_mutations_by_test"] = control_mutations_by_test
     if changed_by_test or control_mutations_by_test:
-        restore_checkpoint(repo, checkpoint_dir)
+        restored_authority = restore_checkpoint(
+            repo,
+            checkpoint_dir,
+            expected_post=after_authority,
+        )
         result["restored_after_mutation"] = True
-        result["workspace_guard_hash"] = current["guard_hash"]
+        result["workspace_guard_hash"] = restored_authority["identity"]["workspace_guard"]["guard_hash"]
     else:
         result["restored_after_mutation"] = False
     state["global_test_results"].setdefault(args.test, []).append(result)
@@ -3686,6 +7192,216 @@ def latest_fixed_attempt(state: dict[str, Any], finding_id: str) -> dict[str, An
     raise ReviewError(f"No retained fixed attempt exists for {finding_id}")
 
 
+def finding_test_refresh_runs(
+    state: dict[str, Any], finding_id: str, test_id: str
+) -> list[dict[str, Any]]:
+    refresh_results = state.get("finding_test_refresh_results", {})
+    if not isinstance(refresh_results, dict):
+        raise ReviewError("finding_test_refresh_results must be an object")
+    finding_results = refresh_results.get(finding_id, {})
+    if not isinstance(finding_results, dict):
+        raise ReviewError(
+            f"finding_test_refresh_results.{finding_id} must be an object"
+        )
+    runs = finding_results.get(test_id, [])
+    if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+        raise ReviewError(
+            f"finding_test_refresh_results.{finding_id}.{test_id} must be an array of objects"
+        )
+    return runs
+
+
+def command_refresh_finding_test(args: argparse.Namespace) -> int:
+    repo = resolve_repo_root(args.repo_root)
+    _, run_dir = resolve_run_dir(args, repo)
+    state = load_state(run_dir)
+    if state["phase"] != PHASE_FIXING or state.get("active_finding") is not None:
+        raise ReviewError(
+            "refresh-finding-test requires FIXING phase with no active finding"
+        )
+    if not all_findings_fixed(state):
+        raise ReviewError(
+            "refresh-finding-test is available only after every approved finding is fixed"
+        )
+    if args.finding not in state["approved_findings"]:
+        raise ReviewError(f"Finding {args.finding} was not approved at Gate A")
+    status = state["finding_status"].get(args.finding)
+    if not status or status.get("status") != "fixed":
+        raise ReviewError(f"Finding {args.finding} is not fixed")
+
+    plan = load_verified_plan(run_dir, state)
+    plan_gate = load_verified_plan_gate(run_dir, state)
+    if not plan_gate["approved"] or plan_gate["plan_hash"] != plan["plan_hash"]:
+        raise ReviewError("Gate B receipt does not authorize the current plan")
+    item = plan_item_by_id(plan, args.finding)
+    test = test_by_id(item["tests"], args.test, args.finding)
+    current, _, outside = overall_repair_boundary(repo, run_dir, state, plan)
+    if outside:
+        raise ReviewError(
+            "Aggregate repair delta contains unapproved paths: "
+            + ", ".join(sorted(outside))
+        )
+
+    fixed_attempt = latest_fixed_attempt(state, args.finding)
+    prior_runs = finding_test_refresh_runs(state, args.finding, args.test)
+    run_number = len(prior_runs) + 1
+    checkpoint_dir = (
+        run_dir
+        / "checkpoints"
+        / "final-finding-tests"
+        / args.finding
+        / args.test
+        / f"run-{run_number}"
+    )
+    aggregate_allowed_paths = {
+        path for plan_item in plan["items"] for path in plan_item["allowed_paths"]
+    }
+    checkpoint = create_checkpoint(repo, checkpoint_dir, aggregate_allowed_paths)
+    result = execute_test_command(
+        repo=repo,
+        run_dir=run_dir,
+        command=test["command"],
+        working_directory=test["working_directory"],
+        timeout_seconds=test["timeout_seconds"],
+        log_relative=(
+            Path("tests")
+            / "final-finding-tests"
+            / args.finding
+            / args.test
+            / f"run-{run_number}.log"
+        ),
+    )
+
+    after_authority = repository_authority(repo)
+    after_test = after_authority["identity"]["workspace_guard"]
+    before_authority = checkpoint["repository_authority"]
+    before_test = before_authority["identity"]["workspace_guard"]
+    changed_by_test = diff_guard_paths(before_test, after_test)
+    control_mutations = repository_control_mutations(
+        before_authority, after_authority
+    )
+
+    result["changed_paths_by_test"] = sorted(changed_by_test)
+    result["control_mutations_by_test"] = list(dict.fromkeys(control_mutations))
+    result["restored_after_mutation"] = False
+    result["recovery_attempted"] = False
+    result["recovery_completed"] = False
+    result["recovery_error"] = None
+    result["human_recovery_required"] = False
+    if changed_by_test or control_mutations:
+        result["recovery_attempted"] = True
+        try:
+            restore_checkpoint(
+                repo,
+                checkpoint_dir,
+                expected_post=after_authority,
+            )
+            result["restored_after_mutation"] = True
+            result["recovery_completed"] = True
+        except ReviewError as exc:
+            result["recovery_error"] = str(exc)
+            result["human_recovery_required"] = True
+
+    final_outside: set[str] = set()
+    if result["human_recovery_required"]:
+        final_guard = workspace_guard(repo)
+    else:
+        try:
+            final_guard, _, final_outside = overall_repair_boundary(
+                repo, run_dir, state, plan
+            )
+        except ReviewError as exc:
+            final_guard = workspace_guard(repo)
+            result["recovery_error"] = str(exc)
+            result["human_recovery_required"] = True
+    result["workspace_guard_hash"] = final_guard["guard_hash"]
+    result["allowed_paths_hash"] = path_subset_hash(repo, item["allowed_paths"])
+    result["boundary_violations"] = sorted(final_outside)
+    result["fixed_attempt_hash"] = fixed_attempt["attempt_hash"]
+
+    refresh_results = state.setdefault("finding_test_refresh_results", {})
+    refresh_results.setdefault(args.finding, {}).setdefault(args.test, []).append(result)
+    state["events"].append(
+        {
+            "at": utc_now(),
+            "event": "fixed_finding_test_refreshed",
+            "finding_id": args.finding,
+            "test_id": args.test,
+            "fixed_attempt_hash": fixed_attempt["attempt_hash"],
+            "exit_code": result["exit_code"],
+            "timed_out": result["timed_out"],
+            "changed_paths_by_test": result["changed_paths_by_test"],
+            "control_mutations_by_test": result["control_mutations_by_test"],
+        }
+    )
+    save_state(run_dir, state)
+
+    passed = (
+        result["exit_code"] == 0
+        and not result["timed_out"]
+        and not changed_by_test
+        and not control_mutations
+        and not final_outside
+        and not result["human_recovery_required"]
+    )
+    print(f"[{'OK' if passed else 'FAIL'}] Refreshed {args.finding} test {args.test}")
+    print(
+        f"Exit code: {result['exit_code'] if result['exit_code'] is not None else 'timeout'}"
+    )
+    print(f"Log: {run_dir / result['log_path']}")
+    if changed_by_test or control_mutations:
+        details = []
+        if changed_by_test:
+            details.append("paths: " + ", ".join(sorted(changed_by_test)))
+        if control_mutations:
+            details.append("controls: " + ", ".join(control_mutations))
+        if result["human_recovery_required"]:
+            raise ReviewError(
+                "Approved test mutated repository state and automatic recovery was incomplete; "
+                "human recovery is required ("
+                + "; ".join(details)
+                + f"). Cause: {result['recovery_error']}"
+            )
+        raise ReviewError(
+            "Approved test mutated the workspace and was restored ("
+            + "; ".join(details)
+            + ")"
+        )
+    if result["timed_out"] or result["exit_code"] != 0:
+        return 1
+    return 0
+
+
+def latest_finding_test_evidence(
+    state: dict[str, Any],
+    *,
+    finding_id: str,
+    test_id: str,
+    fixed_attempt: dict[str, Any],
+) -> dict[str, Any] | None:
+    refresh_runs = finding_test_refresh_runs(state, finding_id, test_id)
+    attempt_hash = require_sha256(
+        fixed_attempt.get("attempt_hash"),
+        f"finding_status.{finding_id}.fixed_attempt.attempt_hash",
+    )
+    matching_refresh_runs = [
+        run for run in refresh_runs if run.get("fixed_attempt_hash") == attempt_hash
+    ]
+    if matching_refresh_runs:
+        return matching_refresh_runs[-1]
+    tests = require_object(
+        fixed_attempt.get("tests"), f"finding_status.{finding_id}.fixed_attempt.tests"
+    )
+    attempt_runs = tests.get(test_id, [])
+    if not isinstance(attempt_runs, list) or any(
+        not isinstance(run, dict) for run in attempt_runs
+    ):
+        raise ReviewError(
+            f"finding_status.{finding_id}.fixed_attempt.tests.{test_id} must be an array of objects"
+        )
+    return attempt_runs[-1] if attempt_runs else None
+
+
 def command_prepare_verification(args: argparse.Namespace) -> int:
     repo = resolve_repo_root(args.repo_root)
     _, run_dir = resolve_run_dir(args, repo)
@@ -3711,15 +7427,27 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
         for test in item["tests"]:
             if not test["required"]:
                 continue
-            runs = attempt["tests"].get(test["id"], [])
-            if not runs:
+            latest = latest_finding_test_evidence(
+                state,
+                finding_id=item["finding_id"],
+                test_id=test["id"],
+                fixed_attempt=attempt,
+            )
+            if latest is None:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} not run")
                 continue
-            latest = runs[-1]
             if latest["timed_out"] or latest["exit_code"] != 0:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} failed")
             elif latest.get("allowed_paths_hash") != current_subset:
                 stale_finding_tests.append(f"{item['finding_id']}:{test['id']} stale for approved paths")
+            elif latest.get("changed_paths_by_test"):
+                stale_finding_tests.append(f"{item['finding_id']}:{test['id']} mutated workspace")
+            elif latest.get("control_mutations_by_test"):
+                stale_finding_tests.append(
+                    f"{item['finding_id']}:{test['id']} mutated repository controls"
+                )
+            elif latest.get("boundary_violations"):
+                stale_finding_tests.append(f"{item['finding_id']}:{test['id']} boundary violation")
     if stale_finding_tests:
         raise ReviewError(
             "Finding tests are stale or failing at final repair state; reopen/rerun as appropriate: "
@@ -3762,6 +7490,9 @@ def command_prepare_verification(args: argparse.Namespace) -> int:
         "approved_findings": state["approved_findings"],
         "changed_paths": sorted(changed_paths),
         "finding_results": finding_results,
+        "finding_test_refresh_results": state.get(
+            "finding_test_refresh_results", {}
+        ),
         "global_test_results": state["global_test_results"],
         "repair_round": state["repair_round"],
         "prepared_at": utc_now(),
@@ -4140,11 +7871,11 @@ def command_begin_repair(args: argparse.Namespace) -> int:
         raise ReviewError("No repair targets were recorded")
     next_round = state["repair_round"] + 1
     history_dir = run_dir / "verification-history" / f"round-{state['repair_round']}"
-    history_dir.mkdir(parents=True, exist_ok=True)
+    artifact_mkdir(history_dir, parents=True, exist_ok=True)
     for name in ("fix-summary.json", "fix-summary.patch", "verification.json", "verification.md", "repair-evaluation.json"):
         source = run_dir / name
-        if source.exists():
-            shutil.copy2(source, history_dir / name)
+        if artifact_exists(source):
+            atomic_write_bytes(history_dir / name, artifact_read_bytes(source))
     for finding_id in targets:
         status = state["finding_status"][finding_id]
         if status["attempts"] >= status["max_attempts"]:
@@ -4250,6 +7981,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_run_options(check_parser)
     check_parser.set_defaults(func=command_check_scope)
 
+    coverage_parser = subparsers.add_parser("record-coverage", help="Validate and record the immutable review coverage plan.")
+    add_common_run_options(coverage_parser)
+    coverage_parser.add_argument("--input", required=True, help="Coverage-plan JSON path.")
+    coverage_parser.set_defaults(func=command_record_coverage)
+
     ingest_parser = subparsers.add_parser("ingest-candidates", help="Validate and normalize candidate reviewer JSON outputs.")
     add_common_run_options(ingest_parser)
     ingest_parser.add_argument("--input", action="append", required=True, help="Candidate-set JSON path. Repeat for each reviewer.")
@@ -4317,6 +8053,15 @@ def build_parser() -> argparse.ArgumentParser:
     global_test_parser.add_argument("--test", required=True)
     global_test_parser.set_defaults(func=command_run_global_test)
 
+    refresh_test_parser = subparsers.add_parser(
+        "refresh-finding-test",
+        help="Rerun one Gate-B-approved test for a fixed finding at the final repair state.",
+    )
+    add_common_run_options(refresh_test_parser)
+    refresh_test_parser.add_argument("--finding", required=True)
+    refresh_test_parser.add_argument("--test", required=True)
+    refresh_test_parser.set_defaults(func=command_refresh_finding_test)
+
     prepare_parser = subparsers.add_parser("prepare-verification", help="Create the bounded fix-only verification bundle.")
     add_common_run_options(prepare_parser)
     prepare_parser.set_defaults(func=command_prepare_verification)
@@ -4343,9 +8088,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    workflow_profile: str = WORKFLOW_PROFILE_REVIEW,
+) -> int:
+    if workflow_profile not in {WORKFLOW_PROFILE_REVIEW, SIMPLIFICATION_PROFILE}:
+        raise ValueError(f"Unsupported internal workflow profile: {workflow_profile}")
     parser = build_parser()
     args = parser.parse_args(argv)
+    args._workflow_profile = workflow_profile
     if hasattr(args, "base") and args.base == "":
         args.base = None
     if hasattr(args, "head") and args.head == "":
@@ -4355,6 +8107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if hasattr(args, "run_id") and args.run_id == "":
         args.run_id = None
     try:
+        enforce_command_compatibility(args)
         return int(args.func(args))
     except ReviewError as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
@@ -4362,6 +8115,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("[FAIL] Interrupted", file=sys.stderr)
         return 130
+    finally:
+        _close_active_artifact_authority()
 
 
 if __name__ == "__main__":

@@ -2,8 +2,8 @@ PYTHON ?= python3
 SKILL_DIR := skills/material-code-review
 SIMPLIFY_SKILL_DIR := skills/material-code-simplification
 DIST_DIR ?= dist
-VERSION := 1.2.0
-SIMPLIFY_VERSION := 1.1.0
+VERSION := 1.7.0
+SIMPLIFY_VERSION := 1.3.0
 FULL_ZIP := $(DIST_DIR)/material-code-review-plugin-$(VERSION).zip
 STANDALONE_ZIP := $(DIST_DIR)/material-code-review-codex-skill-$(VERSION).zip
 SIMPLIFY_STANDALONE_ZIP := $(DIST_DIR)/material-code-simplification-codex-skill-$(SIMPLIFY_VERSION).zip
@@ -22,7 +22,7 @@ validate:
 	$(MAKE) clean
 	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
-	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
+	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SKILL_DIR)/scripts/package_layout_contract.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_publication.py scripts/package_simplification_skill.py
 	$(MAKE) clean
 	$(JSON_CHECK)
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
@@ -49,7 +49,7 @@ package-check:
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 
 compile:
-	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_simplification_skill.py
+	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SKILL_DIR)/scripts/package_layout_contract.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_publication.py scripts/package_simplification_skill.py
 
 json:
 	$(JSON_CHECK)

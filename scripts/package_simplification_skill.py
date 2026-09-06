@@ -13,13 +13,30 @@ import hashlib
 import os
 import re
 import stat
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+SHARED_SCRIPT_DIRECTORY = (
+    SCRIPT_DIRECTORY.parent / "skills/material-code-review/scripts"
+)
+if str(SHARED_SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SHARED_SCRIPT_DIRECTORY))
+
+from package_layout_contract import portable_archive_member_key  # noqa: E402
+from package_publication import (  # noqa: E402
+    PublicationRecoveryError,
+    cleanup_owned_paths,
+    publish_staged_outputs as publish_shared_staged_outputs,
+)
+
 SKILL_NAME = "material-code-simplification"
-VERSION = "1.1.0"
-FIXED_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
+VERSION = "1.3.0"
+FIXED_TIMESTAMP = (2026, 7, 30, 0, 0, 0)
 EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".zip", ".sha256"}
 WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
@@ -66,19 +83,6 @@ def normalize_archive_path(archive_path: str) -> str:
     return "/".join(parts)
 
 
-def windows_collision_key(archive_path: str) -> str:
-    """Derive a Windows-safe collision key that accounts for case-insensitive matching
-    and trailing dots or spaces."""
-    parts = archive_path.split("/")
-    normalized_parts = []
-    for part in parts:
-        # Strip trailing dots and spaces (Windows semantics)
-        stripped = part.rstrip(". ")
-        # Convert to lowercase for case-insensitive comparison
-        normalized_parts.append(stripped.lower())
-    return "/".join(normalized_parts)
-
-
 def write_file(archive: zipfile.ZipFile, source: Path, archive_path: str) -> None:
     info = zipfile.ZipInfo(archive_path, date_time=FIXED_TIMESTAMP)
     info.compress_type = zipfile.ZIP_DEFLATED
@@ -86,6 +90,12 @@ def write_file(archive: zipfile.ZipFile, source: Path, archive_path: str) -> Non
     info.external_attr = normalized_mode(source) << 16
     info.flag_bits |= 0x800
     archive.writestr(info, source.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+
+def publish_staged_outputs(staged_outputs: list[tuple[Path, Path]]) -> None:
+    publish_shared_staged_outputs(
+        staged_outputs, owner_label="material-simplification"
+    )
 
 
 def iter_files(root: Path):
@@ -102,6 +112,9 @@ def iter_files(root: Path):
         source = root / name
         if source.is_file():
             yield validate_source_file(source, root), name
+    yield validate_source_file(core / "scripts" / "obligation_contract.py", core), "core/obligation_contract.py"
+    yield validate_source_file(core / "scripts" / "package_layout_contract.py", core), "core/package_layout_contract.py"
+    yield validate_source_file(core / "scripts" / "static_version_contract.py", core), "core/static_version_contract.py"
     yield validate_source_file(core / "scripts" / "reviewctl.py", core), "core/reviewctl.py"
     for source in sorted((core / "schemas").glob("*.json")):
         yield validate_source_file(source, core), f"core/schemas/{source.name}"
@@ -140,7 +153,7 @@ def main() -> int:
     temp = Path(temp_name)
     try:
         seen: set[str] = set()
-        seen_windows_keys: set[str] = set()
+        portable_names: dict[str, str] = {}
         with zipfile.ZipFile(temp, "w", allowZip64=True) as archive:
             archive.comment = f"material-code-simplification standalone Agent Skill {VERSION}".encode("utf-8")
             for source, archive_path in entries:
@@ -148,30 +161,35 @@ def main() -> int:
                 if normalized_archive_path in seen:
                     raise SystemExit(f"duplicate normalized archive entry: {normalized_archive_path}")
                 seen.add(normalized_archive_path)
-                collision_key = windows_collision_key(normalized_archive_path)
-                if collision_key in seen_windows_keys:
+                collision_key = portable_archive_member_key(normalized_archive_path)
+                prior_name = portable_names.get(collision_key)
+                if prior_name is not None:
                     raise SystemExit(
-                        f"archive entry {normalized_archive_path} collides with an earlier entry "
-                        f"under Windows case-insensitive/trailing-character semantics"
+                        "portable archive member collision: "
+                        f"{prior_name} and {normalized_archive_path}; the latter collides with an earlier entry "
+                        "under Windows case-insensitive/Unicode/trailing-character semantics"
                     )
-                seen_windows_keys.add(collision_key)
+                portable_names[collision_key] = normalized_archive_path
                 write_file(archive, source, normalized_archive_path)
         digest = hashlib.sha256(temp.read_bytes()).hexdigest()
         checksum_path = output.with_suffix(output.suffix + ".sha256")
         checksum_fd, checksum_temp_name = tempfile.mkstemp(
             prefix=f".{checksum_path.name}.", dir=checksum_path.parent
         )
+        checksum_temp = Path(checksum_temp_name)
         try:
-            os.write(checksum_fd, f"{digest}  {output.name}\n".encode("utf-8"))
-            os.close(checksum_fd)
-            os.replace(temp, output)
-            os.replace(checksum_temp_name, checksum_path)
-        except Exception:
-            os.close(checksum_fd)
-            Path(checksum_temp_name).unlink(missing_ok=True)
-            raise
+            with os.fdopen(checksum_fd, "wb") as checksum_file:
+                checksum_file.write(f"{digest}  {output.name}\n".encode("utf-8"))
+            publish_staged_outputs(
+                [
+                    (output, temp),
+                    (checksum_path, checksum_temp),
+                ]
+            )
+        finally:
+            cleanup_owned_paths([checksum_temp])
     finally:
-        temp.unlink(missing_ok=True)
+        cleanup_owned_paths([temp])
     print(f"[OK] Wrote {output}")
     print(f"SHA-256: {digest}")
     return 0

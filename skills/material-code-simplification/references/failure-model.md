@@ -33,6 +33,7 @@
 
 ## Implementation
 
+- **Artifact authority is unavailable or rebound**: fail before the next controller-artifact mutation. The shared controller keeps supported POSIX and Windows workflows identity-bound, preserves custom roots, and never falls back to pathname writes or rolls back through a rebound name.
 - **Workspace drift**: stop and reconcile; do not overwrite user/tool changes.
 - **Unapproved path changes**: reject the attempt and restore its checkpoint.
 - **Test command mutates**: controller restores it; treat the command as failed and revise only through a new Gate B if the command must change.

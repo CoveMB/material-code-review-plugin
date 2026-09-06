@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Sequence
 
-ADAPTER_VERSION = "1.1.0"
+ADAPTER_VERSION = "1.3.0"
 PROFILE_NAME = "material-code-simplification"
 CODEBASE_SCOPE = "codebase"
 NO_BASELINE_SHA = "0" * 40
@@ -74,7 +74,7 @@ core = _load_core()
 def _require_core_surface() -> None:
     required = {
         "ReviewError",
-        "STATE_SCHEMA",
+        "SIMPLIFICATION_STATE_SCHEMA",
         "SCOPE_SCHEMA",
         "TOOL_VERSION",
         "PHASE_CONTEXT",
@@ -470,7 +470,7 @@ def command_init_codebase(args: argparse.Namespace) -> int:
         }
         core.atomic_write_json(temp_run_dir / "profile.json", profile)
         state = {
-            "schema_version": core.STATE_SCHEMA,
+            "schema_version": core.SIMPLIFICATION_STATE_SCHEMA,
             "tool_version": core.TOOL_VERSION,
             "run_id": run_id,
             "repo_root": str(repo),
@@ -637,7 +637,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("[FAIL] Interrupted", file=sys.stderr)
             return 130
-    return int(core.main(values))
+    return int(core.main(values, workflow_profile=PROFILE_NAME))
 
 
 if __name__ == "__main__":

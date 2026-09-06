@@ -73,6 +73,8 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" --help
 
 The control tool requires Python 3.10 or newer and uses only the standard library. It writes runs below `git rev-parse --git-path material-code-review` unless `--artifact-root` is explicitly supplied. A custom artifact root must be outside the worktree or inside the active Git directory.
 
+New material-review runs use `material-review/state/v6` with `coverage_required=true` and `workflow_profile=material_review`. They require `material-review/coverage-plan/v5`, `material-review/candidate-set/v6`, and `material-review/candidates-normalized/v6` during discovery. Material-review `state/v1` through `state/v5` runs are never migrated, backfilled, or reinterpreted to infer newer evidence authority. They retain bounded inspection and checkpointed restoration, but forward work requires a fresh v6 run. Unsupported or contradictory state/profile combinations fail before command dispatch.
+
 After `init`, preserve the printed run ID in working memory and in `MATERIAL_REVIEW_RUN_ID` when the shell permits:
 
 ```bash
@@ -100,8 +102,8 @@ Recognize these optional selectors:
 - `scope:uncommitted` — `HEAD` against the current working tree, including staged and unstaged changes and untracked files by default.
 - `scope:branch` — merge base with `base:<ref>` against the current working tree, including committed and uncommitted branch work.
 - `scope:range` — `base:<ref>..head:<ref>`; read-only unless the current workspace is later reinitialized as a mutable, aligned scope.
-- `depth:auto` — select conditional lenses from actual risk.
-- `depth:full` — use the full applicable reviewer roster; this does not lower materiality thresholds.
+- `depth:auto` — classify all eight specialist lenses from behavior evidence and select every applicable, ambiguous, or unknown lens.
+- `depth:full` — select all eight specialist lenses for every change unit; this does not lower materiality thresholds.
 - `external-review:off` — never route source to external models or CLIs.
 - `external-review:ask` — external review may be proposed, but disclose recipient/route/egress and get explicit permission before dispatch.
 
@@ -145,7 +147,7 @@ Write a controller context note under the run directory or another local tempora
 
 - intent and its source/confidence;
 - relevant repository rules;
-- changed-file groups and risk signals;
+- `change_units`, their coherent purposes, and risk signals;
 - tests and build commands already available;
 - known unknowns;
 - excluded paths or incomplete source access;
@@ -159,33 +161,50 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .
 
 A mismatch means prior reviewer output is stale. Do not “adjust mentally”; reinitialize or regenerate affected artifacts.
 
+#### 0.4 Record exhaustive targeted coverage
+
+Build a `material-review/coverage-plan/v5` using `references/context-checklist.md` and `references/review-obligations.md`.
+
+Every changed comparison path must occur exactly once in one `change_units[*].primary_paths` list. Group paths by coherent behavior or contract ownership, not directory or reviewer persona. Each unit names one `canonical_owner` from its primary paths and every other primary path in `affected_consumers`; bounded unchanged `context_paths` and relevant context consumers make the ownership claim inspectable. The controller freezes those tracked regular comparison-tree files and binds them through `coverage_context_hash`.
+
+For every unit, make exactly one positive or negative decision for all six controlled risks:
+
+- `verification_mechanism_semantics`;
+- `machine_contract_semantics`;
+- `distribution_contract_integrity`;
+- `normative_workflow_coherence`;
+- `user_selectable_output_paths`;
+- `persisted_config_semantics`.
+
+Positive decisions appear in `risk_codes` and `selected_risk_rationale` with concrete evidence paths. Negative decisions appear in `rejected_risk_rationale` with checked non-trigger evidence. Filenames are hints only. Every positive `(unit_id, risk_code)` pair creates exactly one item in `review_obligations` and exactly one obligation assignment with the controlled required lens and `required_checks`. Before dispatch, derive that obligation assignment's machine-owned `check_contracts` with `check_contracts_for_assignment`; each contract fixes one bounded claim, the exact required evidence-item codes and path scope, and one countercontrol.
+
+The `user_selectable_output_paths` obligation includes independent `runtime_target_derivation_parity` and `validation_to_mutation_identity_stability` checks. Use `references/review-obligations.md` for their repository-neutral derivation and last-validation-to-mutation controls; neither may be discharged by another output-path finding.
+
+Every plan contains the three core assignments: `core-correctness`, `core-standards`, and `core-tests`. Add only the obligation and controlled supporting assignments required by positive risks. Independently classify all eight specialist lenses for every unit in `specialist_decisions`. Under `depth:auto`, select a lens when behavior evidence makes it applicable or when applicability is ambiguous or unknown; reject it only with concrete non-trigger evidence. Under `depth:full`, select all eight for every unit. Every selected decision defines one or more unique atomic `scenario_checks`; each names a bounded claim, exact in-unit evidence paths, and a concrete countercontrol. Rejected decisions have no scenarios. Generic prompts such as “review concurrency” and `full_depth` alone are not scenarios. A low-risk auto plan may therefore contain only the three core assignments and no obligations or specialists.
+
+Create exactly one specialist assignment for each selected lens. Every assignment carries controller-derived `required_review_paths` and `required_checks`. Core paths are the union of all frozen primary and context paths; obligation paths are the union of the obligation owner, consumers, and evidence; supplemental paths cover their complete unit; specialist paths cover every selected unit's primary and context paths. Core and supplemental checks are empty, obligation checks equal the controlled set, and specialist checks equal the exact union of their atomic scenario codes. Specialists cannot satisfy core assignments or controlled obligations. A reviewer process may handle multiple assignments sequentially, but each output remains isolated by exact `assignment_id`.
+
+Run the freshness check after constructing the inventory and before recording it:
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .
+python3 "$SKILL_DIR/scripts/reviewctl.py" record-coverage \
+  --repo-root . \
+  --input /tmp/coverage-plan.json
+```
+
+The controller validates the exact primary partition, exhaustive risk decisions, obligation and assignment mappings, context safety, and bounded context size. It writes immutable `coverage-plan.json` and `coverage-context.json` authority. An exact plan/context retry is idempotent; any changed, orphaned, missing-bound, stale, or failed-hash authority requires a new run. Recording grants no repair authority and remains in `CONTEXT_FROZEN`.
 ### Phase 1 — Generate candidates
 
-#### 1.1 Reviewer selection
+#### 1.1 Assignment selection
 
-Candidate generation is one bounded read-only wave. In Codex, use a bounded read-only `explorer` subagent or an installed project-scoped custom reviewer, seeded with `references/reviewer-template.md` and exactly one applicable lens. On another host, use the closest read-only subagent primitive. When subagents are unavailable, run the same lenses sequentially. In every host, provide the frozen scope hash, source bundle, repository constraints, and exact output schema.
+Candidate generation is one bounded read-only assignment-matched wave. In Codex, use a bounded read-only `explorer` subagent or installed project-scoped reviewer when permitted. On another host, use the closest read-only primitive. When subagents are unavailable, run the same assignments sequentially.
 
-Always cover:
+Give every reviewer the frozen scope and context hashes, exact `assignment_id`, `assignment_kind`, `lens_id`, assigned `reviewer_id`, `independence_group`, and `review_mode`, `required_review_paths`, `required_checks`, repository constraints, and `schemas/candidate-set-v6.schema.json`. For an obligation assignment, also provide its single `obligation_id`, risk code, and controller-derived `check_contracts`. For a specialist assignment, provide its exact `unit_ids`, `primary_paths`, `context_paths`, and scenario definitions. Reviewers must echo those assigned values unchanged and must not weaken or reconstruct machine-owned check contracts.
 
-- correctness and edge cases;
-- test adequacy for fragile changed behavior;
-- repository standards and explicit requirement/plan alignment.
+The three core assignments always cover correctness and edge cases, test adequacy for fragile changed behavior, and repository standards plus explicit requirement alignment. Every positive controlled risk adds its obligation assignment. Add supplemental assignments only when the plan's controlled mapping requires them. Specialist assignments remain separate broad lenses and never replace these authorities.
 
-Select conditional lenses only when the diff contains a real concern:
-
-- security/privacy/authorization/input trust;
-- reliability/retries/timeouts/error handling/background work;
-- API, schema, serialization, event, or exported-type contracts;
-- data migration/backfill/deployment safety;
-- performance/resource use;
-- concurrency/ordering/async UI;
-- documentation mismatch;
-- simplification/DRY/architecture.
-
-Do not spawn a specialist from a filename alone. Conversely, verification mechanisms that can silently pass while the product is broken warrant an adversarial lens even when the diff is small.
-
-For a trivial, low-risk, code-only diff, an inline controller pass plus correctness and standards may be sufficient. Any unknown scope signal, configuration/schema/CI change, security-sensitive behavior, public contract, concurrency, migration, or uncounted file type fails closed to the fuller roster.
-
+Do not create an obligation from a filename alone. Conversely, do not omit one when behavior-based evidence meets a controlled positive trigger. A reviewer may run several assignments sequentially, but one broad result cannot satisfy multiple assignment IDs or obligations.
 #### 1.2 Independence and scheduling
 
 Assign each reviewer an `independence_group` that describes the actual process/model family. Two personas running in the same process/model are distinct lenses, not independent corroboration.
@@ -202,31 +221,44 @@ External model/CLI review is optional. Before egress, state:
 
 Obtain explicit user permission for that egress. A failed or unverifiable external route does not count as independent corroboration.
 
-#### 1.3 Candidate contract
+#### 1.3 Candidate and check-result contract
 
-Each reviewer returns JSON conforming to `schemas/candidate-set.schema.json`. Use exact source evidence and the behavioral confidence anchors in `references/materiality-rubric.md`.
+Each assignment returns one object conforming exactly to `schemas/candidate-set-v6.schema.json`. It includes the exact scope, coverage-plan, and coverage-context hashes plus the assigned identity. Obligation assignments echo one `obligation_id`. Obligation and specialist assignments return every required `check_results` entry exactly once:
 
-A reviewer must actively check for:
+- `pass` requires concrete evidence and no finding IDs;
+- `finding_emitted` requires concrete evidence and one or more local IDs present in the same result;
+- `blocked` identifies missing evidence and leaves the obligation incomplete.
 
-- existing guards, callers, middleware, framework behavior, and type constraints;
-- whether the cited behavior is actually introduced/exposed by the diff;
-- explicit lint suppressions or project decisions;
-- tests that already cover the claimed gap;
-- intentional tradeoffs documented in the task or repository.
+For an obligation result, replace the old check-level evidence fields with the exact machine-owned `evidence_items`. Every evidence item appears exactly once and contains non-empty `evidence` plus non-empty `evidence_paths` drawn from both assignment authority and reviewed coverage. An item with `path_scope: all_required_review_paths` must cite the complete assignment path set; assignment-wide `coverage.files_reviewed` alone cannot satisfy that per-check item. Specialist check results retain check-level `evidence` and `evidence_paths` bound to their scenario.
 
-Do not seed reviewers with one another's candidates. That manufactures agreement.
+<!-- material-review-obligation-workflow-contract:start -->
+check_contracts=controller-derived
+obligation_check_results=evidence_items
+obligation_evidence_paths=all_required_review_paths
+<!-- material-review-obligation-workflow-contract:end -->
 
-Save each return to a temporary JSON file, then ingest all returns together:
+Each outcome accounts only for its named check. A `finding_local_id` may appear in only one required check result. A finding on one check does not complete another required check or evidence item. Candidate limitations are objects with a description and `related_check_codes`; every linked result must be `blocked`. Do not record `pass` or hide unresolved evidence in a general limitation.
+
+Core and supplemental assignments return an empty `check_results` array. Specialist results echo the assigned `unit_ids`, `primary_paths`, and `context_paths`. Every result must name every `required_review_path` in `coverage.files_reviewed`, including context paths, even when `findings` is empty. A reviewer may not combine assignments, substitute a lens, or report another assignment's obligation.
+
+Reviewers still actively check existing guards, callers, middleware, types, framework behavior, diff causality, explicit project decisions, existing tests, and counterevidence. Use exact source evidence and `references/materiality-rubric.md`. Do not seed reviewers with one another's candidates.
+
+Evidence identity is side-aware. Baseline evidence for a rename or copy uses its exact `old_path`; comparison evidence uses only the exact current `path`. A comparison-side changed path that is frozen as missing remains missing and cannot fall through to coverage context. Only a true no-match may use an unchanged bounded coverage-context source. Frozen hashes and requested line ranges remain mandatory.
+
+Save each return separately and ingest the complete wave together:
 
 ```bash
 python3 "$SKILL_DIR/scripts/reviewctl.py" ingest-candidates \
   --repo-root . \
-  --input /tmp/reviewer-correctness.json \
-  --input /tmp/reviewer-testing.json
+  --input /tmp/assignment-core-correctness.json \
+  --input /tmp/assignment-obligation-unit-001.json
 ```
 
-The tool verifies scope hashes, required fields, changed-path relation, source-side evidence, and ID uniqueness. Malformed findings are rejected visibly in the ingestion report; do not repair their substance during adjudication by guessing.
+The controller validates all results in memory. It rejects missing or duplicate assignment IDs, stale hashes, wrong identities or obligations, absent, duplicated, or unknown checks, unsafe evidence paths, unsupported outcomes, `pass` without evidence, unresolved `finding_emitted` IDs, limitations linked to non-blocked results, `blocked` checks, and incomplete required paths. Missing assignments report `Missing required assignment coverage`. Until the complete valid wave exists, no authoritative candidate bundle, adjudication, verdict, or Gate A artifact may exist.
 
+The first accepted wave is write-once authority. An exact canonical retry is no-write. A different complete wave requires a new run. Invalid or unavailable retry input may update only `candidate-ingestion-failure.json`; it cannot replace accepted candidates or state.
+
+After deterministic candidate IDs are assigned, the controller resolves each check's local finding IDs to canonical candidate IDs and writes `material-review/candidates-normalized/v6`. Reviewer sets retain assignment identity, obligation identity when applicable, exact required paths and checks, machine-owned obligation check contracts, specialist unit/path/scenario provenance, check results, and coverage. Reports label raw findings as `candidate_records` and count completed atomic checks separately; neither count proves breadth, recall, independence, cognition, or semantic quality. Temporary input filenames and order are excluded from authority.
 ### Phase 2 — Validate and adjudicate
 
 #### 2.1 Independent per-finding validation
@@ -259,13 +291,13 @@ The audit must compare the literal candidate suggestion with the smallest safe r
 
 #### 2.4 Final adjudication
 
-Use `references/adjudicator-template.md` and `schemas/adjudication.schema.json`. In Codex, use a fresh read-only `default` subagent or installed project-scoped adjudicator when available. The adjudicator must not have generated or validated the same candidates and may not invent a finding. When no fresh role exists, the controller adjudicates and records the weaker independence accurately.
+Use `references/adjudicator-template.md` and `schemas/adjudication-v4.schema.json`. In Codex, use a fresh read-only `default` subagent or installed project-scoped adjudicator when available. The adjudicator must not have generated or validated the same candidates and may not invent a finding. When no fresh role exists, the controller adjudicates and records the weaker independence accurately.
 
 The adjudicator must:
 
 1. reuse the audited provisional groups without merging distinct failure modes;
 2. include every candidate ID exactly once and reject group or disposition drift after audit;
-3. preserve source reviewers and independence groups;
+3. preserve source reviewers and independence groups, and provide the exact sorted unique `source_lenses` derived from each group's candidate IDs;
 4. attach the independent validation result;
 5. apply the nature-specific materiality tests;
 6. choose `keep` or `discard` with a reason code;
@@ -275,6 +307,8 @@ The adjudicator must:
 
 A serious evidenced defect may be kept even when the eventual fix is large or risky; that risk belongs in planning and Gate B. Optional simplification, DRY, or architecture candidates require demonstrated current cost and a change that is safer than leaving the cost in place.
 
+A stricter guard is a defect only with affirmative supported-state evidence. Sufficient authority includes an explicit requirement or user promise, an accepted schema state, a causal test, or baseline behavior shown to be an accepted or relied-upon compatibility state. Mere historical acceptance or the fact that a guard blocks an input is not enough when intentional fail-closed validation remains plausible. Discard an unsupported medium/low claim as `CONSEQUENCE_UNSUPPORTED`. When the consequence is plausibly blocker/high but support status is genuinely unknown, retain it only as `nature="risk"`, require a user decision and exact pre-fix verification, and do not authorize relaxing the guard until support is established and the plan is revalidated.
+
 Compile the ledger:
 
 ```bash
@@ -283,7 +317,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" compile-ledger \
   --input /tmp/adjudication.json
 ```
 
-The tool writes a stable finding ledger in JSON and Markdown, with `F###` IDs for kept findings and explicit discarded groups/reasons.
+The tool writes `material-review/ledger/v4` in JSON and Markdown, with `F###` IDs for kept findings, explicit discarded groups/reasons, and the derived source lenses on both. Historical material-review state/v1 through state/v5 artifacts and runs containing earlier normalized candidates are never migrated, backfilled, rehashed, or granted v6 forward authority. They retain only bounded inspection and restoration; forward work requires a new run. Explicit material simplification remains on its separate candidates-normalized/v1, adjudication/v3, and ledger/v3 contracts.
 
 #### 2.5 Merge-readiness decision
 
@@ -411,7 +445,7 @@ Only after Gate B:
 python3 "$SKILL_DIR/scripts/reviewctl.py" begin-fix --repo-root .
 ```
 
-This rechecks the frozen scope, confirms the working tree is mutable/aligned, captures a pre-fix restoration snapshot, and establishes a workspace guard. Do not stage or commit.
+This rechecks the frozen scope, confirms the working tree is mutable/aligned, captures a pre-fix v4 restoration checkpoint, and establishes a workspace guard. The checkpoint binds HEAD attachment and commit, the complete refs namespace, semantic Git-index content, workspace state, and path snapshots. Do not stage or commit.
 
 #### 4.2 Per-finding cycle
 
@@ -425,7 +459,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" start-finding --repo-root . --finding 
 
 Then make only the approved changes. Prefer the smallest root-cause correction, but do not preserve a broken architecture merely to minimize line count. Do not perform opportunistic cleanup.
 
-Execute each approved required test through the control tool so the command, output, timeout, and exit code are durable. Tests are evidence, not edit steps: any workspace/index mutation caused by a test is rejected and restored when safe. The tool is not a sandbox; a command runs with the current user's host permissions, so Gate B must review commands for filesystem, network, credential, process, and Git effects:
+Execute each approved required test through the control tool so the command, output, timeout, and exit code are durable. Tests are evidence, not edit steps: any workspace, index, HEAD, or refs mutation caused by a test is rejected and restored only when a proven conditional component boundary is available. V4 recovery uses ordered expected-old transactions for symbolic HEAD and the complete changed-ref set, holds the canonical Git index lock while rechecking semantic index identity, and permits worktree writes only for exclusive creation from an expected-missing path. Git forbids changing symbolic `HEAD` and its current referent in one transaction, so that overlapping referent is conditionally handled after `HEAD`; a later failure may leave extra authority for reconciliation but never overwrites concurrent authority. Existing-path replacement or deletion fails before recovery authority writes and requires manual reconciliation. The tool is not a sandbox; a command runs with the current user's host permissions, so Gate B must review commands for filesystem, network, credential, process, and Git effects:
 
 ```bash
 python3 "$SKILL_DIR/scripts/reviewctl.py" run-test \
@@ -461,7 +495,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" rollback-finding \
   --reason "Targeted test exposed a contract regression."
 ```
 
-Do not manually undo a failed attempt when the checkpoint tool can restore it; manual partial reversal is harder to audit.
+Automatic rollback is limited to deltas on the finding's approved paths and to component transitions with a proven conditional primitive. HEAD/ref transactions, cooperative index-lock restoration, and expected-missing worktree creation may proceed; replacing or deleting an existing worktree path does not. Unsupported transitions, unrelated drift, lock contention, or an expected-old mismatch preserve the repository, write recovery evidence, and stop for human reconciliation.
 
 If the workflow must be abandoned or the plan must expand, restore the entire repair layer:
 
@@ -471,7 +505,7 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" abort-fixes \
   --reason "Repair requires an unapproved schema path."
 ```
 
-This returns the working tree to the frozen pre-fix state. Replan and repeat Gate B rather than editing around the boundary.
+This returns the complete saved repository authority only when every required component transition has its approved conditional boundary. Current v4 recovery prepares all worktree actions before authority writes, commits symbolic HEAD and changed refs through ordered expected-old transactions, and holds `index.lock` across semantic verification and index restoration. The current symbolic-HEAD referent is deferred when Git's transaction overlap rule requires it; no global transaction across independently accepted components is claimed. Worktree no-ops and exclusive creation from expected missing are supported; existing-path replacement or deletion fails closed for manual reconciliation. Historical checkpoints remain on their narrower bounded restoration path; missing v4 metadata is never fabricated. Replan and repeat Gate B rather than editing around the boundary.
 
 #### 4.3 Global tests
 
@@ -485,6 +519,19 @@ python3 "$SKILL_DIR/scripts/reviewctl.py" run-global-test \
 
 A green command is not conclusive proof for authorization, migrations, distributed effects, public contracts, or concurrency. Preserve those residual verification limits in the final report.
 
+#### 4.4 Refresh tests invalidated by later shared-file repairs
+
+When a later approved finding changes a path shared with an already-fixed finding, rerun the earlier finding's exact Gate-B-approved test at the final repair state:
+
+```bash
+python3 "$SKILL_DIR/scripts/reviewctl.py" refresh-finding-test \
+  --repo-root . \
+  --finding F001 \
+  --test unit-regression
+```
+
+This command is available only in `FIXING` with no active finding and after every approved finding is fixed. It does not reopen the finding, change its status or history, consume an attempt, or authorize a different command. The controller records the refreshed evidence separately, rejects and restores test-caused workspace or repository-control mutations, and binds the result to the retained attempt and current approved-path hash.
+
 ### Phase 5 — Post-fix verification
 
 Prepare the bounded verification bundle:
@@ -493,7 +540,7 @@ Prepare the bounded verification bundle:
 python3 "$SKILL_DIR/scripts/reviewctl.py" prepare-verification --repo-root .
 ```
 
-This checks that all approved findings are marked fixed, global required tests passed, and the aggregate repair delta remains inside Gate-B paths. It writes a fix-only diff/snapshot summary.
+This checks that all approved findings are marked fixed, each required finding test is current through its retained attempt or a final-state refresh, global required tests passed, and the aggregate repair delta remains inside Gate-B paths. It writes a fix-only diff/snapshot summary that includes the refreshed evidence.
 
 Use `references/postfix-verifier-template.md` and `schemas/verification.schema.json`. In Codex, prefer a fresh read-only `explorer` subagent or installed project-scoped post-fix verifier that did not implement the repair. Record degraded self-audit when no fresh verifier is available. The verifier must evaluate:
 
@@ -553,12 +600,12 @@ When the ledger contained material findings but the user rejected or deferred al
 Read `references/failure-model.md`. In summary:
 
 - unknown or stale scope -> stop and refreeze;
-- malformed reviewer output -> reject that output, do not guess;
+- incomplete units, unsafe context, missing or duplicate obligations, wrong lenses/checks, stale hashes, blocked checks, or unresolved local IDs -> reject coverage or the entire candidate wave, do not guess;
 - unavailable subagents -> same checklist, sequential/degraded self-audit;
 - validator infrastructure failure -> preserve high-impact uncertainty visibly;
 - user gate absent -> stop;
 - changed plan after approval -> invalidate Gate B;
-- unapproved path mutation -> reject/restore attempt;
+- unapproved path mutation -> reject the attempt; automatic rollback preserves it and stops for reconciliation when ownership cannot be bound to a controller-executed command;
 - failing required test -> reject/restore or repair within budget;
 - new post-fix improvement -> record-only;
 - out-of-plan regression repair -> restore and require a new plan approval;
@@ -568,7 +615,10 @@ Read `references/failure-model.md`. In summary:
 
 Load references only at the stage that needs them:
 
-- `references/context-checklist.md` — Phase 0
+- `references/context-checklist.md` — Phase 0 change-unit construction and exhaustive classification
+- `references/review-obligations.md` — controlled risks, required lenses/checks, and check-result evidence
+- `references/reliability-output-integrity-lens.md` — assigned `reliability` lens for present `user_selectable_output_paths`
+- `references/persisted-config-migration-lens.md` — assigned `migration_data_safety` or `api_config_compatibility` lens for present `persisted_config_semantics`
 - `references/materiality-rubric.md` — Phases 1–2
 - `references/remediation-rubric.md` — repair-direction audit, adjudication, and planning
 - `references/test-evidence-rubric.md` — coverage findings and repair-test design

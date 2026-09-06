@@ -1,0 +1,51 @@
+{
+  "schema_version": "material-review-evaluation/case/v1",
+  "case_id": "missed-contracts",
+  "target_type": "git_fixture",
+  "review_mode": "range",
+  "posture": "immutable",
+  "require_immediate_parent": true,
+  "fixture": {
+    "base_root": "evaluations/material-code-review/fixtures/missed-contracts/base",
+    "review_root": "evaluations/material-code-review/fixtures/missed-contracts/review",
+    "author_name": "Material Review Fixture",
+    "author_email": "fixture@example.invalid",
+    "base_timestamp": "2026-07-30T12:00:00+00:00",
+    "review_timestamp": "2026-07-30T12:01:00+00:00",
+    "base_message": "fixture: establish contract controls",
+    "review_message": "fixture: introduce missed contracts",
+    "base_tree": "99695ca1db473e7ac6b35a69c7aa18609a47648b",
+    "review_tree": "ac443b26a05c0677d699839b0f3ac24cce4bedb1",
+    "base_commit": "9c0bd7fff0a68cb9b1848a4f4e595d7cc575a895",
+    "review_commit": "0239161f047378567c26f8c66c08568891b58994"
+  },
+  "required_root_ids": [
+    "version-decoy",
+    "workflow-missing-scope",
+    "path-language",
+    "risk-cardinality",
+    "archive-closure"
+  ],
+  "root_contracts": {
+    "version-decoy": "The validator trusts raw source text instead of one top-level literal assignment.",
+    "workflow-missing-scope": "Coverage can be recorded without the required fresh-scope check.",
+    "path-language": "The candidate schema accepts path forms rejected by runtime validation.",
+    "risk-cardinality": "The coverage schema permits a duplicate required risk while omitting another.",
+    "archive-closure": "Archive validation uses an incomplete hand-maintained required-entry set."
+  },
+  "acceptance": {
+    "candidate_must_support_every_required_root": true,
+    "preserve_every_baseline_material_root": true,
+    "unsupported_high_severity_additions": 0,
+    "require_controller_valid_gate_a_evidence": true,
+    "require_no_mutation": true,
+    "require_complete_obligations": true,
+    "require_no_coverage_gap": true
+  },
+  "attempt_policy": {
+    "comparisons": 1,
+    "repair_confirmations": 1,
+    "repair_confirmation_requires_concrete_implementation_defect": true,
+    "resampling": false
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/demo/coverage-plan.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["required_risk_codes"],
+  "properties": {
+    "required_risk_codes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "enum": [
+          "user_selectable_output_paths",
+          "persisted_config_semantics"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,657 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "material-review/coverage-plan/v4",
+  "$defs": {
+    "repositoryRelativeGitPath": {
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?![^\\u0000]*\\\\)(?![^\\u0000]*//)(?![^\\u0000]*/$)(?!\\.git(?:/|$))(?!\\.{1,2}(?:/|$))(?![^\\u0000]*/\\.{1,2}(?:/|$))(?![\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])(?![^\\u0000]*[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]$)(?![^\\u0000]*\\u0000)[^\\u0000]+$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,127}$"
+    },
+    "checkCode": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
+    "requiredReviewPaths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/repositoryRelativeGitPath"
+      }
+    },
+    "requiredChecks": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/checkCode"
+      }
+    },
+    "riskCode": {
+      "enum": [
+        "verification_mechanism_semantics",
+        "machine_contract_semantics",
+        "distribution_contract_integrity",
+        "normative_workflow_coherence",
+        "user_selectable_output_paths",
+        "persisted_config_semantics"
+      ]
+    },
+    "selectedRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "risk_code",
+        "rationale",
+        "evidence_paths"
+      ],
+      "properties": {
+        "risk_code": {
+          "$ref": "#/$defs/riskCode"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryRelativeGitPath"
+          }
+        }
+      }
+    },
+    "rejectedRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "risk_code",
+        "rationale"
+      ],
+      "properties": {
+        "risk_code": {
+          "$ref": "#/$defs/riskCode"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "assignmentIdentity": {
+      "type": "object",
+      "properties": {
+        "assignment_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "lens_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "reviewer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "independence_group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "review_mode": {
+          "enum": [
+            "subagent",
+            "controller",
+            "external"
+          ]
+        }
+      }
+    },
+    "specialistLens": {
+      "enum": [
+        "security_privacy",
+        "reliability",
+        "api_contract",
+        "migration_deployment",
+        "concurrency",
+        "performance",
+        "documentation",
+        "architecture_simplification"
+      ]
+    },
+    "specialistDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lens_id",
+        "decision",
+        "basis",
+        "evidence",
+        "scenario_checks"
+      ],
+      "properties": {
+        "lens_id": {
+          "$ref": "#/$defs/specialistLens"
+        },
+        "decision": {
+          "enum": [
+            "selected",
+            "rejected"
+          ]
+        },
+        "basis": {
+          "enum": [
+            "behavior_evidence",
+            "ambiguous",
+            "unknown",
+            "high_risk_mandate",
+            "full_depth"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "scenario_checks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scenarioCheck"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "selected"
+              }
+            },
+            "required": [
+              "decision"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scenario_checks": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "scenario_checks": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scenarioCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_code",
+        "claim",
+        "evidence_paths",
+        "countercontrol"
+      ],
+      "properties": {
+        "check_code": {
+          "$ref": "#/$defs/checkCode"
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryRelativeGitPath"
+          }
+        },
+        "countercontrol": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "properties": {
+        "assignment_kind": {
+          "enum": [
+            "core",
+            "obligation",
+            "supplemental",
+            "specialist"
+          ]
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope_hash",
+    "workflow_profile",
+    "depth",
+    "change_units",
+    "review_obligations",
+    "assignments"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "material-review/coverage-plan/v4"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "workflow_profile": {
+      "const": "material_review"
+    },
+    "change_units": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "unit_id",
+          "purpose",
+          "primary_paths",
+          "context_paths",
+          "canonical_owner",
+          "affected_consumers",
+          "risk_codes",
+          "selected_risk_rationale",
+          "rejected_risk_rationale",
+          "specialist_decisions"
+        ],
+        "properties": {
+          "unit_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1
+          },
+          "primary_paths": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/repositoryRelativeGitPath"
+            }
+          },
+          "context_paths": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/repositoryRelativeGitPath"
+            }
+          },
+          "canonical_owner": {
+            "$ref": "#/$defs/repositoryRelativeGitPath"
+          },
+          "affected_consumers": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/repositoryRelativeGitPath"
+            }
+          },
+          "risk_codes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/riskCode"
+            }
+          },
+          "selected_risk_rationale": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/selectedRisk"
+            }
+          },
+          "rejected_risk_rationale": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/rejectedRisk"
+            }
+          },
+          "specialist_decisions": {
+            "type": "array",
+            "minItems": 8,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/specialistDecision"
+            }
+          }
+        }
+      }
+    },
+    "review_obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "obligation_id",
+          "unit_id",
+          "risk_code",
+          "canonical_owner",
+          "affected_consumers",
+          "evidence_paths",
+          "required_lens",
+          "required_checks"
+        ],
+        "properties": {
+          "obligation_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "unit_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "risk_code": {
+            "$ref": "#/$defs/riskCode"
+          },
+          "canonical_owner": {
+            "$ref": "#/$defs/repositoryRelativeGitPath"
+          },
+          "affected_consumers": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/repositoryRelativeGitPath"
+            }
+          },
+          "evidence_paths": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/repositoryRelativeGitPath"
+            }
+          },
+          "required_lens": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "required_checks": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            }
+          }
+        }
+      }
+    },
+    "assignments": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/assignment"
+          },
+          {
+            "$ref": "#/$defs/assignmentIdentity"
+          },
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "assignment_id",
+                  "assignment_kind",
+                  "lens_id",
+                  "reviewer_id",
+                  "independence_group",
+                  "review_mode",
+                  "required_review_paths",
+                  "required_checks"
+                ],
+                "properties": {
+                  "assignment_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "assignment_kind": {
+                    "const": "core"
+                  },
+                  "lens_id": {
+                    "type": "string"
+                  },
+                  "reviewer_id": {
+                    "type": "string"
+                  },
+                  "independence_group": {
+                    "type": "string"
+                  },
+                  "review_mode": {
+                    "enum": [
+                      "subagent",
+                      "controller",
+                      "external"
+                    ]
+                  },
+                  "required_review_paths": {
+                    "$ref": "#/$defs/requiredReviewPaths"
+                  },
+                  "required_checks": {
+                    "$ref": "#/$defs/requiredChecks"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "assignment_id",
+                  "assignment_kind",
+                  "obligation_id",
+                  "unit_id",
+                  "risk_code",
+                  "lens_id",
+                  "reviewer_id",
+                  "independence_group",
+                  "review_mode",
+                  "required_review_paths",
+                  "required_checks"
+                ],
+                "properties": {
+                  "assignment_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "assignment_kind": {
+                    "const": "obligation"
+                  },
+                  "obligation_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "unit_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "risk_code": {
+                    "$ref": "#/$defs/riskCode"
+                  },
+                  "lens_id": {
+                    "type": "string"
+                  },
+                  "reviewer_id": {
+                    "type": "string"
+                  },
+                  "independence_group": {
+                    "type": "string"
+                  },
+                  "review_mode": {
+                    "enum": [
+                      "subagent",
+                      "controller",
+                      "external"
+                    ]
+                  },
+                  "required_review_paths": {
+                    "$ref": "#/$defs/requiredReviewPaths"
+                  },
+                  "required_checks": {
+                    "$ref": "#/$defs/requiredChecks"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "assignment_id",
+                  "assignment_kind",
+                  "unit_id",
+                  "risk_code",
+                  "lens_id",
+                  "reviewer_id",
+                  "independence_group",
+                  "review_mode",
+                  "required_review_paths",
+                  "required_checks"
+                ],
+                "properties": {
+                  "assignment_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "assignment_kind": {
+                    "const": "supplemental"
+                  },
+                  "unit_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "risk_code": {
+                    "$ref": "#/$defs/riskCode"
+                  },
+                  "lens_id": {
+                    "type": "string"
+                  },
+                  "reviewer_id": {
+                    "type": "string"
+                  },
+                  "independence_group": {
+                    "type": "string"
+                  },
+                  "review_mode": {
+                    "enum": [
+                      "subagent",
+                      "controller",
+                      "external"
+                    ]
+                  },
+                  "required_review_paths": {
+                    "$ref": "#/$defs/requiredReviewPaths"
+                  },
+                  "required_checks": {
+                    "$ref": "#/$defs/requiredChecks"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "assignment_id",
+                  "assignment_kind",
+                  "lens_id",
+                  "reviewer_id",
+                  "independence_group",
+                  "review_mode",
+                  "unit_ids",
+                  "primary_paths",
+                  "context_paths",
+                  "required_review_paths",
+                  "required_checks"
+                ],
+                "properties": {
+                  "assignment_id": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "assignment_kind": {
+                    "const": "specialist"
+                  },
+                  "lens_id": {
+                    "$ref": "#/$defs/specialistLens"
+                  },
+                  "reviewer_id": {
+                    "type": "string"
+                  },
+                  "independence_group": {
+                    "type": "string"
+                  },
+                  "review_mode": {
+                    "enum": [
+                      "subagent",
+                      "controller",
+                      "external"
+                    ]
+                  },
+                  "required_review_paths": {
+                    "$ref": "#/$defs/requiredReviewPaths"
+                  },
+                  "required_checks": {
+                    "$ref": "#/$defs/requiredChecks"
+                  },
+                  "unit_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "$ref": "#/$defs/identifier"
+                    }
+                  },
+                  "primary_paths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "$ref": "#/$defs/repositoryRelativeGitPath"
+                    }
+                  },
+                  "context_paths": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "$ref": "#/$defs/repositoryRelativeGitPath"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "depth": {
+      "enum": [
+        "auto",
+        "full"
+      ]
+    }
+  },
+  "title": "Material-review coverage plan v4"
+}

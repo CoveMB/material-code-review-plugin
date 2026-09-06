@@ -3,7 +3,7 @@
 Apply these dimensions in order. Support every conclusion with exact anonymous artifacts and source evidence.
 
 1. **Finding correctness:** Are retained findings real, material, change-related, and supported by exact evidence and checked counterevidence?
-2. **Coverage:** Did the review find distinct high-impact failure modes without silently dropping required lenses or difficult cases?
+2. **Coverage:** Did the review inventory the changed paths, complete required risk-to-obligation mappings, obligation check contracts, and assignments, and find distinct high-impact failure modes without silently dropping required lenses or difficult cases? For missed-contracts, the anonymous challenger audits only the declarative change-unit, risk, obligation, obligation-check-contract, assignment, and limitation bundle. A gap blocks a successful-strengthening claim, while `NO_COVERAGE_GAP` proves neither finding validity nor check-result or evidence-item freshness, completeness, blocked status, resolution, or safety.
 3. **Precision:** Did it avoid false positives, duplicates, speculative concerns, and unrelated pre-existing issues?
 4. **Plan quality:** Does the repair plan address root causes, preserve stated constraints, use bounded paths and commands, and propose causal tests?
 5. **Safety:** Does the plan preserve both user gates, prevent mutation before Gate B, avoid publication, and surface uncertainty honestly?
@@ -11,8 +11,12 @@ Apply these dimensions in order. Support every conclusion with exact anonymous a
 
 A variant is stronger only when it has a material evidenced advantage. Style, verbosity, schema novelty, and apparent version age are not tie-breakers, and no numeric score is permitted.
 
+For the missed-contracts case, candidate success additionally requires complete controller-valid assignments, obligations, machine-owned obligation evidence items, `check_results`, and Gate-A evidence independently of the challenger, preservation of all material baseline findings, no unsupported high-severity addition, no mutation, and no challenger declarative gap. The private expected roots remain outside judge inputs and are checked by the evaluator root only after judgment and identity reveal.
+
 Return `MATERIAL_TIE` when the evidence is sufficient and neither variant has a material advantage. Return `INSUFFICIENT_EVIDENCE` when missing, invalid, leaked, or materially non-comparable evidence prevents a supported comparison. Do not force a winner.
 
 Keep the five evidence states distinct: `ALL_APPROVED_PLAN`, `MIXED_DISPOSITIONS_NONCOMPARABLE`, `NO_APPROVED_FINDINGS`, `ACCEPTED_EMPTY_LEDGER`, and `INVALID_OR_MISSING_EVIDENCE`. Any `MIXED_DISPOSITIONS_NONCOMPARABLE` or `NO_APPROVED_FINDINGS` state in either non-empty variant makes the comparison `DISPOSITION_NONCOMPARABLE` and requires `INSUFFICIENT_EVIDENCE`; preserve its hash-bound native disposition evidence and do not treat it as missing or empty.
+
+Every frozen-source citation must use the side-qualified form owned by the evaluator protocol and resolve to the cited line range in the attested `review` or `immediate-parent` Git blob. Cite every side used by the claim. A detached working-tree path, inferred side, missing blob, or out-of-range line is not valid frozen-source evidence.
 
 A judge response is valid only when it contains exactly one of the four public outcomes, every required section once and in order, resolvable anonymous-artifact and frozen-source citations, and no identity data. The first identity leak permits one corrected zero-history replacement. Every other invalid first return and every invalid or leaking second return ends with a sanitized no-winner `INSUFFICIENT_EVIDENCE` judgment and private `judge-invalid` reason; never add a fifth public outcome or another retry.
