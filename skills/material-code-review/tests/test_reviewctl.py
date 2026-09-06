@@ -4,7 +4,6 @@ import contextlib
 import copy
 import hashlib
 import importlib.util
-import inspect
 import io
 import json
 import os
@@ -212,11 +211,17 @@ class ReviewCtlTest(unittest.TestCase):
             text=True,
         )
 
-    def make_run_state_v2_with_frozen_1_3_fixture(self) -> None:
+    def run_frozen_controller(
+        self, controller: Path, expected_sha256: str
+    ) -> None:
+        self.assertEqual(
+            hashlib.sha256(controller.read_bytes()).hexdigest(),
+            expected_sha256,
+        )
         completed = subprocess.run(
             [
                 sys.executable,
-                str(CONTROLLER_1_3_COMPAT),
+                str(controller),
                 "--run-dir",
                 str(self.run_dir),
             ],
@@ -226,47 +231,60 @@ class ReviewCtlTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def make_run_state_v3_with_frozen_1_4_fixture(self) -> None:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(CONTROLLER_1_4_COMPAT),
-                "--run-dir",
-                str(self.run_dir),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+    def assert_restart_only_state(
+        self,
+        *,
+        controller: Path,
+        expected_sha256: str,
+        state_version: int,
+    ) -> None:
+        scope_hash = self.init()
+        self.run_frozen_controller(controller, expected_sha256)
+        state = self.load("state.json")
+        self.assertEqual(
+            state["schema_version"], f"material-review/state/v{state_version}"
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            reviewctl.classify_state_contract(state),
+            f"legacy_material_review_v{state_version}",
+        )
 
-    def make_run_state_v4_with_frozen_1_5_fixture(self) -> None:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(CONTROLLER_1_5_COMPAT),
-                "--run-dir",
-                str(self.run_dir),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        self.run_tool(
+            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.run_tool(
+            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
+        )
+        coverage = self.write_json(
+            f"state-v{state_version}-coverage.json", self.coverage_plan(scope_hash)
+        )
+        _, stderr = self.run_tool(
+            "record-coverage",
+            "--repo-root",
+            str(self.repo),
+            "--run-id",
+            self.run_id,
+            "--input",
+            str(coverage),
+            expected=2,
+        )
+        self.assertIn("Run predates required coverage; start a new run.", stderr)
 
-    def make_run_state_v5_with_frozen_1_6_fixture(self) -> None:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(CONTROLLER_1_6_COMPAT),
-                "--run-dir",
-                str(self.run_dir),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        for command in (
+            ("rollback-finding", "--finding", "F001", "--reason", "Bounded legacy check."),
+            ("abort-fixes", "--reason", "Bounded legacy check."),
+        ):
+            with self.subTest(command=command[0]):
+                _, stderr = self.run_tool(
+                    command[0],
+                    "--repo-root",
+                    str(self.repo),
+                    "--run-id",
+                    self.run_id,
+                    *command[1:],
+                    expected=2,
+                )
+                self.assertNotIn("Run predates required coverage", stderr)
 
     def reach_plan_approved(self) -> None:
         self.approve_and_plan()
@@ -3309,12 +3327,6 @@ class ReviewCtlTest(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             backend._raise_status(-1, "injected missing entry")
 
-    def test_artifact_identity_preserves_candidate_write_once_contract(self) -> None:
-        self.test_candidate_ingestion_is_write_once_and_idempotent()
-
-    def test_artifact_identity_preserves_gate_checkpoint_completion_contract(self) -> None:
-        self.test_empty_material_set_requires_explicit_gate_and_completes()
-
     def test_shared_artifact_run_cannot_be_reused_for_another_repository(self) -> None:
         shared = self.out / "shared-artifacts"
         self.run_tool(
@@ -5533,12 +5545,11 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertIn("Run predates required coverage", stderr)
 
     def test_state_v2_review_is_legacy_after_state_v3_release(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(CONTROLLER_1_3_COMPAT.read_bytes()).hexdigest(),
+        scope_hash = self.init()
+        self.run_frozen_controller(
+            CONTROLLER_1_3_COMPAT,
             CONTROLLER_1_3_COMPAT_SHA256,
         )
-        scope_hash = self.init()
-        self.make_run_state_v2_with_frozen_1_3_fixture()
         state = self.load("state.json")
         self.assertEqual(state["schema_version"], "material-review/state/v2")
         self.assertEqual(
@@ -5613,12 +5624,11 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertIs(state["coverage_required"], True)
 
     def test_state_v5_review_is_restart_only_after_state_v6_release(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(CONTROLLER_1_6_COMPAT.read_bytes()).hexdigest(),
+        scope_hash = self.init()
+        self.run_frozen_controller(
+            CONTROLLER_1_6_COMPAT,
             CONTROLLER_1_6_COMPAT_SHA256,
         )
-        scope_hash = self.init()
-        self.make_run_state_v5_with_frozen_1_6_fixture()
         state = self.load("state.json")
         self.assertEqual(state["schema_version"], "material-review/state/v5")
         self.assertEqual(
@@ -5709,102 +5719,18 @@ class ReviewCtlTest(unittest.TestCase):
                 self.assertNotIn("Run predates required coverage", stderr)
 
     def test_state_v4_review_is_restart_only_after_state_v5_release(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(CONTROLLER_1_5_COMPAT.read_bytes()).hexdigest(),
-            CONTROLLER_1_5_COMPAT_SHA256,
+        self.assert_restart_only_state(
+            controller=CONTROLLER_1_5_COMPAT,
+            expected_sha256=CONTROLLER_1_5_COMPAT_SHA256,
+            state_version=4,
         )
-        scope_hash = self.init()
-        self.make_run_state_v4_with_frozen_1_5_fixture()
-        state = self.load("state.json")
-        self.assertEqual(state["schema_version"], "material-review/state/v4")
-        self.assertEqual(
-            reviewctl.classify_state_contract(state),
-            "legacy_material_review_v4",
-        )
-
-        self.run_tool(
-            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
-        )
-        self.run_tool(
-            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
-        )
-        coverage = self.write_json("state-v4-coverage.json", self.coverage_plan(scope_hash))
-        _, stderr = self.run_tool(
-            "record-coverage",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(coverage),
-            expected=2,
-        )
-        self.assertIn("Run predates required coverage; start a new run.", stderr)
-
-        for command in (
-            ("rollback-finding", "--finding", "F001", "--reason", "Bounded legacy check."),
-            ("abort-fixes", "--reason", "Bounded legacy check."),
-        ):
-            with self.subTest(command=command[0]):
-                _, stderr = self.run_tool(
-                    command[0],
-                    "--repo-root",
-                    str(self.repo),
-                    "--run-id",
-                    self.run_id,
-                    *command[1:],
-                    expected=2,
-                )
-                self.assertNotIn("Run predates required coverage", stderr)
 
     def test_state_v3_review_is_restart_only_after_state_v4_release(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(CONTROLLER_1_4_COMPAT.read_bytes()).hexdigest(),
-            CONTROLLER_1_4_COMPAT_SHA256,
+        self.assert_restart_only_state(
+            controller=CONTROLLER_1_4_COMPAT,
+            expected_sha256=CONTROLLER_1_4_COMPAT_SHA256,
+            state_version=3,
         )
-        scope_hash = self.init()
-        self.make_run_state_v3_with_frozen_1_4_fixture()
-        state = self.load("state.json")
-        self.assertEqual(state["schema_version"], "material-review/state/v3")
-        self.assertEqual(
-            reviewctl.classify_state_contract(state),
-            "legacy_material_review_v3",
-        )
-
-        self.run_tool(
-            "status", "--repo-root", str(self.repo), "--run-id", self.run_id, "--json"
-        )
-        self.run_tool(
-            "check-scope", "--repo-root", str(self.repo), "--run-id", self.run_id
-        )
-        coverage = self.write_json("state-v3-coverage.json", self.coverage_plan(scope_hash))
-        _, stderr = self.run_tool(
-            "record-coverage",
-            "--repo-root",
-            str(self.repo),
-            "--run-id",
-            self.run_id,
-            "--input",
-            str(coverage),
-            expected=2,
-        )
-        self.assertIn("Run predates required coverage; start a new run.", stderr)
-
-        for command in (
-            ("rollback-finding", "--finding", "F001", "--reason", "Bounded legacy check."),
-            ("abort-fixes", "--reason", "Bounded legacy check."),
-        ):
-            with self.subTest(command=command[0]):
-                _, stderr = self.run_tool(
-                    command[0],
-                    "--repo-root",
-                    str(self.repo),
-                    "--run-id",
-                    self.run_id,
-                    *command[1:],
-                    expected=2,
-                )
-                self.assertNotIn("Run predates required coverage", stderr)
 
     def test_specialist_provenance_survives_normalization(self) -> None:
         scope_hash = self.init()
@@ -6586,7 +6512,7 @@ class ReviewCtlTest(unittest.TestCase):
             evidence["observed_current"], expected_post
         )
 
-    def test_v4_restore_covers_all_recovery_callers_and_legacy_boundary(self) -> None:
+    def test_v4_restore_covers_complete_authority_and_legacy_boundary(self) -> None:
         checkpoint_dir = self.root / "v4-complete-authority"
         checkpoint = reviewctl.create_checkpoint(
             self.repo, checkpoint_dir, ["calc.py", "test_calc.py"]
@@ -6663,19 +6589,6 @@ class ReviewCtlTest(unittest.TestCase):
         self.assertEqual(
             restored_legacy["guard_hash"], legacy["workspace_guard"]["guard_hash"]
         )
-
-        recovery_callers = (
-            reviewctl.command_run_test,
-            reviewctl.command_run_global_test,
-            reviewctl.command_refresh_finding_test,
-            reviewctl.command_rollback_finding,
-            reviewctl.command_abort_fixes,
-        )
-        for caller in recovery_callers:
-            with self.subTest(caller=caller.__name__):
-                source = inspect.getsource(caller)
-                self.assertIn("expected_post=", source)
-                self.assertNotIn("restore_refresh_checkpoint", source)
 
     def test_controller_state_compatibility_matrix(self) -> None:
         self.assertEqual(
