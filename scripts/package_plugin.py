@@ -30,6 +30,10 @@ from package_layout_contract import (  # noqa: E402
     regular_zip_external_attr,
     schema_version_is_supported,
 )
+from material_review_validation_contract import (  # noqa: E402
+    LAYOUT_NAMES,
+    normalize_review_layout,
+)
 from package_publication import (  # noqa: E402
     PublicationRecoveryError,
     allocate_owned_path as allocate_shared_owned_path,
@@ -59,7 +63,6 @@ MAINTAINER_ONLY_PREFIXES = (
     "evaluations/",
 )
 LAYOUT_MANIFEST_SOURCE = Path("skills/material-code-review/package-layouts.json")
-LAYOUT_NAMES = ("full-plugin", "standalone")
 
 
 def is_maintainer_only_path(relative: Path) -> bool:
@@ -138,39 +141,13 @@ def load_layout_manifest(root: Path) -> dict[str, dict[str, object]]:
         raise ValueError("layout manifest must define full-plugin and standalone")
     normalized_layouts: dict[str, dict[str, object]] = {}
     for layout_name in LAYOUT_NAMES:
-        layout = layouts[layout_name]
-        if not isinstance(layout, dict):
-            raise ValueError(f"layout {layout_name} must be an object")
-        canonical_skill = normalize_manifest_path(
-            layout.get("canonical_skill"),
-            f"canonical skill for {layout_name}",
+        normalized_layouts[layout_name] = normalize_review_layout(
+            layout_name,
+            layouts[layout_name],
+            path_label="manifest",
+            enforce_unique_mappings=False,
+            require_canonical_destination=False,
         )
-        mappings = layout.get("required_mappings")
-        if not isinstance(mappings, list) or not mappings:
-            raise ValueError(
-                f"layout {layout_name} required_mappings must be a non-empty array"
-            )
-        normalized_mappings: list[dict[str, str]] = []
-        for index, mapping in enumerate(mappings):
-            if not isinstance(mapping, dict) or set(mapping) != {
-                "source",
-                "destination",
-            }:
-                raise ValueError(
-                    f"layout {layout_name} mapping {index} must contain source and destination"
-                )
-            normalized_mappings.append(
-                {
-                    "source": normalize_manifest_path(mapping["source"], "source"),
-                    "destination": normalize_manifest_path(
-                        mapping["destination"], "destination"
-                    ),
-                }
-            )
-        normalized_layouts[layout_name] = {
-            "canonical_skill": canonical_skill,
-            "required_mappings": normalized_mappings,
-        }
     return normalized_layouts
 
 
@@ -180,31 +157,9 @@ def validate_layout_mappings(
     layout: object,
     generated_entries: list[tuple[Path, str]],
 ) -> None:
-    if not isinstance(layout, dict):
-        raise ValueError(f"layout {layout_name} must be an object")
-    canonical_skill = normalize_manifest_path(
-        layout.get("canonical_skill"),
-        f"canonical skill for {layout_name}",
-    )
-    mappings = layout.get("required_mappings")
-    if not isinstance(mappings, list) or not mappings:
-        raise ValueError(f"layout {layout_name} required_mappings must be a non-empty array")
-
-    seen_sources: set[str] = set()
-    seen_destinations: set[str] = set()
     required_pairs: list[tuple[Path, str]] = []
-    for index, mapping in enumerate(mappings):
-        if not isinstance(mapping, dict) or set(mapping) != {"source", "destination"}:
-            raise ValueError(f"layout {layout_name} mapping {index} must contain source and destination")
-        source = normalize_manifest_path(mapping["source"], "source")
-        destination = normalize_manifest_path(mapping["destination"], "destination")
-        if source in seen_sources:
-            raise ValueError(f"duplicate manifest source: {source}")
-        if destination in seen_destinations:
-            raise ValueError(f"duplicate manifest destination: {destination}")
-        seen_sources.add(source)
-        seen_destinations.add(destination)
 
+    def validate_mapping(source: str, destination: str) -> None:
         source_relative = Path(source)
         destination_relative = Path(destination)
         if is_maintainer_only_path(source_relative) or is_maintainer_only_path(
@@ -230,11 +185,12 @@ def validate_layout_mappings(
             raise ValueError(f"required source is missing: {source}")
         required_pairs.append((source_path.resolve(), destination))
 
-    if canonical_skill not in seen_destinations:
-        raise ValueError(
-            f"layout {layout_name} canonical skill is not a required destination: "
-            f"{canonical_skill}"
-        )
+    normalize_review_layout(
+        layout_name,
+        layout,
+        path_label="manifest",
+        validate_mapping=validate_mapping,
+    )
 
     generated_pairs = {
         (source.resolve(), normalize_manifest_path(destination, "generated destination"))

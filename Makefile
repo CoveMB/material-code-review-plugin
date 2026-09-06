@@ -14,7 +14,16 @@ else
 PACKAGE_LAYOUT_ARGUMENT := --distribution-layout
 endif
 SHELL_WRAPPERS := bin/material-reviewctl
+PYTHON_COMPILE_SOURCES := $(SKILL_DIR)/scripts/reviewctl.py $(SKILL_DIR)/scripts/material_review_validation_contract.py $(SKILL_DIR)/scripts/package_layout_contract.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_publication.py scripts/package_simplification_skill.py
 JSON_CHECK = $(PYTHON) -c 'import json,pathlib; ignored={".evaluation-runs", ".superpowers"}; [json.loads(p.read_text()) for p in pathlib.Path(".").rglob("*.json") if p.is_file() and (not p.parts or p.parts[0] not in ignored)]; print("JSON OK")'
+
+define PYTHON_COMPILE_AND_CLEAN
+	@status=0; clean_status=0; \
+	$(PYTHON) -m py_compile $(PYTHON_COMPILE_SOURCES) || status=$$?; \
+	$(MAKE) clean || clean_status=$$?; \
+	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	exit "$$clean_status"
+endef
 
 .PHONY: validate package package-simplification package-check test compile json shell clean
 
@@ -22,8 +31,7 @@ validate:
 	$(MAKE) clean
 	$(PYTHON) scripts/validate_package.py --package-root . $(PACKAGE_LAYOUT_ARGUMENT)
 	$(PYTHON) $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py
-	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SKILL_DIR)/scripts/package_layout_contract.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_publication.py scripts/package_simplification_skill.py
-	$(MAKE) clean
+	$(PYTHON_COMPILE_AND_CLEAN)
 	$(JSON_CHECK)
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 	$(PYTHON) -B -m unittest discover -s $(SKILL_DIR)/tests -p 'test_*.py' -v
@@ -49,7 +57,7 @@ package-check:
 	@for wrapper in $(SHELL_WRAPPERS); do bash -n "$$wrapper" || exit $$?; done
 
 compile:
-	$(PYTHON) -m py_compile $(SKILL_DIR)/scripts/reviewctl.py $(SKILL_DIR)/scripts/package_layout_contract.py $(SIMPLIFY_SKILL_DIR)/scripts/simplifyctl.py $(SIMPLIFY_SKILL_DIR)/scripts/validate_package.py scripts/validate_package.py scripts/package_plugin.py scripts/package_publication.py scripts/package_simplification_skill.py
+	$(PYTHON_COMPILE_AND_CLEAN)
 
 json:
 	$(JSON_CHECK)

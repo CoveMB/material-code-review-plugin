@@ -4174,6 +4174,172 @@ class StandalonePackagingTests(unittest.TestCase):
                     b"existing standalone checksum",
                 )
 
+    def test_review_layout_normalization_diagnostics_are_stable_across_consumers(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "mapping-shape-before-canonical",
+                "shape",
+                "layout full-plugin mapping 0 must contain source and destination",
+                "layout full-plugin mapping 0 must contain source and destination",
+            ),
+            (
+                "unsafe-path-before-duplicate",
+                "unsafe-duplicate",
+                "unsafe manifest destination: ../escape.md",
+                "unsafe layout destination: ../escape.md",
+            ),
+            (
+                "duplicate-source-before-destination",
+                "duplicate",
+                "duplicate manifest source: .agents/plugins/marketplace.json",
+                "duplicate layout source: .agents/plugins/marketplace.json",
+            ),
+            (
+                "canonical-after-mappings",
+                "canonical",
+                "layout full-plugin canonical skill is not a required destination: missing/SKILL.md",
+                "layout full-plugin canonical skill is not a required destination: missing/SKILL.md",
+            ),
+        )
+        for label, mutation, packager_error, validator_error in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                manifest = self.expected_review_layout_manifest(fixture_root)
+                layout = manifest["layouts"]["full-plugin"]
+                mappings = layout["required_mappings"]
+                first_mapping = dict(mappings[0])
+
+                if mutation == "shape":
+                    layout["canonical_skill"] = "missing/SKILL.md"
+                    mappings[0] = {"source": first_mapping["source"]}
+                elif mutation == "unsafe-duplicate":
+                    mappings.append(
+                        {
+                            "source": first_mapping["source"],
+                            "destination": "../escape.md",
+                        }
+                    )
+                elif mutation == "duplicate":
+                    mappings.append(first_mapping)
+                else:
+                    layout["canonical_skill"] = "missing/SKILL.md"
+                self.write_review_layout_manifest(fixture_root, manifest)
+
+                packager_result = self.run_full_packager(
+                    fixture_root,
+                    temp_root / "full-plugin.zip",
+                    standalone_output=temp_root / "material-review.zip",
+                )
+                source_result = self.run_package_validator(fixture_root)
+                embedded_result = self.run_review_validator(fixture_root)
+
+                self.assertNotEqual(packager_result.returncode, 0)
+                self.assertIn(packager_error, packager_result.stderr)
+                for result in (source_result, embedded_result):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(validator_error, result.stderr)
+
+    def test_review_layout_policy_failures_precede_canonical_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            manifest = self.expected_review_layout_manifest(fixture_root)
+            layout = manifest["layouts"]["full-plugin"]
+            layout["canonical_skill"] = "missing/SKILL.md"
+            layout["required_mappings"][0]["source"] = (
+                ".agents/skills/material-review-evaluation/SKILL.md"
+            )
+            self.write_review_layout_manifest(fixture_root, manifest)
+
+            packager_result = self.run_full_packager(
+                fixture_root,
+                temp_root / "full-plugin.zip",
+                standalone_output=temp_root / "material-review.zip",
+            )
+            source_result = self.run_package_validator(fixture_root)
+
+            self.assertNotEqual(packager_result.returncode, 0)
+            self.assertIn("maintainer-only manifest mapping:", packager_result.stderr)
+            self.assertNotIn("canonical skill is not", packager_result.stderr)
+            self.assertNotEqual(source_result.returncode, 0)
+            self.assertIn("maintainer-only layout mapping:", source_result.stderr)
+            self.assertNotIn("canonical skill is not", source_result.stderr)
+
+    def test_standalone_review_validator_rejects_malformed_nonselected_layouts(
+        self,
+    ) -> None:
+        cases = (
+            ("full-plugin", "standalone"),
+            ("standalone", "full-plugin"),
+        )
+        for selected_layout, invalid_layout in cases:
+            with self.subTest(selected=selected_layout), tempfile.TemporaryDirectory() as temp_directory:
+                temp_root = Path(temp_directory)
+                fixture_root = self.create_full_plugin_fixture(temp_root)
+                manifest = self.expected_review_layout_manifest(fixture_root)
+                first_mapping = manifest["layouts"][invalid_layout][
+                    "required_mappings"
+                ][0]
+                manifest["layouts"][invalid_layout]["required_mappings"][0] = {
+                    "source": first_mapping["source"]
+                }
+                self.write_review_layout_manifest(fixture_root, manifest)
+
+                if selected_layout == "full-plugin":
+                    result = self.run_review_validator(fixture_root)
+                else:
+                    standalone_root = temp_root / "standalone-review"
+                    shutil.copytree(
+                        fixture_root / "skills/material-code-review",
+                        standalone_root,
+                    )
+                    for contract in sorted(STANDALONE_REVIEW_FIXED_CONTRACTS):
+                        shutil.copy2(
+                            fixture_root / contract,
+                            standalone_root / contract,
+                        )
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-B",
+                            str(standalone_root / "scripts/validate_package.py"),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"layout {invalid_layout} mapping 0 must contain source and destination",
+                    result.stderr,
+                )
+
+    def test_review_workflow_validators_preserve_binary_error_semantics(self) -> None:
+        validator_modules = (
+            self.load_fixture_module(PACKAGE_VALIDATOR, "source_contract_validator"),
+            self.load_fixture_module(REVIEW_VALIDATOR, "standalone_contract_validator"),
+        )
+        for validator in validator_modules:
+            with self.subTest(validator=validator.__name__):
+                self.assertEqual(
+                    validator.validate_workflow_discovery_order(
+                        b"\xff",
+                        "references/workflow.md",
+                    ),
+                    "references/workflow.md: workflow discovery order has invalid UTF-8",
+                )
+                self.assertEqual(
+                    validator.validate_obligation_workflow_contract(
+                        b"\xff",
+                        "SKILL.md",
+                    ),
+                    "SKILL.md: obligation workflow contract has invalid UTF-8",
+                )
+
     def test_review_archives_reject_each_missing_required_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
@@ -5243,6 +5409,43 @@ class StandalonePackagingTests(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("material-reviewctl", result.stdout + result.stderr)
+
+    def test_make_compile_cleans_bytecode_after_compiler_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+            wrapper = fixture_root / "compiler-wrapper.py"
+            wrapper.write_text(
+                """#!/usr/bin/env python3
+from pathlib import Path
+import os
+import sys
+
+if sys.argv[1:3] == [\"-m\", \"py_compile\"]:
+    cache = Path.cwd() / \"skills/material-code-review/scripts/__pycache__\"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / \"partial.pyc\").write_bytes(b\"partial bytecode\")
+    raise SystemExit(23)
+os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+""",
+                encoding="utf-8",
+            )
+            wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+
+            result = subprocess.run(
+                ["make", "compile", f"PYTHON={wrapper}"],
+                cwd=fixture_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Error 23", result.stdout + result.stderr)
+            self.assertFalse(
+                any(fixture_root.rglob("__pycache__")),
+                result.stdout + result.stderr,
+            )
 
     def test_extracted_full_archive_shell_targets_check_only_shipped_wrappers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
