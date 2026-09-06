@@ -1380,7 +1380,9 @@ class SimplifyCtlTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.run_id = "simplification-v1-delegated-change"
-        state = self.complete_full_gated_repair_lifecycle("--scope", "uncommitted")
+        state = self.complete_full_gated_repair_lifecycle(
+            "--scope", "uncommitted", exercise_restoration=True
+        )
         self.assertEqual(self.load("scope.json")["identity"]["actual_scope"], "uncommitted")
         self.assertEqual(state["schema_version"], "material-review/state/v1")
         self.assertEqual(state["profile"], "material-code-simplification")
@@ -1388,7 +1390,10 @@ class SimplifyCtlTest(unittest.TestCase):
         self.assertNotIn("workflow_profile", state)
         self.assertFalse((self.run_dir / "coverage-plan.json").exists())
         history = state["finding_status"]["F001"]["history"]
-        self.assertEqual([entry["outcome"] for entry in history], ["fixed"])
+        self.assertEqual(
+            [entry["outcome"] for entry in history],
+            ["rolled_back", "fixed"],
+        )
 
         (self.repo / "src" / "service.py").write_text(
             "def value():\n    return 1\n# ambiguous delegated scope\n", encoding="utf-8"
