@@ -992,6 +992,107 @@ class ReviewCtlTest(unittest.TestCase):
             "max_repair_rounds": 1,
         }
 
+    def dependency_plan_inputs(
+        self,
+        dependency_map: dict[str, list[str]],
+    ) -> tuple[dict, dict, dict, dict]:
+        scope_hash = self.reach_adjudicated(include_style=False)
+        source_ledger = self.load("ledger.json")
+        gate_hash = "d" * 64
+        plan = self.plan_payload(scope_hash, gate_hash)
+
+        finding_template = source_ledger["findings"][0]
+        item_template = plan["items"][0]
+        finding_ids = list(dependency_map)
+        findings = []
+        plan["items"] = []
+
+        for finding_id in finding_ids:
+            finding = copy.deepcopy(finding_template)
+            finding["finding_id"] = finding_id
+            findings.append(finding)
+
+            item = copy.deepcopy(item_template)
+            item["finding_id"] = finding_id
+            item["depends_on"] = dependency_map[finding_id]
+            plan["items"].append(item)
+
+        state = {"scope_hash": scope_hash}
+        findings_gate = {
+            "receipt_hash": gate_hash,
+            "decisions": {"approved": finding_ids},
+        }
+        ledger = {"findings": findings}
+        return plan, state, findings_gate, ledger
+
+    def test_fix_plan_dependency_graph_accepts_1100_node_acyclic_chain(self) -> None:
+        node_count = 1_100
+        finding_ids = [f"F{index:04d}" for index in range(node_count)]
+        dependencies = {
+            finding_id: ([finding_ids[index + 1]] if index + 1 < node_count else [])
+            for index, finding_id in enumerate(finding_ids)
+        }
+        plan, state, findings_gate, ledger = self.dependency_plan_inputs(dependencies)
+
+        normalized = reviewctl.validate_fix_plan(
+            plan,
+            repo=self.repo,
+            state=state,
+            findings_gate=findings_gate,
+            ledger=ledger,
+        )
+
+        self.assertEqual(len(normalized["items"]), node_count)
+
+    def test_fix_plan_dependency_graph_rejects_deep_cycle_with_stable_error(self) -> None:
+        node_count = 1_100
+        finding_ids = [f"F{index:04d}" for index in range(node_count)]
+        dependencies = {
+            finding_id: [finding_ids[(index + 1) % node_count]]
+            for index, finding_id in enumerate(finding_ids)
+        }
+        plan, state, findings_gate, ledger = self.dependency_plan_inputs(dependencies)
+
+        with self.assertRaisesRegex(
+            reviewctl.ReviewError,
+            r"^Fix plan dependency graph contains a cycle$",
+        ):
+            reviewctl.validate_fix_plan(
+                plan,
+                repo=self.repo,
+                state=state,
+                findings_gate=findings_gate,
+                ledger=ledger,
+            )
+
+    def test_fix_plan_dependency_graph_preserves_dependency_errors(self) -> None:
+        plan, state, findings_gate, ledger = self.dependency_plan_inputs({"F0000": []})
+
+        error_cases = (
+            (
+                "unknown",
+                "F9999",
+                r"^Plan item F0000 depends on unapproved IDs: F9999$",
+            ),
+            (
+                "self",
+                "F0000",
+                r"^fix plan\.items\[0\]: finding cannot depend on itself$",
+            ),
+        )
+        for name, dependency, expected_error in error_cases:
+            with self.subTest(name=name):
+                case_plan = copy.deepcopy(plan)
+                case_plan["items"][0]["depends_on"] = [dependency]
+                with self.assertRaisesRegex(reviewctl.ReviewError, expected_error):
+                    reviewctl.validate_fix_plan(
+                        case_plan,
+                        repo=self.repo,
+                        state=state,
+                        findings_gate=findings_gate,
+                        ledger=ledger,
+                    )
+
     def approve_and_plan(
         self,
         *,
