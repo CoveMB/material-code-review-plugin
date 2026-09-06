@@ -3009,6 +3009,32 @@ class StandalonePackagingTests(unittest.TestCase):
                         validation_result.stderr,
                     )
 
+        evaluation_markers = (
+            "361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957",
+            "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+            "evaluations/material-code-review/cases/missed-contracts.json",
+        )
+        for missing_marker in evaluation_markers:
+            with self.subTest(missing_evaluation_marker=missing_marker), tempfile.TemporaryDirectory() as temp_directory:
+                fixture_root = self.create_full_plugin_fixture(Path(temp_directory))
+                overview = fixture_root / "EVALUATION.md"
+                text = overview.read_text(encoding="utf-8")
+                overview.write_text(
+                    text.replace(missing_marker, "", 1),
+                    encoding="utf-8",
+                )
+
+                validation_result = self.run_package_validator(
+                    fixture_root,
+                    distribution_layout=False,
+                )
+
+                self.assertNotEqual(validation_result.returncode, 0)
+                self.assertIn(
+                    "EVALUATION.md lacks a required frozen-case overview marker",
+                    validation_result.stderr,
+                )
+
     @unittest.skipIf(
         DISTRIBUTION_LAYOUT,
         "maintainer evaluator is absent from distribution layouts",

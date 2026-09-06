@@ -195,6 +195,11 @@ EVALUATOR_ROOT_OVERVIEW_MARKERS = (
     "Raw evidence remains under ignored `.evaluation-runs/`, may contain machine-specific or private data, and is not automatically sanitized.",
     "The evaluator skill, evaluation assets, and run data are excluded from every full and standalone release archive.",
 )
+EVALUATOR_EVALUATION_OVERVIEW_MARKERS = (
+    "361e1740fa164fafc590e7dc8903a87b069592cb..3050f047c4cb1a7b32237844ec7cf68a5675c957",
+    "evaluations/material-code-review/cases/discogs-custom-playlists.json",
+    "evaluations/material-code-review/cases/missed-contracts.json",
+)
 EVALUATOR_GATE_DISPOSITION_CONTRACT_START = (
     "<!-- evaluator-gate-disposition-contract:start"
 )
@@ -642,6 +647,14 @@ def validate_maintainer_evaluator_root_overviews(
             fail(
                 errors,
                 f"{relative} lacks a required maintainer evaluator overview marker",
+            )
+        if relative == "EVALUATION.md" and any(
+            marker not in text
+            for marker in EVALUATOR_EVALUATION_OVERVIEW_MARKERS
+        ):
+            fail(
+                errors,
+                "EVALUATION.md lacks a required frozen-case overview marker",
             )
 
 
