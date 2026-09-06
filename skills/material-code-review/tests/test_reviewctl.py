@@ -1043,6 +1043,16 @@ class ReviewCtlTest(unittest.TestCase):
         )
 
         self.assertEqual(len(normalized["items"]), node_count)
+        self.assertEqual(
+            [
+                (item["finding_id"], item["depends_on"])
+                for item in normalized["items"]
+            ],
+            [
+                (item["finding_id"], item["depends_on"])
+                for item in plan["items"]
+            ],
+        )
 
     def test_fix_plan_dependency_graph_rejects_deep_cycle_with_stable_error(self) -> None:
         node_count = 1_100
