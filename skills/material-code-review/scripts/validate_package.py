@@ -15,76 +15,22 @@ from static_version_contract import (  # noqa: E402
 )
 from package_layout_contract import (  # noqa: E402
     local_schema_reference_errors,
-    normalize_package_path,
     schema_version_is_supported,
 )
+from material_review_validation_contract import (  # noqa: E402
+    ACTIVATION_DISCOVERY_DESCRIPTION,
+    ACTIVATION_PREFLIGHT_MARKERS,
+    ACTIVATION_SHORT_DESCRIPTION,
+    CONTROLLED_WORKFLOW_MARKERS,
+    LAYOUT_NAMES,
+    normalize_review_layout,
+    validate_obligation_workflow_contract,
+    validate_workflow_discovery_order,
+)
 VERSION = "1.7.0"
-ACTIVATION_DISCOVERY_DESCRIPTION = (
-    "Evidence-gated review and bounded repair of a concrete Git change scope. "
-    "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
-    "for material defects, regressions, test gaps protecting changed behavior, or merge readiness. "
-    "Do not implicitly use for document or generated-output review, output diagnosis, general skill, "
-    "plugin, or repository analysis, architecture exploration, or planning-only work."
-)
-ACTIVATION_SHORT_DESCRIPTION = "Material-defect review of Git changes"
-ACTIVATION_PREFLIGHT_MARKERS = (
-    "## Activation eligibility preflight",
-    "**Implicit eligibility requires both conditions in the prompt itself.**",
-    "**Context cannot create eligibility.**",
-    "**Fail closed before initialization.**",
-)
-CONTROLLED_WORKFLOW_MARKERS = (
-    "material-review/state/v6",
-    "material-review/coverage-plan/v5",
-    "material-review/candidate-set/v6",
-    "material-review/candidates-normalized/v6",
-    "canonical_owner",
-    "affected_consumers",
-    "scenario_checks",
-    "required_review_paths",
-    "required_checks",
-    "change_units",
-    "review_obligations",
-    "assignment_id",
-    "check_results",
-    "record-coverage",
-    "user_selectable_output_paths",
-    "persisted_config_semantics",
-    "runtime_target_derivation_parity",
-    "validation_to_mutation_identity_stability",
-    "Missing required assignment coverage",
-    "CONSEQUENCE_UNSUPPORTED",
-    "plausibly blocker/high",
-)
-OBLIGATION_WORKFLOW_BLOCK_START = (
-    "<!-- material-review-obligation-workflow-contract:start -->"
-)
-OBLIGATION_WORKFLOW_BLOCK_END = (
-    "<!-- material-review-obligation-workflow-contract:end -->"
-)
-OBLIGATION_WORKFLOW_CONTRACT_LINES = (
-    "check_contracts=controller-derived",
-    "obligation_check_results=evidence_items",
-    "obligation_evidence_paths=all_required_review_paths",
-)
-WORKFLOW_BLOCK_START = "Discovery order is fixed:\n\n```text\n"
-WORKFLOW_BLOCK_END = "\n```"
-WORKFLOW_DISCOVERY_MARKERS = (
-    "init",
-    "context record and change-unit inventory (manual; see references/context-checklist.md)",
-    'python3 "$SKILL_DIR/scripts/reviewctl.py" check-scope --repo-root .',
-    "record-coverage",
-    "dispatch assignments",
-    "ingest one complete assignment-matched wave",
-)
-LAYOUT_NAMES = ("full-plugin", "standalone")
 LAYOUT_MANIFEST_NAME = "package-layouts.json"
 VALIDATOR_SOURCE = "skills/material-code-review/scripts/validate_package.py"
 MANIFEST_SOURCE = "skills/material-code-review/package-layouts.json"
-
-
-def normalize_layout_path(value: object, label: str) -> str:
-    return normalize_package_path(value, f"layout {label}")
 
 
 def load_layout_contract(
@@ -127,51 +73,11 @@ def load_layout_contract(
     normalized_layouts: dict[str, dict[str, object]] = {}
     try:
         for manifest_layout_name in LAYOUT_NAMES:
-            layout = layouts[manifest_layout_name]
-            if not isinstance(layout, dict):
-                raise ValueError(f"layout {manifest_layout_name} must be an object")
-            canonical_skill = normalize_layout_path(
-                layout.get("canonical_skill"),
-                f"canonical skill for {manifest_layout_name}",
+            normalized_layouts[manifest_layout_name] = normalize_review_layout(
+                manifest_layout_name,
+                layouts[manifest_layout_name],
+                path_label="layout",
             )
-            mappings = layout.get("required_mappings")
-            if not isinstance(mappings, list) or not mappings:
-                raise ValueError(
-                    f"layout {manifest_layout_name} required_mappings must be a non-empty array"
-                )
-            seen_sources: set[str] = set()
-            seen_destinations: set[str] = set()
-            normalized_mappings: list[dict[str, str]] = []
-            for index, mapping in enumerate(mappings):
-                if not isinstance(mapping, dict) or set(mapping) != {
-                    "source",
-                    "destination",
-                }:
-                    raise ValueError(
-                        f"layout {manifest_layout_name} mapping {index} must contain source and destination"
-                    )
-                source = normalize_layout_path(mapping["source"], "source")
-                destination = normalize_layout_path(
-                    mapping["destination"], "destination"
-                )
-                if source in seen_sources:
-                    raise ValueError(f"duplicate layout source: {source}")
-                if destination in seen_destinations:
-                    raise ValueError(f"duplicate layout destination: {destination}")
-                seen_sources.add(source)
-                seen_destinations.add(destination)
-                normalized_mappings.append(
-                    {"source": source, "destination": destination}
-                )
-            if canonical_skill not in seen_destinations:
-                raise ValueError(
-                    f"layout {manifest_layout_name} canonical skill is not a required destination: "
-                    f"{canonical_skill}"
-                )
-            normalized_layouts[manifest_layout_name] = {
-                "canonical_skill": canonical_skill,
-                "required_mappings": normalized_mappings,
-            }
     except ValueError as exc:
         errors.append(f"invalid package layout manifest: {exc}")
         return None
@@ -214,61 +120,6 @@ def load_layout_contract(
             f"{manifest_destination}; expected {expected_manifest_destination}"
         )
     return layout_name, package_root, layout
-
-
-def validate_workflow_discovery_order(
-    source: str | bytes,
-    inspected_path: str,
-) -> str | None:
-    if isinstance(source, bytes):
-        try:
-            source = source.decode("utf-8")
-        except UnicodeDecodeError:
-            return f"{inspected_path}: workflow discovery order has invalid UTF-8"
-    if source.count(WORKFLOW_BLOCK_START) != 1:
-        return f"{inspected_path}: workflow discovery order block missing or duplicate"
-    block, separator, _ = source.split(WORKFLOW_BLOCK_START, 1)[1].partition(
-        WORKFLOW_BLOCK_END
-    )
-    if not separator:
-        return f"{inspected_path}: workflow discovery order block is unterminated"
-    lines = block.splitlines()
-    for marker in WORKFLOW_DISCOVERY_MARKERS:
-        if lines.count(marker) != 1:
-            return (
-                f"{inspected_path}: workflow discovery order marker missing or "
-                f"duplicate: {marker}"
-            )
-    positions = [lines.index(marker) for marker in WORKFLOW_DISCOVERY_MARKERS]
-    if positions != sorted(positions):
-        return f"{inspected_path}: workflow discovery order markers out of order"
-    return None
-
-
-def validate_obligation_workflow_contract(
-    source: str | bytes,
-    inspected_path: str,
-) -> str | None:
-    if isinstance(source, bytes):
-        try:
-            source = source.decode("utf-8")
-        except UnicodeDecodeError:
-            return f"{inspected_path}: obligation workflow contract has invalid UTF-8"
-    if (
-        source.count(OBLIGATION_WORKFLOW_BLOCK_START) != 1
-        or source.count(OBLIGATION_WORKFLOW_BLOCK_END) != 1
-    ):
-        return f"{inspected_path}: obligation workflow contract block missing or duplicate"
-    block, separator, _ = source.split(
-        OBLIGATION_WORKFLOW_BLOCK_START,
-        1,
-    )[1].partition(OBLIGATION_WORKFLOW_BLOCK_END)
-    if not separator:
-        return f"{inspected_path}: obligation workflow contract block is unterminated"
-    expected = "\n" + "\n".join(OBLIGATION_WORKFLOW_CONTRACT_LINES) + "\n"
-    if block != expected:
-        return f"{inspected_path}: obligation workflow contract entries are malformed"
-    return None
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:

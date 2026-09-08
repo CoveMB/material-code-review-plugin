@@ -288,6 +288,10 @@
           "source": "skills/material-code-review/schemas/verification.schema.json"
         },
         {
+          "destination": "skills/material-code-review/scripts/material_review_validation_contract.py",
+          "source": "skills/material-code-review/scripts/material_review_validation_contract.py"
+        },
+        {
           "destination": "skills/material-code-review/scripts/obligation_contract.py",
           "source": "skills/material-code-review/scripts/obligation_contract.py"
         },
@@ -583,6 +587,10 @@
         {
           "destination": "schemas/verification.schema.json",
           "source": "skills/material-code-review/schemas/verification.schema.json"
+        },
+        {
+          "destination": "scripts/material_review_validation_contract.py",
+          "source": "skills/material-code-review/scripts/material_review_validation_contract.py"
         },
         {
           "destination": "scripts/obligation_contract.py",
