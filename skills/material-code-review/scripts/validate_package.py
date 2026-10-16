@@ -179,8 +179,10 @@ def main() -> int:
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 errors.append(f"SKILL.md activation preflight missing marker: {marker}")
+        discovery = ROOT / "references/review-discovery.md"
+        workflow_text = text + ("\n" + discovery.read_text(encoding="utf-8") if discovery.is_file() else "")
         for marker in CONTROLLED_WORKFLOW_MARKERS:
-            if marker not in text:
+            if marker not in workflow_text:
                 errors.append(f"SKILL.md controlled workflow marker missing: {marker}")
         obligation_workflow_error = validate_obligation_workflow_contract(
             text,

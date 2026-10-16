@@ -192,6 +192,10 @@
           "source": "skills/material-code-review/references/planner-template.md"
         },
         {
+          "destination": "skills/material-code-review/references/postfix-verification.md",
+          "source": "skills/material-code-review/references/postfix-verification.md"
+        },
+        {
           "destination": "skills/material-code-review/references/postfix-verifier-template.md",
           "source": "skills/material-code-review/references/postfix-verifier-template.md"
         },
@@ -206,6 +210,18 @@
         {
           "destination": "skills/material-code-review/references/remediation-rubric.md",
           "source": "skills/material-code-review/references/remediation-rubric.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/repair-execution.md",
+          "source": "skills/material-code-review/references/repair-execution.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/repair-planning.md",
+          "source": "skills/material-code-review/references/repair-planning.md"
+        },
+        {
+          "destination": "skills/material-code-review/references/review-discovery.md",
+          "source": "skills/material-code-review/references/review-discovery.md"
         },
         {
           "destination": "skills/material-code-review/references/review-obligations.md",
@@ -493,6 +509,10 @@
           "source": "skills/material-code-review/references/planner-template.md"
         },
         {
+          "destination": "references/postfix-verification.md",
+          "source": "skills/material-code-review/references/postfix-verification.md"
+        },
+        {
           "destination": "references/postfix-verifier-template.md",
           "source": "skills/material-code-review/references/postfix-verifier-template.md"
         },
@@ -507,6 +527,18 @@
         {
           "destination": "references/remediation-rubric.md",
           "source": "skills/material-code-review/references/remediation-rubric.md"
+        },
+        {
+          "destination": "references/repair-execution.md",
+          "source": "skills/material-code-review/references/repair-execution.md"
+        },
+        {
+          "destination": "references/repair-planning.md",
+          "source": "skills/material-code-review/references/repair-planning.md"
+        },
+        {
+          "destination": "references/review-discovery.md",
+          "source": "skills/material-code-review/references/review-discovery.md"
         },
         {
           "destination": "references/review-obligations.md",

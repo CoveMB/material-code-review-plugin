@@ -1528,8 +1528,10 @@ def check_source_package(
         for marker in ACTIVATION_PREFLIGHT_MARKERS:
             if marker not in text:
                 fail(errors, f"canonical skill activation preflight missing marker: {marker}")
+        discovery = canonical.parent / "references/review-discovery.md"
+        workflow_text = text + ("\n" + discovery.read_text(encoding="utf-8") if discovery.is_file() else "")
         for marker in CONTROLLED_WORKFLOW_MARKERS:
-            if marker not in text:
+            if marker not in workflow_text:
                 fail(errors, f"canonical skill controlled workflow marker missing: {marker}")
         obligation_workflow_error = validate_obligation_workflow_contract(
             text,

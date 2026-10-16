@@ -1729,6 +1729,7 @@ class StandalonePackagingTests(unittest.TestCase):
             with zipfile.ZipFile(review_archive) as archive:
                 review_names = set(archive.namelist())
                 review_skill = archive.read("SKILL.md").decode("utf-8")
+                review_discovery = archive.read("references/review-discovery.md").decode("utf-8")
                 review_adjudicator = archive.read(
                     "references/adjudicator-template.md"
                 ).decode("utf-8")
@@ -1737,7 +1738,8 @@ class StandalonePackagingTests(unittest.TestCase):
                 )
             self.assertIn("schemas/adjudication-v4.schema.json", review_names)
             self.assertIn("scripts/reviewctl.py", review_names)
-            self.assertIn("schemas/adjudication-v4.schema.json", review_skill)
+            self.assertIn("references/review-discovery.md", review_skill)
+            self.assertIn("schemas/adjudication-v4.schema.json", review_discovery)
             self.assertIn("schemas/adjudication-v4.schema.json", review_adjudicator)
             self.assertEqual(
                 review_schema["properties"]["schema_version"]["const"],

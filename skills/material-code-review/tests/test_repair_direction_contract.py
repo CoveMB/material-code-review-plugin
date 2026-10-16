@@ -75,7 +75,7 @@ class RepairDirectionContractTests(unittest.TestCase):
             reviewctl.validate_repair_direction(value, "group.repair_direction", required=True)
 
     def test_skill_requires_a_bound_audit_for_every_retained_group(self) -> None:
-        skill_text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        skill_text = (ROOT / "references/review-discovery.md").read_text(encoding="utf-8")
         self.assertIn("#### 2.2 Provisional grouping and disposition", skill_text)
         self.assertIn("#### 2.3 Repair-direction audit", skill_text)
         self.assertIn("Require a fresh repair-direction audit for every provisionally kept group", skill_text)

@@ -20,6 +20,9 @@ class DiscoveryContractTests(unittest.TestCase):
     def read(self, relative: str) -> str:
         return (SKILL_DIR / relative).read_text(encoding="utf-8")
 
+    def read_workflow(self) -> str:
+        return self.read("SKILL.md") + "\n" + self.read("references/review-discovery.md")
+
     def assert_materiality_rubric_strict_guard_states(self, rubric: str) -> None:
         self.assertRegex(
             rubric,
@@ -90,7 +93,7 @@ class DiscoveryContractTests(unittest.TestCase):
         )
 
     def test_discovery_contract_requires_change_units_and_obligations(self) -> None:
-        text = self.read("SKILL.md")
+        text = self.read_workflow()
         for marker in (
             "material-review/state/v6",
             "material-review/coverage-plan/v5",
@@ -170,7 +173,7 @@ class DiscoveryContractTests(unittest.TestCase):
         self.assertIn("Filenames are discovery hints only", guidance)
         self.assertIn("does not prove reviewer cognition", guidance)
 
-        skill = self.read("SKILL.md")
+        skill = self.read_workflow()
         reviewer = self.read("references/reviewer-template.md")
         for text in (skill, reviewer):
             self.assertIn("Each outcome accounts only for its named check", text)
@@ -201,7 +204,7 @@ class DiscoveryContractTests(unittest.TestCase):
                 self.assertIn(marker, reviewer)
 
     def test_specialist_selection_is_exhaustive_and_assignment_bound(self) -> None:
-        skill = self.read("SKILL.md")
+        skill = self.read_workflow()
         context = self.read("references/context-checklist.md")
         reviewer = self.read("references/reviewer-template.md")
         workflow = self.read("references/workflow.md")
@@ -276,7 +279,7 @@ class DiscoveryContractTests(unittest.TestCase):
             self.assertIn(marker, migration)
 
     def test_strict_guard_rule_preserves_high_impact_uncertainty(self) -> None:
-        skill = self.read("SKILL.md")
+        skill = self.read_workflow()
         adjudicator = self.read("references/adjudicator-template.md")
         for text in (skill, adjudicator):
             self.assertIn("A stricter guard is a defect only with affirmative supported-state evidence.", text)
@@ -344,7 +347,7 @@ class DiscoveryContractTests(unittest.TestCase):
         self.assert_materiality_rubric_strict_guard_states(unrelated_prose_change)
 
     def test_dispatch_binds_assigned_reviewer_identity(self) -> None:
-        skill = self.read("SKILL.md")
+        skill = self.read_workflow()
         reviewer = self.read("references/reviewer-template.md")
         for text in (skill, reviewer):
             self.assertIn("assigned `reviewer_id`, `independence_group`, and `review_mode`", text)
