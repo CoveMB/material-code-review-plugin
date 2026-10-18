@@ -1,6 +1,6 @@
 ---
 name: material-code-simplification
-description: 'Evidence-gated, behavior-preserving simplification and refactoring of bounded codebase or change scopes. Maps architecture and contracts, captures code-bloat and complexity candidates, independently validates and adjudicates every candidate, requires two explicit user approvals, plans characterization and regression tests, applies checkpointed edits, and stops without recursive cleanup. Use for AI-assisted or conventionally written codebases when meaningful deletion, consolidation, inlining, dependency reduction, restructuring, or tightly bounded rewriting may reduce present maintenance cost.'
+description: "Use for evidence-gated, behavior-preserving simplification/refactoring of bounded codebases or changes: deletion, consolidation, inlining, dependency reduction, restructuring, or bounded rewriting that reduces current maintenance cost. Requires two explicit user approvals."
 argument-hint: "[scope:codebase|auto|uncommitted|branch|range] [path:<repo-relative>]... [exclude-path:<repo-relative>]... [max-files:<n>] [max-bytes:<n>] [base:<ref>] [head:<ref>] [depth:auto|full] [rewrite:deny|allow] [external-review:off|ask]"
 ---
 

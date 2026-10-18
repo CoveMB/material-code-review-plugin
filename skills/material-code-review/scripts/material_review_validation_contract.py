@@ -8,13 +8,7 @@ from collections.abc import Callable
 from package_layout_contract import normalize_package_path
 
 
-ACTIVATION_DISCOVERY_DESCRIPTION = (
-    "Evidence-gated review and bounded repair of a concrete Git change scope. "
-    "Implicitly use only to assess uncommitted changes, a branch or diff, a local ref range, or a PR "
-    "for material defects, regressions, test gaps protecting changed behavior, or merge readiness. "
-    "Do not implicitly use for document or generated-output review, output diagnosis, general skill, "
-    "plugin, or repository analysis, architecture exploration, or planning-only work."
-)
+ACTIVATION_DISCOVERY_DESCRIPTION = 'Review concrete Git changes (uncommitted, branch/diff, ref range, or PR) for material defects, regressions, behavior-protecting test gaps, or merge readiness, with evidence-gated repair. Implicit use excludes document/generated-output review, output diagnosis, general skill/plugin/repository analysis, architecture exploration, and planning-only work.'
 ACTIVATION_SHORT_DESCRIPTION = "Material-defect review of Git changes"
 ACTIVATION_PREFLIGHT_MARKERS = (
     "## Activation eligibility preflight",
