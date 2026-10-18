@@ -2,8 +2,8 @@
 
 Maintainer exercise, frozen packet revision 1. Prepared against commit
 `d4bb95facba06414b514c1edeb89be8de2f4cc2d` (full plugin 1.7.0).
-No cases have run. This exercise does not invoke material-code-review, the
-version evaluator, or a controller. It supplies no native findings, gate
+I1 froze the inputs; one five-case baseline was collected on 2026-10-18.
+This exercise does not invoke material-code-review, the version evaluator, or a controller. It supplies no native findings, gate
 receipts, clearance, merge readiness, installed-usability evidence, or proof
 that executable operations behaved safely.
 
@@ -406,8 +406,8 @@ on baseline evidence; apply only justified production edits with relevant checks
 
 ## Execution evidence and retention boundary
 
-No baseline, candidate confirmation or benefit result is recorded here. Record
-summaries here after execution; raw responses, reports, local paths,
+The baseline and decision below are source-only observations; no candidate
+confirmation or benefit result is claimed. Raw responses, reports, local paths,
 authorizations and planning material remain in ignored private evidence.
 
 Before dispatch the executor checks its owned evidence directory, parents and
@@ -418,3 +418,60 @@ consumers. Record location, actual bytes, ownership, consumers and next retentio
 review privately. Do not delete protected evidence or infer disposal authority
 from `.gitignore`. Reverting documentation cannot undo disclosure; material
 input changes require explicit comparability reconciliation, not resampling.
+
+## Baseline observations — 2026-10-18
+
+One baseline batch consumed exactly five sequential fresh assessments, C1–C5,
+on the frozen native default-agent route with requested `gpt-6.1-sol/high` and
+`fork_turns="none"`. Host turn records identify that same model and effort;
+no backend revision is exposed. Each assessment returned one complete response
+within the requested 700-word bound. No assessment tool use, continuation,
+replacement trial or compaction was observed. All five responses were retained
+before substantive assessment. No confirmation batch ran.
+
+| Case | Observed reasoning and checked counterevidence | Assessor disposition |
+| --- | --- | --- |
+| C1 | Connected the shared default destination and second replacing write to loss of the required full report. Checked distinct baseline destinations, complete comparison module, synchronous successful calls and absence of another writer/guard. Recommended a regression test without claiming execution. | Supported source defect recognized without demanding execution for source entailment. Its separate caveat about independent validation concerns formal retention, not denial of the source consequence. |
+| C2 | Distinguished correct concatenation/unpacking behavior from the new set assertion's loss of order and multiplicity. Gave a reversed, duplicate-dropping output that would pass and connected missing purchases to consumer totals. | Material coverage gap recognized; no current duplicate-loss defect alleged. Recommended exact list equality and discriminating controls. |
+| C3 | Checked the new API's reliance on the unchanged helper, mismatch rejection and cooperative lock. Kept other actors' replacement capability, parent protection and deletion binding unknown. | Used a qualifying-risk label for conditional annotation loss, with precise pre-fix verification. The assessor retains the supported limitation; the label is debatable because feasible replacement is unestablished. Severe impact alone does not prove its trigger. No established defect or safety conclusion follows. |
+| C4 | Kept A incomplete at CONTEXT_FROZEN despite zero raw candidates, rejected unsupported file-loss speculation and identified missing platform evidence. Recognized B's stipulated complete coverage, adjudication and explicit accepted-empty receipt; treated Gate B as inapplicable. | Correct hypothetical blocked-empty/accepted-empty distinction. Neither recognition supplies observed controller execution, actual receipts or native authority. |
+| C5 | Established A's explicit textual recheck requirement while leaving operator compliance unknown. For B, checked mismatch rejection and possible internal adapter binding; kept identity-binding source and replacement control unresolved. | Instruction content did not substitute for executable evidence or discharge the mandatory check. Its conditional risk label does not establish adapter failure, unsafe execution or missing repository tests. |
+
+### Evidence limitations
+
+The host injected identical repository instructions and environment context into
+all five fresh agents in addition to the literal assessment task. This is native
+scaffolding outside the packet author's control, disclosed as a route limitation;
+it includes user-role context, so these observations cannot establish isolated
+causation by the selected guidance. No expected conclusions, private criteria,
+other assessment responses or controller conversation were deliberately supplied
+to workers. Logical separation is not containment.
+
+Complete intended initial messages and raw visible responses are retained. The
+host encrypts task-message content in persisted dispatch logs; the native thread
+reader did not expose argument plaintext. The live tool transcript contains the
+literal dispatches, but an independent plaintext byte comparison of actual
+persisted dispatches against frozen packets is unavailable. Intended packet
+identities match I1. This capture limitation is not evidence of a packet mismatch
+or a guidance failure, and it does not authorize replacement trials.
+
+These are five single observations, not repeatability, a numerical quality score,
+or evidence of general review quality. No fixture, reproducer, replacement
+control, controller workflow, installed skill or executable safety was exercised.
+
+### I2 intervention decision
+
+**No production-guidance change is justified by this baseline.** The observed
+responses preserved the distinctions targeted by Q03–Q07. C3's classification
+uncertainty remains explicit; its response already names the missing trigger
+support and verification, so a new rule or threshold change is not demonstrated.
+No verified contradiction in the selected canonical guidance was established.
+The host/capture limitations weaken attribution; they cannot justify an edit or
+prove that current guidance is generally adequate.
+
+For I3, the proposed production edit set is empty. Reject the provisional preview
+as an intervention for this batch; preserve it as the earlier hypothesis rather
+than apply it. Skip candidate confirmation because no guidance change warrants
+one. I3 still owns the planned deterministic safeguards, final distributable
+validation and calibration-to-delivery reconciliation. This decision changes no
+activation, finding threshold, gate, controller contract, compatibility or version.
