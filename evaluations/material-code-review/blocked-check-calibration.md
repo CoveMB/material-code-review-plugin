@@ -7,7 +7,7 @@ version evaluator, or a controller. It supplies no native findings, gate
 receipts, clearance, merge readiness, installed-usability evidence, or proof
 that executable operations behaved safely.
 
-The only I1 changes are this document and its evaluation README link.
+This maintainer exercise consists of this document and its evaluation README link.
 Production rules remain with [the skill](../../skills/material-code-review/SKILL.md),
 its [materiality rubric](../../skills/material-code-review/references/materiality-rubric.md),
 [causal test rubric](../../skills/material-code-review/references/test-evidence-rubric.md),
@@ -52,10 +52,10 @@ for failed, missing, contaminated or undesirable output. Preserve failures;
 do not silently replenish the batch. Independent document reviewers are separate
 from these assessment trials and must not execute them.
 
-I2 collects one baseline and assesses all five responses only after capture.
+Collect one baseline and assess all five responses only after capture.
 Every proposed production edit must map to an observed interpretation failure
 or verified source contradiction. Adequate existing guidance yields a genuine
-no-change decision; skip confirmation. I3 may collect one confirmation batch
+no-change decision; skip confirmation. Collect at most one confirmation batch
 only after a material justified guidance change. Freeze its new excerpt bytes,
 source identities and complete packet digests before dispatch, with unchanged
 contract, cases, source-selection boundaries, order, settings and allocation.
@@ -393,8 +393,8 @@ responses, actual controller validation and installed behavior.
 ## Provisional wording preview — not production guidance
 
 Do not apply this preview before baseline assessment. It is an intervention
-hypothesis, not a preselected outcome or worker input. I2 may revise or reject
-it based on evidence; I3 owns any justified final production edit and checks.
+hypothesis, not a preselected outcome or worker input. Revise or reject it based
+on baseline evidence; apply only justified production edits with relevant checks.
 
 | Canonical owner | Candidate clarification, only if justified |
 | --- | --- |
@@ -406,14 +406,14 @@ it based on evidence; I3 owns any justified final production edit and checks.
 
 ## Execution evidence and retention boundary
 
-No baseline, candidate confirmation or benefit result is recorded in I1. Future
-I2/I3 summaries belong here after execution; raw responses, reports, local paths,
+No baseline, candidate confirmation or benefit result is recorded here. Record
+summaries here after execution; raw responses, reports, local paths,
 authorizations and planning material remain in ignored private evidence.
 
 Before dispatch the executor checks its owned evidence directory, parents and
 symlinks. Keep exact assembled inputs, guidance bytes, complete responses
 (including failures), dispatch settings, candidate diffs and review reports
-through the I3 result decision and final reconciliation, longer for active
+through final calibration disposition and evidence reconciliation, longer for active
 consumers. Record location, actual bytes, ownership, consumers and next retention
 review privately. Do not delete protected evidence or infer disposal authority
 from `.gitignore`. Reverting documentation cannot undo disclosure; material
