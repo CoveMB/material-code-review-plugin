@@ -476,3 +476,79 @@ than apply it. Skip candidate confirmation because no guidance change warrants
 one. Deterministic safeguard checks, final distributable validation and evidence
 reconciliation remain outstanding. This decision changes no activation, finding
 threshold, gate, controller contract, compatibility or version.
+
+## Final no-change disposition — 2026-10-18
+
+**Retain the existing production guidance unchanged.** The baseline supports no
+intervention for this exercise. Reject the provisional wording preview as a
+production change; keep it only as the frozen earlier hypothesis. The five
+single observations and their counterevidence do not establish a guidance defect,
+general adequacy, repeatability or improvement. C3's qualifying-risk label remains
+disputed because replacement feasibility is unestablished. The host-context and
+persisted-plaintext capture limitations above remain unresolved.
+
+The production edit set is empty. No conditional interim three-test run or
+candidate confirmation was performed; both require a guidance change. No extra
+calibration trial, synthetic C1–C5 execution or native material-review invocation
+was added.
+Canonical finding thresholds, causal-test requirements, blocked-check and
+accepted-empty conditions, Gate A/B, exact repair authority, freshness,
+restoration and finite attempts remain unchanged. No schema, controller,
+taxonomy, adapter, dependency, compatibility or version change is required.
+
+### Calibration-to-delivery reconciliation
+
+The frozen I1 contract, ordered guidance and all five intended packets match the
+retained I2 inputs byte-for-byte. Complete C1–C5 responses and the assessment
+remain available for review. The baseline observations above preserve C1's
+source entailment, C2's coverage gap without current duplicate loss, C3's missing
+trigger support, C4's hypothetical blocked-empty/accepted-empty distinction and
+C5's instruction-content/executable-evidence boundary. Intended-file equality
+does not resolve encrypted persisted dispatch correspondence or isolate the
+selected guidance from host-added context.
+
+I3 adds only this final maintainer disposition and its verification summary.
+The frozen document sections and all production sources remain unchanged across
+the I1 → I2 → I3 chain. No retained intervention or behavioral benefit is claimed.
+Deterministic controller tests, package inspection and source-only assessments
+remain separate evidence categories; none supplies actual native gate receipts,
+installed usability, executable destructive safety or a full-workflow benchmark.
+
+### Final deterministic verification
+
+The canonical `make package package-simplification` ran once in the isolated
+delivered checkout with `PYTHONDONTWRITEBYTECODE=1` and an executor-owned
+`DIST_DIR`. Underlying exit status: **0**. Cleanup was inspected first: no
+pre-existing cache or bytecode targets or symlinks were present. Unrelated
+primary-checkout simplification work and historical evidence were outside this
+selected delivered tree and were neither imported nor validated by this run.
+
+| Suite | Tests run | Passed | Skipped | Failures |
+| --- | ---: | ---: | ---: | ---: |
+| Material review | 153 | 153 | 0 | 0 |
+| Material simplification | 25 | 25 | 0 | 0 |
+| Packaging | 95 | 94 | 1 | 0 |
+
+The packaging skip was `test_packager_rejects_case_only_collision`: the temporary
+filesystem is case-insensitive. No warnings were reported. The final suite
+included successful blocked-specialist-wave, explicit accepted-empty completion
+and generic/unauthorized specialist-evidence rejection tests. These protect
+existing deterministic contracts; they do not turn C4's hypothetical response
+into observed native execution or prove review-quality improvement.
+
+Source-tree validators and all three archive validations passed: full plugin
+1.7.0, standalone material review 1.7.0 and standalone simplification 1.3.0.
+Inspection compared every archive member with its canonical source bytes,
+checked declared skill-reference closure and confirmed simplification's shared
+controller, support modules and schemas. Maintainer calibration/planning
+material, raw responses, private criteria, authorization notes, VCS metadata and
+local evidence paths were excluded from the delivered archives.
+
+Validation began at the verified I2 source tree. The only subsequent tracked
+change is this excluded maintainer report; all tested production and shipped
+source bytes remain identical. Its administrative additions receive separate
+documentary and scoped review checks, rather than being represented as unseen
+bytes tested by the earlier suite. Complete raw validation output, input
+identities, archive correspondence and review evidence remain retained outside
+tracked source for active review. No installation, release or native activation
+was tested, and no protected evidence was deleted.
