@@ -2,6 +2,8 @@
 
 This repository-local workflow provides directional local evidence about two exact `material-code-review` revisions. It is not a publication-grade benchmark or an implicit skill-selection test.
 
+The separate [source-only incomplete-evidence calibration](blocked-check-calibration.md) freezes five synthetic cases; it does not invoke this evaluator or establish native workflow acceptance.
+
 ## Prerequisites and invocation
 
 Open a fresh Codex task at the repository root. The material-review repository must have no unrelated local changes. Git must be able to resolve both requested skill refs. The frozen Discogs commits may come from an attested clean trusted local checkout with the declared origin or, when none is known, the public repository.
