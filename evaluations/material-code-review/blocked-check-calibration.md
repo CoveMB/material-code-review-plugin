@@ -2,7 +2,7 @@
 
 Maintainer exercise, frozen packet revision 1. Prepared against commit
 `d4bb95facba06414b514c1edeb89be8de2f4cc2d` (full plugin 1.7.0).
-I1 froze the inputs; one five-case baseline was collected on 2026-10-18.
+The inputs were frozen; one five-case baseline was collected on 2026-10-18.
 This exercise does not invoke material-code-review, the version evaluator, or a controller. It supplies no native findings, gate
 receipts, clearance, merge readiness, installed-usability evidence, or proof
 that executable operations behaved safely.
@@ -452,26 +452,27 @@ host encrypts task-message content in persisted dispatch logs; the native thread
 reader did not expose argument plaintext. The live tool transcript contains the
 literal dispatches, but an independent plaintext byte comparison of actual
 persisted dispatches against frozen packets is unavailable. Intended packet
-identities match I1. This capture limitation is not evidence of a packet mismatch
-or a guidance failure, and it does not authorize replacement trials.
+identities match the frozen digests above. This capture limitation is not evidence
+of a packet mismatch or a guidance failure, and it does not authorize replacement trials.
 
 These are five single observations, not repeatability, a numerical quality score,
 or evidence of general review quality. No fixture, reproducer, replacement
 control, controller workflow, installed skill or executable safety was exercised.
 
-### I2 intervention decision
+### Intervention decision
 
 **No production-guidance change is justified by this baseline.** The observed
-responses preserved the distinctions targeted by Q03–Q07. C3's classification
-uncertainty remains explicit; its response already names the missing trigger
-support and verification, so a new rule or threshold change is not demonstrated.
+responses distinguished source-established defects, coverage gaps, unresolved
+identity properties, hypothetical completion conditions and instruction content.
+C3's classification uncertainty remains explicit; its response already names the
+missing trigger support and verification, so a new rule or threshold change is not demonstrated.
 No verified contradiction in the selected canonical guidance was established.
 The host/capture limitations weaken attribution; they cannot justify an edit or
 prove that current guidance is generally adequate.
 
-For I3, the proposed production edit set is empty. Reject the provisional preview
+The proposed production edit set is empty. Reject the provisional preview
 as an intervention for this batch; preserve it as the earlier hypothesis rather
 than apply it. Skip candidate confirmation because no guidance change warrants
-one. I3 still owns the planned deterministic safeguards, final distributable
-validation and calibration-to-delivery reconciliation. This decision changes no
-activation, finding threshold, gate, controller contract, compatibility or version.
+one. Deterministic safeguard checks, final distributable validation and evidence
+reconciliation remain outstanding. This decision changes no activation, finding
+threshold, gate, controller contract, compatibility or version.
