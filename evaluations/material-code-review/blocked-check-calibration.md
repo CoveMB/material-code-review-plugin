@@ -473,9 +473,11 @@ prove that current guidance is generally adequate.
 The proposed production edit set is empty. Reject the provisional preview
 as an intervention for this batch; preserve it as the earlier hypothesis rather
 than apply it. Skip candidate confirmation because no guidance change warrants
-one. Deterministic safeguard checks, final distributable validation and evidence
-reconciliation remain outstanding. This decision changes no activation, finding
-threshold, gate, controller contract, compatibility or version.
+one. At this baseline decision, deterministic safeguard checks and final
+distributable validation had not yet run. Their completed results appear in
+[Final deterministic verification](#final-deterministic-verification). This
+decision changes no activation, finding threshold, gate, controller contract,
+compatibility or version.
 
 ## Final no-change disposition — 2026-10-18
 
@@ -487,8 +489,9 @@ general adequacy, repeatability or improvement. C3's qualifying-risk label remai
 disputed because replacement feasibility is unestablished. The host-context and
 persisted-plaintext capture limitations above remain unresolved.
 
-The production edit set is empty. No conditional interim three-test run or
-candidate confirmation was performed; both require a guidance change. No extra
+The production edit set is empty. No candidate confirmation was performed
+because production guidance did not change. Existing deterministic safeguards
+were checked in the full validation reported below. No extra
 calibration trial, synthetic C1–C5 execution or native material-review invocation
 was added.
 Canonical finding thresholds, causal-test requirements, blocked-check and
@@ -498,18 +501,19 @@ taxonomy, adapter, dependency, compatibility or version change is required.
 
 ### Calibration-to-delivery reconciliation
 
-The frozen I1 contract, ordered guidance and all five intended packets match the
-retained I2 inputs byte-for-byte. Complete C1–C5 responses and the assessment
-remain available for review. The baseline observations above preserve C1's
+The frozen worker contract, ordered guidance and all five intended packets
+match the retained baseline inputs byte-for-byte. Complete C1–C5 responses and
+the assessment remain available for review. The baseline observations above preserve C1's
 source entailment, C2's coverage gap without current duplicate loss, C3's missing
 trigger support, C4's hypothetical blocked-empty/accepted-empty distinction and
 C5's instruction-content/executable-evidence boundary. Intended-file equality
 does not resolve encrypted persisted dispatch correspondence or isolate the
 selected guidance from host-added context.
 
-I3 adds only this final maintainer disposition and its verification summary.
-The frozen document sections and all production sources remain unchanged across
-the I1 → I2 → I3 chain. No retained intervention or behavioral benefit is claimed.
+This final disposition records the no-change outcome and verification. The
+frozen input blocks and all production sources remain unchanged; only
+administrative reporting prose was revised. No retained intervention or
+behavioral benefit is claimed.
 Deterministic controller tests, package inspection and source-only assessments
 remain separate evidence categories; none supplies actual native gate receipts,
 installed usability, executable destructive safety or a full-workflow benchmark.
@@ -519,9 +523,8 @@ installed usability, executable destructive safety or a full-workflow benchmark.
 The canonical `make package package-simplification` ran once in the isolated
 delivered checkout with `PYTHONDONTWRITEBYTECODE=1` and an executor-owned
 `DIST_DIR`. Underlying exit status: **0**. Cleanup was inspected first: no
-pre-existing cache or bytecode targets or symlinks were present. Unrelated
-primary-checkout simplification work and historical evidence were outside this
-selected delivered tree and were neither imported nor validated by this run.
+pre-existing cache or bytecode targets or symlinks were present. The run
+validated only the selected delivered source tree.
 
 | Suite | Tests run | Passed | Skipped | Failures |
 | --- | ---: | ---: | ---: | ---: |
@@ -544,11 +547,12 @@ controller, support modules and schemas. Maintainer calibration/planning
 material, raw responses, private criteria, authorization notes, VCS metadata and
 local evidence paths were excluded from the delivered archives.
 
-Validation began at the verified I2 source tree. The only subsequent tracked
-change is this excluded maintainer report; all tested production and shipped
-source bytes remain identical. Its administrative additions receive separate
-documentary and scoped review checks, rather than being represented as unseen
-bytes tested by the earlier suite. Complete raw validation output, input
+Validation ran against source commit
+`5c6a36325814ae3414df81da5d9eb1361a6b3424`. Subsequent tracked changes are
+confined to this excluded maintainer report; all tested production and shipped
+source bytes remain identical. The revised administrative prose receives
+separate documentary and scoped source-fidelity review checks; its new bytes
+were not tested by the earlier suite. Complete raw validation output, input
 identities, archive correspondence and review evidence remain retained outside
 tracked source for active review. No installation, release or native activation
 was tested, and no protected evidence was deleted.
