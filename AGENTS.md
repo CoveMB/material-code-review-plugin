@@ -105,9 +105,9 @@ Accepted evidence limitations are closed decisions. Do not reopen them without n
 ### Delegated work
 
 - Subagents must not run the full suite or live evaluations unless explicitly assigned.
-- Use at most one bounded final reviewer for a coherent task unless that reviewer identifies a material defect.
+- Preserve all distinct review scopes, stages, independent assignments and reports required by the user or an applicable repository/skill workflow. Do not collapse required independent assignments into one combined reviewer or impose a global numerical reviewer cap.
 - Reviewers should report only merge-blocking or materially beneficial findings, not style preferences.
-- Do not delegate repeated reviews of unchanged code.
+- Avoid additional discretionary reviews that repeat already-satisfied coverage of the same unchanged candidate. Before adding or repeating a review, identify the required coverage or material question it will address. Material changes, findings, new evidence or uncovered risks justify targeted follow-up; renew only affected scopes and reuse still-applicable reports. Do not stack generic final-review layers merely because several workflows or tools are available.
 
 ### Output discipline
 
