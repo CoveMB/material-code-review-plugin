@@ -46,7 +46,8 @@ The narrowed descriptions and the workflow preflight reduce false activation; th
 - Codex skill interface metadata: `skills/material-code-review/agents/openai.yaml`
 - Portable package entrypoint: root `SKILL.md`
 - Canonical workflow: `skills/material-code-review/SKILL.md`
-- Canonical simplification workflow: `skills/material-code-simplification/SKILL.md`
+- Canonical simplification routing and common invariants: `skills/material-code-simplification/SKILL.md`
+- Simplification phase procedures: `skills/material-code-simplification/references/` (load the selected procedure and prerequisites before acting; both user gates remain in the entrypoint)
 - Claude Code compatibility manifests: `.claude-plugin/`
 - Read-only Claude specialist agents: `agents/`
 - Claude compatibility command: `commands/material-review.md`

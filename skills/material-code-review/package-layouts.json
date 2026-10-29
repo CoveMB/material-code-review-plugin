@@ -404,6 +404,10 @@
           "source": "skills/material-code-simplification/references/context-checklist.md"
         },
         {
+          "destination": "skills/material-code-simplification/references/discovery-and-adjudication.md",
+          "source": "skills/material-code-simplification/references/discovery-and-adjudication.md"
+        },
+        {
           "destination": "skills/material-code-simplification/references/failure-model.md",
           "source": "skills/material-code-simplification/references/failure-model.md"
         },
@@ -416,6 +420,10 @@
           "source": "skills/material-code-simplification/references/planner-template.md"
         },
         {
+          "destination": "skills/material-code-simplification/references/post-refactor-verification.md",
+          "source": "skills/material-code-simplification/references/post-refactor-verification.md"
+        },
+        {
           "destination": "skills/material-code-simplification/references/postfix-verifier-template.md",
           "source": "skills/material-code-simplification/references/postfix-verifier-template.md"
         },
@@ -426,6 +434,14 @@
         {
           "destination": "skills/material-code-simplification/references/simplification-rubric.md",
           "source": "skills/material-code-simplification/references/simplification-rubric.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/transformation-execution.md",
+          "source": "skills/material-code-simplification/references/transformation-execution.md"
+        },
+        {
+          "destination": "skills/material-code-simplification/references/transformation-planning.md",
+          "source": "skills/material-code-simplification/references/transformation-planning.md"
         },
         {
           "destination": "skills/material-code-simplification/references/validator-template.md",
