@@ -16,9 +16,9 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 | Codex CLI / Codex plugin system | Native and locally installable | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`, `skills/` |
 | Codex / OpenAI Agent Skills import | Portable fallback | root `SKILL.md`, or the standalone Codex skill ZIP |
 | Claude Code | Packaged compatibility surface | `.claude-plugin/`, `commands/`, `agents/` |
-| OpenCode v2 | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in `.agents/skills/` |
-| Google Antigravity App / CLI | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in `.agents/skills/` |
-| Other Agent Skills hosts | Portable skills | Both canonical directories under `skills/`, preserving shared dependencies |
+| OpenCode v2 | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in a trusted user-level skill source |
+| Google Antigravity App / CLI | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in a trusted global skill directory |
+| Other Agent Skills hosts | Portable skills | Trusted external installation of both canonical directories, preserving shared dependencies |
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
 
@@ -76,6 +76,8 @@ Extract the archive first:
 ```bash
 unzip material-code-review-plugin-1.7.0.zip -d material-code-review-plugin
 ```
+
+Keep the extracted package and marketplace outside any target repository being reviewed. Never register or load a package from the reviewed worktree itself.
 
 Register the extracted directory as a local Codex marketplace:
 
@@ -137,35 +139,35 @@ Its `core/` directory embeds shared controller and obligation helper 1.7.0 plus 
 
 ## Install in OpenCode v2 or Google Antigravity
 
-Use the existing standalone archives as portable Agent Skills; the `codex-skill` filenames do not require Codex. From the target project's root, extract into **new, empty destinations**:
+Use the existing standalone archives as portable Agent Skills; the `codex-skill` filenames do not require Codex. Install them only in a trusted user-level/global skill directory outside the repository being reviewed. For OpenCode v2, use its global Agent Skills source (for example, `$HOME/.agents/skills/`):
 
 ```bash
-mkdir -p .agents/skills/material-code-review .agents/skills/material-code-simplification
+mkdir -p "$HOME/.agents/skills/material-code-review" "$HOME/.agents/skills/material-code-simplification"
 unzip /path/to/material-code-review-codex-skill-1.7.0.zip \
-  -d .agents/skills/material-code-review
+  -d "$HOME/.agents/skills/material-code-review"
 unzip /path/to/material-code-simplification-codex-skill-1.3.0.zip \
-  -d .agents/skills/material-code-simplification
+  -d "$HOME/.agents/skills/material-code-simplification"
 ```
 
-If either destination already exists, stop and reconcile that installation first; do not merge an archive into it. Each ZIP contains `SKILL.md` at its root. The simplification ZIP includes its own `core/` and also works without the review ZIP.
+For Antigravity, use the global directories `~/.gemini/config/skills/` (App) or `~/.gemini/antigravity-cli/skills/` (CLI). If a destination already exists, stop and reconcile that trusted installation first; do not merge an archive into it. Each ZIP contains `SKILL.md` at its root. The simplification ZIP includes its own `core/` and also works without the review ZIP.
 
-Alternatively, copy **both complete sibling directories** from this source checkout or an extracted full plugin ZIP into a fresh `.agents/skills/` destination:
+Alternatively, copy **both complete sibling directories** from a trusted source checkout or extracted full plugin ZIP into the corresponding global directory. The source checkout/package must itself be outside the target repository and trusted:
 
 ```bash
-mkdir -p .agents/skills
-cp -R /path/to/material-code-review-plugin/skills/material-code-review .agents/skills/
-cp -R /path/to/material-code-review-plugin/skills/material-code-simplification .agents/skills/
+mkdir -p "$HOME/.agents/skills"
+cp -R /trusted/path/material-code-review-plugin/skills/material-code-review "$HOME/.agents/skills/"
+cp -R /trusted/path/material-code-review-plugin/skills/material-code-simplification "$HOME/.agents/skills/"
 ```
 
 The source/full-plugin simplification directory requires its sibling `material-code-review` directory for the controller, helpers, schemas, and inherited references. Copying only `SKILL.md` is insufficient. Keep the two identities directly under the skill source:
 
 ```text
-.agents/skills/
+<global-skill-directory>/
 ├── material-code-review/SKILL.md
 └── material-code-simplification/SKILL.md
 ```
 
-Do not install the repository root as a container for both skills: its root `SKILL.md` routes only material review, and OpenCode stops nested discovery inside a skill directory. Avoid duplicate installed IDs that can select a different copy. These layouts use skill discovery; they do not install native OpenCode extensions or an Antigravity plugin.
+Never install either skill into the target repository's `.agents/skills/` or load a source checkout located in that worktree: a branch can modify its instructions, controller, adapter, or imported helpers before any gate. Treat project-local copies as untrusted review content, not executable skills. Avoid duplicate skill IDs; if a host selects a project-local copy or cannot unambiguously select the trusted global copy, stop without invoking the skill. These layouts use skill discovery; they do not install native OpenCode extensions or an Antigravity plugin.
 
 ### OpenCode v2
 
@@ -181,7 +183,7 @@ Review these changes for material regressions. Stop at Gate A without edits.
 Assess this bounded scope for behavior-preserving simplifications. Stop at Gate A.
 ```
 
-Instead of copying directories, V2 can read the source checkout's `skills/` directory through an existing `opencode.jsonc` configuration:
+Instead of copying directories, V2 can read a trusted source checkout's `skills/` directory through an existing `opencode.jsonc` configuration, provided that checkout is outside the reviewed worktree:
 
 ```json
 {
@@ -193,13 +195,13 @@ Merge that array into the existing configuration; do not replace other settings.
 
 ### Google Antigravity App and CLI
 
-Use `/material-code-review` or `/material-code-simplification`, followed by the same selectors and request shown above. Both surfaces discover project `.agents/skills/`. For global installation, the App uses `~/.gemini/config/skills/`; the CLI uses `~/.gemini/antigravity-cli/skills/`. Keep complete skill directories and the same dependency layout in either location. [Antigravity skills documentation](https://antigravity.google/docs/skills)
+Use `/material-code-review` or `/material-code-simplification`, followed by the same selectors and request shown above. Use the global App directory `~/.gemini/config/skills/` or CLI directory `~/.gemini/antigravity-cli/skills/`; keep complete skill directories and the same dependency layout in either location. Do not select project `.agents/skills/` copies when reviewing that repository. [Antigravity skills documentation](https://antigravity.google/docs/skills)
 
 ### Permissions and acceptance
 
-Keep Gate A before planning and Gate B before mutation on every host. Verify native reviewer permissions before delegating; otherwise use the canonical sequential/degraded fallback. Packaged Claude agents and Codex metadata are not portable permission configurations. Host tool approval does not approve a workflow gate. See [the security model](SECURITY.md#host-permissions).
+Keep Gate A before planning and Gate B before mutation on every host. Before review, verify that the resolved skill, controller, adapter, and imported helper paths come from the trusted installation outside the reviewed worktree; never execute project-local skill copies. Verify native reviewer permissions before delegating; otherwise use the canonical sequential/degraded fallback. Packaged Claude agents and Codex metadata are not portable permission configurations. Host tool approval does not approve a workflow gate. See [the security model](SECURITY.md#trusted-skill-code).
 
-Installed-layout controller tests establish local dependency resolution. Native discovery, invocation, permission enforcement, gate compliance, and restoration on OpenCode v2 and Antigravity remain unexercised; portable layout validation is not end-to-end host acceptance.
+Installed-layout controller tests establish external dependency resolution, not native skill selection. Native discovery of the trusted global copy, resistance to project-local duplicates, invocation, permission enforcement, gate compliance, and restoration on OpenCode v2 and Antigravity remain unexercised; portable layout validation is not end-to-end host acceptance.
 
 ## Optional project-scoped Codex reviewers
 

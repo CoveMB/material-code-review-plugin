@@ -27,6 +27,8 @@ Extract the full ZIP:
 unzip material-code-review-plugin-1.7.0.zip -d material-code-review-plugin
 ```
 
+Keep the extracted package outside any target repository being reviewed. Never register or invoke a package from the reviewed worktree itself.
+
 Register the extracted directory as a marketplace:
 
 ```bash
@@ -105,19 +107,21 @@ The plugin does not require them. They make role separation more explicit when t
 
 ## Direct controller use
 
-The controller works independently of the Codex UI:
+The controller works independently of the Codex UI. Set `SKILL_DIR` to the trusted external installation, not a copy inside the target worktree:
 
 ```bash
-./bin/material-reviewctl init --repo-root . --scope auto
+SKILL_DIR="/trusted/path/material-code-review/skills/material-code-review"
+python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope auto
 ```
 
 From the standalone skill archive:
 
 ```bash
-python3 scripts/reviewctl.py init --repo-root . --scope auto
+SKILL_DIR="/trusted/path/material-code-review"
+python3 "$SKILL_DIR/scripts/reviewctl.py" init --repo-root . --scope auto
 ```
 
-The controller is an integrity, state-transition, and restoration layer. It is not an operating-system sandbox. Review every Gate-B command before approval.
+Resolve symlinks and confirm `SKILL_DIR` is outside the target worktree before running it. The controller is an integrity, state-transition, and restoration layer. It is not an operating-system sandbox. Review every Gate-B command before approval.
 
 ## Live Codex validation
 

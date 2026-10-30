@@ -84,13 +84,13 @@ This separation is the main defense against both false-positive review output an
 
 ## Portable-host acceptance
 
-The OpenCode v2 and Antigravity App/CLI installation guidance uses the two existing skill identities and complete runtime layouts. Deterministic installed-layout tests initialize both controllers from a separate target repository using standalone archives and copied sibling source directories. They check scope/profile identity, dependency closure, and the missing-sibling failure. These checks do not exercise host discovery or model behavior.
+The OpenCode v2 and Antigravity App/CLI guidance requires trusted global skill installations outside the reviewed worktree. Deterministic installed-layout tests initialize both controllers from a separate target repository using external standalone archives and copied sibling source directories; a project-local decoy must not be executed. They check scope/profile identity, dependency closure, and the missing-sibling failure. These checks do not exercise native host discovery or prove that a host selects the external copy.
 
 Native acceptance is pending for all three surfaces. The compatibility implementation environment had no `opencode`, `agy`, or `antigravity` executable on PATH; no application was installed and no live-model evaluation was run. When an authorized native evaluation is available, freeze the host version, surface, installation form, cases, and maximum attempts before starting. Use a disposable synthetic repository and record each result separately:
 
 | Case | Required observation |
 |---|---|
-| Discover both skills | Separate `material-code-review` and `material-code-simplification` identities load from project `.agents/skills/`, with their supporting files. |
+| Discover both trusted skills | Separate `material-code-review` and `material-code-simplification` identities load from a trusted global installation outside the target worktree, with their supporting files; a project-local duplicate cannot be selected. |
 | Explicit selection | OpenCode `@material-code-review` / `@material-code-simplification` and Antigravity `/material-code-review` / `/material-code-simplification` load the intended canonical entrypoint and resolve its installed controller. |
 | Activation boundary | A request to review concrete Git changes for regressions is eligible; generic plugin analysis, document comparison, output diagnosis, and planning-only requests do not implicitly initialize material review. Explicit unsupported objects stop safely. A bounded simplification request retains its separate applicability. |
 | Human gates | Both workflows present every kept/discarded item and stop at Gate A before planning, then stop at Gate B before mutation. Host tool consent and general task approval do not satisfy either gate. |

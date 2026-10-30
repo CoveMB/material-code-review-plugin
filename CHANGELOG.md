@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- Documented OpenCode v2 and Google Antigravity App/CLI installation and invocation for both portable skills, preserving standalone and sibling-source dependency layouts.
-- Clarified host-specific reviewer permissions and unchanged activation and approval boundaries; added installed-layout controller checks and a separate native-host acceptance checklist.
-- Kept controller/schema contracts, full-plugin version 1.7.0, and standalone simplification version 1.3.0 unchanged. Native-host acceptance remains pending.
+- Restricted portable skill installation guidance to trusted global locations outside the reviewed worktree; project-local skill copies are untrusted review content.
+- Documented that skill instructions, controllers, adapters, and imported helpers are executable trust inputs and that ambiguous or in-worktree selection must stop before controller invocation.
+- Updated installed-layout and native-host acceptance expectations without changing controller/schema contracts or full-plugin version 1.7.0 and standalone simplification version 1.3.0. Native-host acceptance remains pending.
 
 ## 1.7.0 — 2026-08-06
 

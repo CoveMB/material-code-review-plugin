@@ -5054,7 +5054,7 @@ class StandalonePackagingTests(unittest.TestCase):
                 ) as archive:
                     self.assertIn(member, archive.namelist())
 
-    def test_portable_skill_installations_initialize_from_target_repository(self) -> None:
+    def test_external_skill_installations_initialize_without_executing_project_copies(self) -> None:
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
             fixture_root = self.create_full_plugin_fixture(temp_root)
@@ -5091,15 +5091,30 @@ class StandalonePackagingTests(unittest.TestCase):
                 result = run(*arguments)
                 self.assertEqual(result.returncode, 0, result.stderr)
             source.write_text("VALUE = 2\n", encoding="utf-8")
+
+            project_skills = target / ".agents" / "skills"
+            execution_marker = temp_root / "project-skill-executed"
+            for name, script in (
+                ("material-code-review", "scripts/reviewctl.py"),
+                ("material-code-simplification", "scripts/simplifyctl.py"),
+            ):
+                untrusted = project_skills / name / script
+                untrusted.parent.mkdir(parents=True)
+                untrusted.write_text(
+                    f"from pathlib import Path\nPath({str(execution_marker)!r}).touch()\n",
+                    encoding="utf-8",
+                )
             before = run("git", "status", "--porcelain=v1")
             self.assertEqual(before.returncode, 0, before.stderr)
 
             for layout in ("standalone", "sibling-directories"):
                 with self.subTest(layout=layout):
-                    skills = temp_root / layout / ".agents" / "skills"
+                    skills = temp_root / "trusted-installations" / layout / ".agents" / "skills"
                     skills.mkdir(parents=True)
                     simplify = skills / "material-code-simplification"
                     review = skills / "material-code-review"
+                    self.assertNotIn(target.resolve(), simplify.resolve().parents)
+                    self.assertNotIn(target.resolve(), review.resolve().parents)
                     artifacts = temp_root / f"{layout}-runs"
                     simplify_command = (
                         sys.executable, "-B", str(simplify / "scripts/simplifyctl.py"),
@@ -5139,6 +5154,7 @@ class StandalonePackagingTests(unittest.TestCase):
                         "--artifact-root", str(artifacts), "--run-id", "review",
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(execution_marker.exists())
                     for run_id, schema, scope in (
                         ("simplification", "material-review/state/v1", "codebase"),
                         ("review", "material-review/state/v6", "uncommitted"),
@@ -5162,6 +5178,7 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertEqual(after.returncode, 0, after.stderr)
                     self.assertEqual(after.stdout, before.stdout)
                     self.assertEqual(source.read_text(encoding="utf-8"), "VALUE = 2\n")
+                    self.assertFalse(execution_marker.exists())
 
     def test_new_contract_files_are_required_not_incidental(self) -> None:
         manifest = json.loads(REVIEW_LAYOUT_MANIFEST.read_text(encoding="utf-8"))
