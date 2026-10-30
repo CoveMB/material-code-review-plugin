@@ -82,6 +82,23 @@ This separation is the main defense against both false-positive review output an
 - Host platforms expose different subagent, model-routing, and plugin APIs. The skill contains fallbacks, but exact parallelism and model identity remain host-dependent.
 - Workspace restoration assumes normal Git working-tree behavior. Exotic filters, submodules, sparse checkouts, filesystem races, and generated/ignored files require human review.
 
+## Portable-host acceptance
+
+The OpenCode v2 and Antigravity App/CLI guidance requires trusted global skill installations outside the reviewed worktree. Deterministic installed-layout tests initialize both controllers from a separate target repository using external standalone archives and copied sibling source directories; a project-local decoy must not be executed. They check scope/profile identity, dependency closure, and the missing-sibling failure. These checks do not exercise native host discovery or prove that a host selects the external copy.
+
+Native acceptance is pending for all three surfaces. The compatibility implementation environment had no `opencode`, `agy`, or `antigravity` executable on PATH; no application was installed and no live-model evaluation was run. When an authorized native evaluation is available, freeze the host version, surface, installation form, cases, and maximum attempts before starting. Use a disposable synthetic repository and record each result separately:
+
+| Case | Required observation |
+|---|---|
+| Discover both trusted skills | Separate `material-code-review` and `material-code-simplification` identities load from a trusted global installation outside the target worktree, with their supporting files; a project-local duplicate cannot be selected. |
+| Explicit selection | OpenCode `@material-code-review` / `@material-code-simplification` and Antigravity `/material-code-review` / `/material-code-simplification` load the intended canonical entrypoint and resolve its installed controller. |
+| Activation boundary | A request to review concrete Git changes for regressions is eligible; generic plugin analysis, document comparison, output diagnosis, and planning-only requests do not implicitly initialize material review. Explicit unsupported objects stop safely. A bounded simplification request retains its separate applicability. |
+| Human gates | Both workflows present every kept/discarded item and stop at Gate A before planning, then stop at Gate B before mutation. Host tool consent and general task approval do not satisfy either gate. |
+| Delegation | Effective worker permissions permit only the assigned read-only work, or the run reports sequential/degraded coverage. Persona labels do not establish independence. No unapproved external source route is used. |
+| Bounded repair and recovery | After real user approval, only exact approved paths/commands are used; required tests and retry limits apply. Exercise supported checkpoint recovery for exclusive creation of an expected-missing path, and confirm unsupported existing-path restoration stops for reconciliation. |
+
+Permit one baseline execution and one confirmation after a material repair. An additional execution needs a new evidenced hypothesis, a relevant material change, or explicit user direction. Keep unavailable or conflicting results visible; package tests, controller `--help`, and this checklist are not native acceptance results.
+
 ## Maintainer-only skill-version evaluator
 
 This maintainer-only evaluator is available only from a source checkout and produces trusted-local, directional evidence.

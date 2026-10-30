@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Restricted portable skill installation guidance to trusted global locations outside the reviewed worktree; project-local skill copies are untrusted review content.
+- Documented that skill instructions, controllers, adapters, and imported helpers are executable trust inputs and that ambiguous or in-worktree selection must stop before controller invocation.
+- Updated installed-layout and native-host acceptance expectations without changing controller/schema contracts or full-plugin version 1.7.0 and standalone simplification version 1.3.0. Native-host acceptance remains pending.
+
 ## 1.7.0 — 2026-08-06
 
 - Published the strengthened material-review evidence contract under state/v6, coverage-plan/v5, candidate-set/v6, and candidates-normalized/v6 identities.

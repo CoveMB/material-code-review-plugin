@@ -5054,6 +5054,132 @@ class StandalonePackagingTests(unittest.TestCase):
                 ) as archive:
                     self.assertIn(member, archive.namelist())
 
+    def test_external_skill_installations_initialize_without_executing_project_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            temp_root = Path(temp_directory)
+            fixture_root = self.create_full_plugin_fixture(temp_root)
+            _, full_archive, review_archive = self.build_review_archives(
+                temp_root, fixture_root
+            )
+            simplification_archive = temp_root / "simplification.zip"
+            packaged = self.run_packager(fixture_root, simplification_archive)
+            self.assertEqual(packaged.returncode, 0, packaged.stderr)
+            full_root = temp_root / "extracted-full"
+            self.extract_archive_with_modes(full_archive, full_root)
+
+            target = temp_root / "target-repository"
+            target.mkdir()
+            environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+            environment.pop("PYTHONPATH", None)
+
+            def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    arguments, cwd=target, env=environment,
+                    capture_output=True, text=True, check=False, timeout=30,
+                )
+
+            source = target / "example.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            for arguments in (
+                ("git", "init", "-q"),
+                ("git", "add", "example.py"),
+                (
+                    "git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "-qm", "Initial fixture",
+                ),
+            ):
+                result = run(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            source.write_text("VALUE = 2\n", encoding="utf-8")
+
+            project_skills = target / ".agents" / "skills"
+            execution_marker = temp_root / "project-skill-executed"
+            for name, script in (
+                ("material-code-review", "scripts/reviewctl.py"),
+                ("material-code-simplification", "scripts/simplifyctl.py"),
+            ):
+                untrusted = project_skills / name / script
+                untrusted.parent.mkdir(parents=True)
+                untrusted.write_text(
+                    f"from pathlib import Path\nPath({str(execution_marker)!r}).touch()\n",
+                    encoding="utf-8",
+                )
+            before = run("git", "status", "--porcelain=v1")
+            self.assertEqual(before.returncode, 0, before.stderr)
+
+            for layout in ("standalone", "sibling-directories"):
+                with self.subTest(layout=layout):
+                    skills = temp_root / "trusted-installations" / layout / ".agents" / "skills"
+                    skills.mkdir(parents=True)
+                    simplify = skills / "material-code-simplification"
+                    review = skills / "material-code-review"
+                    self.assertNotIn(target.resolve(), simplify.resolve().parents)
+                    self.assertNotIn(target.resolve(), review.resolve().parents)
+                    artifacts = temp_root / f"{layout}-runs"
+                    simplify_command = (
+                        sys.executable, "-B", str(simplify / "scripts/simplifyctl.py"),
+                        "init", "--repo-root", ".", "--scope", "codebase",
+                        "--artifact-root", str(artifacts), "--run-id", "simplification",
+                    )
+
+                    if layout == "standalone":
+                        self.extract_archive_with_modes(simplification_archive, simplify)
+                        core = simplify / "core"
+                    else:
+                        shutil.copytree(full_root / "skills/material-code-simplification", simplify)
+                        missing = run(*simplify_command)
+                        self.assertNotEqual(missing.returncode, 0)
+                        self.assertIn("Could not locate the material-code-review controller", missing.stderr)
+                        self.assertFalse(artifacts.exists())
+                        shutil.copytree(full_root / "skills/material-code-review", review)
+                        core = review
+
+                    # The standalone simplification skill must work with no sibling installed.
+                    result = run(*simplify_command)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if layout == "standalone":
+                        self.assertFalse(review.exists())
+                        self.extract_archive_with_modes(review_archive, review)
+                    for name in (
+                        "remediation-auditor-template.md",
+                        "remediation-rubric.md",
+                        "test-evidence-rubric.md",
+                    ):
+                        self.assertTrue((core / "references" / name).is_file(), name)
+                    self.assertTrue((core / "schemas/candidate-set.schema.json").is_file())
+
+                    result = run(
+                        sys.executable, "-B", str(review / "scripts/reviewctl.py"),
+                        "init", "--repo-root", ".", "--scope", "uncommitted",
+                        "--artifact-root", str(artifacts), "--run-id", "review",
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(execution_marker.exists())
+                    for run_id, schema, scope in (
+                        ("simplification", "material-review/state/v1", "codebase"),
+                        ("review", "material-review/state/v6", "uncommitted"),
+                    ):
+                        run_root = artifacts / "runs" / run_id
+                        state = json.loads((run_root / "state.json").read_text(encoding="utf-8"))
+                        frozen = json.loads((run_root / "scope.json").read_text(encoding="utf-8"))
+                        self.assertEqual(state["schema_version"], schema)
+                        self.assertEqual(state["scope_params"]["actual_scope"], scope)
+                        self.assertEqual(state["repo_root"], str(target.resolve()))
+                        self.assertEqual(state["phase"], "CONTEXT_FROZEN")
+                        self.assertEqual(state["gates"], {})
+                        self.assertEqual(state["scope_hash"], frozen["scope_hash"])
+                        if run_id == "simplification":
+                            self.assertEqual(state["profile"], "material-code-simplification")
+                            self.assertNotIn("coverage_required", state)
+                        else:
+                            self.assertEqual(state["workflow_profile"], "material_review")
+                            self.assertTrue(state["coverage_required"])
+                    after = run("git", "status", "--porcelain=v1")
+                    self.assertEqual(after.returncode, 0, after.stderr)
+                    self.assertEqual(after.stdout, before.stdout)
+                    self.assertEqual(source.read_text(encoding="utf-8"), "VALUE = 2\n")
+                    self.assertFalse(execution_marker.exists())
+
     def test_new_contract_files_are_required_not_incidental(self) -> None:
         manifest = json.loads(REVIEW_LAYOUT_MANIFEST.read_text(encoding="utf-8"))
         suffixes = {

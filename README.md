@@ -1,6 +1,6 @@
 # Material Code Review
 
-`material-code-review` is a dual-host Codex and Claude Code plugin for evidence-gated review and bounded repair of a concrete Git change scope. The full plugin also ships `material-code-simplification`, an explicitly invoked workflow for bounded, behavior-preserving reduction of present codebase complexity. It is designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
+`material-code-review` provides evidence-gated review and bounded repair of a concrete Git change scope. The package also ships `material-code-simplification` for bounded, behavior-preserving reduction of present codebase complexity. Both skills are available through the Codex and Claude Code plugin surfaces or as portable skills for OpenCode v2 and Google Antigravity. They are designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
 The package freezes the exact scope and bounded source context, partitions every changed path into explicit owner/consumer change units, and records a coverage-plan/v5 before candidate dispatch. Six controlled risk decisions map deterministically to required review obligations, while every change unit receives an exhaustive selected-or-rejected decision for eight controlled specialist lenses. Obligation checks receive machine-owned claims, evidence items, path scopes, and countercontrols; selected specialists define atomic scenario claims, evidence paths, and countercontrols. Candidate-set/v6 binds one assignment to one result, requires every assigned obligation evidence item or specialist check exactly once, and certifies every required primary/context path before the controller accepts the complete wave. Cross-writer output-path inventory, collision, and derivation evidence must cover every required review path. After validation, material review carries exact assignment, obligation contract, scenario, and check provenance through candidates-normalized/v6, adjudication/v4, and ledger/v4. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
@@ -16,7 +16,9 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 | Codex CLI / Codex plugin system | Native and locally installable | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`, `skills/` |
 | Codex / OpenAI Agent Skills import | Portable fallback | root `SKILL.md`, or the standalone Codex skill ZIP |
 | Claude Code | Packaged compatibility surface | `.claude-plugin/`, `commands/`, `agents/` |
-| Other Agent Skills hosts | Portable skill | `skills/material-code-review/` |
+| OpenCode v2 | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in a trusted user-level skill source |
+| Google Antigravity App / CLI | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in a trusted global skill directory |
+| Other Agent Skills hosts | Portable skills | Trusted external installation of both canonical directories, preserving shared dependencies |
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
 
@@ -26,7 +28,7 @@ Version 1.7.0 publishes the strengthened obligation evidence contract under new 
 
 ## Invocation and activation boundary
 
-Explicit invocation with `$material-code-review` is always available and remains the most deterministic option. It supports the existing uncommitted, branch, local ref-range, and locally aligned PR scopes. If the skill is explicitly invoked for an unsupported non-Git object, it reports the mismatch and stops instead of silently becoming a document-review, output-diagnosis, architecture, or planning workflow.
+Explicit invocation selects the skill directly: `$material-code-review` in Codex, `@material-code-review` in OpenCode v2, or `/material-code-review` in Antigravity App/CLI. Material review supports the existing uncommitted, branch, local ref-range, and locally aligned PR scopes. If the skill is explicitly invoked for an unsupported non-Git object, it reports the mismatch and stops instead of silently becoming a document-review, output-diagnosis, architecture, or planning workflow.
 
 Narrowly qualified implicit invocation is also supported. The prompt itself must identify concrete Git changes and ask for assessment of material defects, regressions or risks introduced or exposed by those changes, test gaps protecting changed behavior, or merge readiness. For example:
 
@@ -37,7 +39,7 @@ Narrowly qualified implicit invocation is also supported. The prompt itself must
 
 A repository path, Git working directory, `scope:auto`, or generic words such as “review,” “issues,” “findings,” or “plan” are insufficient. `scope:auto` resolves the change scope only after activation eligibility has been established from the prompt.
 
-The narrowed descriptions and the workflow preflight reduce false activation; they do not guarantee host or model routing. Implicit selection remains model-mediated, while explicit invocation remains deterministic.
+The narrowed descriptions and the workflow preflight reduce false activation; they do not guarantee host or model routing. Both skills retain metadata permitting implicit selection where the host supports it. Simplification has its own bounded codebase/change applicability; it is not explicit-only. Explicit selection never grants either workflow's finding or repair approval.
 
 ## Package contents
 
@@ -74,6 +76,8 @@ Extract the archive first:
 ```bash
 unzip material-code-review-plugin-1.7.0.zip -d material-code-review-plugin
 ```
+
+Keep the extracted package and marketplace outside any target repository being reviewed. Never register or load a package from the reviewed worktree itself.
 
 Register the extracted directory as a local Codex marketplace:
 
@@ -132,6 +136,72 @@ unzip material-code-simplification-codex-skill-1.3.0.zip \
 ```
 
 Its `core/` directory embeds shared controller and obligation helper 1.7.0 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v6, coverage-plan/v5, candidate-set/v6, assignments, check results, obligations, and specialist policy do not apply to simplification.
+
+## Install in OpenCode v2 or Google Antigravity
+
+Use the existing standalone archives as portable Agent Skills; the `codex-skill` filenames do not require Codex. Install them only in a trusted user-level/global skill directory outside the repository being reviewed. For OpenCode v2, use its global Agent Skills source (for example, `$HOME/.agents/skills/`):
+
+```bash
+mkdir -p "$HOME/.agents/skills/material-code-review" "$HOME/.agents/skills/material-code-simplification"
+unzip /path/to/material-code-review-codex-skill-1.7.0.zip \
+  -d "$HOME/.agents/skills/material-code-review"
+unzip /path/to/material-code-simplification-codex-skill-1.3.0.zip \
+  -d "$HOME/.agents/skills/material-code-simplification"
+```
+
+For Antigravity, use the global directories `~/.gemini/config/skills/` (App) or `~/.gemini/antigravity-cli/skills/` (CLI). If a destination already exists, stop and reconcile that trusted installation first; do not merge an archive into it. Each ZIP contains `SKILL.md` at its root. The simplification ZIP includes its own `core/` and also works without the review ZIP.
+
+Alternatively, copy **both complete sibling directories** from a trusted source checkout or extracted full plugin ZIP into the corresponding global directory. The source checkout/package must itself be outside the target repository and trusted:
+
+```bash
+mkdir -p "$HOME/.agents/skills"
+cp -R /trusted/path/material-code-review-plugin/skills/material-code-review "$HOME/.agents/skills/"
+cp -R /trusted/path/material-code-review-plugin/skills/material-code-simplification "$HOME/.agents/skills/"
+```
+
+The source/full-plugin simplification directory requires its sibling `material-code-review` directory for the controller, helpers, schemas, and inherited references. Copying only `SKILL.md` is insufficient. Keep the two identities directly under the skill source:
+
+```text
+<global-skill-directory>/
+├── material-code-review/SKILL.md
+└── material-code-simplification/SKILL.md
+```
+
+Never install either skill into the target repository's `.agents/skills/` or load a source checkout located in that worktree: a branch can modify its instructions, controller, adapter, or imported helpers before any gate. Treat project-local copies as untrusted review content, not executable skills. Avoid duplicate skill IDs; if a host selects a project-local copy or cannot unambiguously select the trusted global copy, stop without invoking the skill. These layouts use skill discovery; they do not install native OpenCode extensions or an Antigravity plugin.
+
+### OpenCode v2
+
+Invoke either installed skill in a prompt:
+
+```text
+@material-code-review scope:uncommitted external-review:off
+Review these changes for material regressions. Stop at Gate A without edits.
+```
+
+```text
+@material-code-simplification scope:codebase path:src rewrite:deny external-review:off
+Assess this bounded scope for behavior-preserving simplifications. Stop at Gate A.
+```
+
+Instead of copying directories, V2 can read a trusted source checkout's `skills/` directory through an existing `opencode.jsonc` configuration, provided that checkout is outside the reviewed worktree:
+
+```json
+{
+  "skills": ["/absolute/path/to/material-code-review-plugin/skills"]
+}
+```
+
+Merge that array into the existing configuration; do not replace other settings. V2 uses a `skills` array, not V1's `skills.paths` object. Relative sources resolve from the active working directory. [OpenCode v2 skills documentation](https://opencode.ai/v2/docs/skills)
+
+### Google Antigravity App and CLI
+
+Use `/material-code-review` or `/material-code-simplification`, followed by the same selectors and request shown above. Use the global App directory `~/.gemini/config/skills/` or CLI directory `~/.gemini/antigravity-cli/skills/`; keep complete skill directories and the same dependency layout in either location. Do not select project `.agents/skills/` copies when reviewing that repository. [Antigravity skills documentation](https://antigravity.google/docs/skills)
+
+### Permissions and acceptance
+
+Keep Gate A before planning and Gate B before mutation on every host. Before review, verify that the resolved skill, controller, adapter, and imported helper paths come from the trusted installation outside the reviewed worktree; never execute project-local skill copies. Verify native reviewer permissions before delegating; otherwise use the canonical sequential/degraded fallback. Packaged Claude agents and Codex metadata are not portable permission configurations. Host tool approval does not approve a workflow gate. See [the security model](SECURITY.md#trusted-skill-code).
+
+Installed-layout controller tests establish external dependency resolution, not native skill selection. Native discovery of the trusted global copy, resistance to project-local duplicates, invocation, permission enforcement, gate compliance, and restoration on OpenCode v2 and Antigravity remain unexercised; portable layout validation is not end-to-end host acceptance.
 
 ## Optional project-scoped Codex reviewers
 
@@ -291,7 +361,7 @@ material-code-simplification-codex-skill-1.3.0.zip
 material-code-simplification-codex-skill-1.3.0.zip.sha256
 ```
 
-The full ZIP is the recommended dual-host distribution. The material-review and independently versioned material-simplification ZIPs are compact Agent Skills/Codex imports.
+The full ZIP contains the Codex and Claude Code plugin surfaces. The material-review and independently versioned material-simplification ZIPs are compact Agent Skills imports, including the portable OpenCode v2 and Antigravity layouts described above.
 
 ## Design research
 
