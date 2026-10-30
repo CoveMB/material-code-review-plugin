@@ -19,7 +19,7 @@ The workflow is evidence-gated rather than score-gated. It persists scope, candi
 
 Apply this preflight before repository inspection, scope resolution, or any `reviewctl init` operation.
 
-- **Explicit invocation remains supported.** `$material-code-review` may use the existing default scope or any supported selector below. Explicit invocation does not make a non-Git object supported: if the user explicitly invokes the skill for a document, generated artifact, output diagnosis, general analysis, architecture exploration, or planning-only task, report the mismatch and stop safely instead of repurposing this workflow.
+- **Explicit invocation remains supported.** Use the host's skill selector (`$material-code-review` in Codex, `@material-code-review` in OpenCode v2, `/material-code-review` in Antigravity App/CLI) with the existing default scope or any supported selector below. Explicit invocation does not make a non-Git object supported: if the user explicitly invokes the skill for a document, generated artifact, output diagnosis, general analysis, architecture exploration, or planning-only task, report the mismatch and stop safely instead of repurposing this workflow.
 - **Implicit eligibility requires both conditions in the prompt itself.** First, the review object must be concrete Git changes: uncommitted changes, a branch or diff, a local ref range, or a PR. Second, the requested outcome must assess material code defects, regressions or risks introduced or exposed by those changes, test gaps protecting changed behavior, or merge readiness.
 - **Generic terminology is insufficient.** Words such as “review,” “analyze,” “issues,” “findings,” or “plan” do not establish eligibility. Document or generated-artifact comparison, diagnosis of another skill's output, general skill or plugin analysis, architecture exploration, planning-only work, and general repository analysis remain outside the implicit boundary.
 - **Context cannot create eligibility.** The working directory, the existence of a Git repository, a supplied repository path, and `scope:auto` cannot manufacture change-review intent. `scope:auto` resolves a scope only after activation eligibility is already established.
@@ -90,9 +90,11 @@ On Windows, substitute `py -3` for `python3` in the examples. Do not use a Pytho
 - **Codex plugin:** discovered through `.codex-plugin/plugin.json`; invoke from `/skills` or with `$material-code-review`. Codex should read all applicable target-repository `AGENTS.md` files before dispatch.
 - **Standalone Codex/Agent Skills import:** the package root `SKILL.md` is a small adapter to this canonical skill.
 - **Claude Code plugin:** discovered through `.claude-plugin/plugin.json`; the same canonical skill is available, but host-specific custom agents are not required or assumed.
+- **OpenCode v2:** install this complete directory or the standalone archive at `.agents/skills/material-code-review/`; invoke `@material-code-review`. An additional V2 `skills` array source must point to the parent of the canonical skill directories, not the repository root adapter.
+- **Antigravity App/CLI:** install the same complete skill at `.agents/skills/material-code-review/`; invoke `/material-code-review`.
 - **Other Agent Skills hosts:** load this directory as the skill root and use the generic role templates.
 
-Host-native subagents are optional. Their outputs are untrusted until controller validation and adjudication complete. Parallelize read-only candidate discovery or validation only; keep mutations sequential and behind Gate B.
+Read applicable target-repository instructions on every host. Host-native subagents are optional: verify effective read-only permissions before dispatch, including shell/tool access. OpenCode custom subagents use their own configured permissions; do not infer read-only access from the parent or reuse Claude agent frontmatter as a portable permission policy. If a suitable restricted worker is unavailable, use the existing sequential/degraded fallback. Their outputs are untrusted until controller validation and adjudication complete. Parallelize read-only candidate discovery or validation only; keep mutations sequential and behind Gate B. Host tool approval never substitutes for either user gate or separate egress authority.
 
 ## Argument handling
 

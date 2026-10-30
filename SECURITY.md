@@ -24,6 +24,10 @@ Do not treat green local tests as sufficient approval for authentication/authori
 
 Report vulnerabilities privately to the package maintainer before public disclosure. Do not include secrets, proprietary source, or exploitable production details in a public report.
 
-## Codex and host permissions
+## Host permissions
 
-Codex sandboxing, tool approval policy, internet access, and workspace-managed plugin controls are separate from this controller. Installing the plugin does not grant trust to arbitrary repository commands. Keep Codex approvals restrictive until Gate B presents the exact commands and paths. A host-native subagent inherits the host's data and execution boundaries; this package does not prove its model identity or provider separation.
+Host sandboxing, tool approvals, internet access, and workspace-managed plugin controls are separate from this controller. Installing a skill does not grant trust to repository commands. A tool approval does not supply Gate A, Gate B, or separate publication/source-egress authority; workflow approval also cannot override a host restriction.
+
+Verify each worker's effective permissions before read-only delegation, including write-capable shell commands and tools. OpenCode v2 custom subagents use their own configured permissions; the parent's permission to launch a child does not make that child read-only. Antigravity documents inherited safety scopes alongside surface-specific tool and execution controls; inheritance alone does not establish a read-only reviewer. Use a verified restricted native worker or the canonical sequential/degraded fallback. [OpenCode agents](https://opencode.ai/v2/docs/agents), [OpenCode permissions](https://opencode.ai/v2/docs/permissions), [Antigravity subagents](https://antigravity.google/docs/subagents)
+
+The root `agents/` files target Claude Code, and `agents/openai.yaml` is Codex interface metadata. Neither is a portable permission configuration for OpenCode or Antigravity. This package does not establish worker model identity or provider separation; different role names are not independent corroboration.

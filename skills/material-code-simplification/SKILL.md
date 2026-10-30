@@ -43,6 +43,14 @@ The adapter delegates all lifecycle commands to the existing controller. Its onl
 
 New codebase-scope and delegated change-scope simplification runs deliberately retain `material-review/state/v1` and `material-review/candidate-set/v1` with the exact trusted `profile=material-code-simplification`. They do not create change units, coverage plans, review obligations, assignments, specialist decisions, or check results. An unprofiled or contradictory `state/v1` run cannot inherit simplification authority from the adapter and must restart. Standalone adapter 1.3.0 embeds shared controller and helper 1.7.0 for runtime provenance, but selects only the simplification state/v1 profile.
 
+## Host compatibility
+
+Install this complete directory alongside `material-code-review` under `.agents/skills/`, or extract the standalone simplification archive (including `core/`) into `.agents/skills/material-code-simplification/`. The source-directory layout requires the sibling review skill; the standalone archive is self-contained. Do not use the repository root `SKILL.md` to discover simplification: it routes only review.
+
+Invoke `$material-code-simplification` in Codex, `@material-code-simplification` in OpenCode v2, or `/material-code-simplification` in Antigravity App/CLI. Host selection does not change applicability or grant either user gate. Existing metadata permits implicit selection where supported; explicit invocation is not required by this workflow.
+
+Read applicable target-repository instructions. Use native workers only for bounded read-only roles after verifying their effective permissions, including shell/tool access. OpenCode custom subagents use their own configured permissions; packaged Claude agents and Codex metadata are not portable permission policies. If a suitable restricted worker is unavailable, follow the sequential/degraded self-audit rules in `references/failure-model.md`. Preserve actual independence limits, both user gates, sequential mutation, and separate egress authority regardless of host tool approvals.
+
 ## Hard invariants
 
 These rules override reviewer enthusiasm, metric output, and host defaults.

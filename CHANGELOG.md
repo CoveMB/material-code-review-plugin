@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Documented OpenCode v2 and Google Antigravity App/CLI installation and invocation for both portable skills, preserving standalone and sibling-source dependency layouts.
+- Clarified host-specific reviewer permissions and unchanged activation and approval boundaries; added installed-layout controller checks and a separate native-host acceptance checklist.
+- Kept controller/schema contracts, full-plugin version 1.7.0, and standalone simplification version 1.3.0 unchanged. Native-host acceptance remains pending.
+
 ## 1.7.0 — 2026-08-06
 
 - Published the strengthened material-review evidence contract under state/v6, coverage-plan/v5, candidate-set/v6, and candidates-normalized/v6 identities.

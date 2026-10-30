@@ -7,6 +7,8 @@ description: Review concrete Git changes (uncommitted, branch/diff, ref range, o
 
 The native Codex plugin entrypoint is `.codex-plugin/plugin.json`, which discovers the canonical skill under `skills/material-code-review/`. This root adapter is provided for Agent Skills hosts or local tooling that load the complete source tree as one skill.
 
+This adapter exposes material review only. To discover both material review and material simplification in OpenCode v2 or Antigravity, install the two complete sibling directories from `skills/` under `.agents/skills/`, or extract each standalone archive into its own named skill directory. Do not nest the repository root under a skill source and expect both skills to appear: OpenCode stops discovery inside a directory containing `SKILL.md`.
+
 ## Load the canonical workflow
 
 1. Resolve `PACKAGE_ROOT` as this file's directory.

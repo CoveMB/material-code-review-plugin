@@ -17,7 +17,7 @@ skills/material-code-review/agents/openai.yaml
 
 The plugin is skill-only. It does not require an app, MCP server, OAuth connection, external CLI, or secondary model.
 
-The package also includes a root `SKILL.md` adapter and a standalone skill archive for Codex or other OpenAI Skills import surfaces.
+The package also includes a root `SKILL.md` adapter and a standalone review archive for Codex or other OpenAI Skills import surfaces. Either entrypoint exposes only material review. The native full plugin discovers both canonical skills under `skills/`; direct two-skill imports require both standalone archives or both complete sibling directories.
 
 ## Native local installation
 
