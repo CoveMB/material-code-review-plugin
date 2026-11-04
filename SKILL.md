@@ -9,11 +9,13 @@ The native Codex plugin entrypoint is `.codex-plugin/plugin.json`, which discove
 
 This adapter exposes material review only. Load it only from a trusted package installation outside the target worktree; never load the reviewed repository's own copy. Install both skills only in the host's trusted global skill source, not under the target repository's `.agents/skills/`. If the host selected an in-worktree copy or the source is ambiguous, stop.
 
+The host must establish this adapter's trusted source before loading it; checks in its body cannot prevent replacement. OpenCode v2 and Antigravity App use is limited to trusted-workspace evaluation, with untrusted repositories and untrusted changes unsupported. Antigravity CLI native acceptance remains pending. Preserve the canonical workflow's trust prerequisites.
+
 ## Load the canonical workflow
 
 1. Resolve `PACKAGE_ROOT` as this file's directory and confirm it is outside the target worktree, resolving symlinks.
-2. Read `PACKAGE_ROOT/skills/material-code-review/SKILL.md` completely.
-3. Treat `PACKAGE_ROOT/skills/material-code-review` as `SKILL_DIR` for scripts, schemas, references, metadata, and tests.
+2. Set `SKILL_DIR` to `PACKAGE_ROOT/skills/material-code-review`. Resolve symlinks in both this directory and its `SKILL.md` file, and verify that both resolved paths are outside the target worktree before reading the file. If any source is in-worktree, ambiguous, or cannot be verified, stop before reading the canonical skill or invoking the controller.
+3. Read the verified `SKILL_DIR/SKILL.md` completely. Use the verified `SKILL_DIR` for scripts, schemas, references, metadata, and tests.
 4. Use:
 
 ```bash

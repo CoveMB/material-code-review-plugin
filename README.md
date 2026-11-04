@@ -1,6 +1,6 @@
 # Material Code Review
 
-`material-code-review` provides evidence-gated review and bounded repair of a concrete Git change scope. The package also ships `material-code-simplification` for bounded, behavior-preserving reduction of present codebase complexity. Both skills are available through the Codex and Claude Code plugin surfaces or as portable skills for OpenCode v2 and Google Antigravity. They are designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
+`material-code-review` provides evidence-gated review and bounded repair of a concrete Git change scope. The package also ships `material-code-simplification` for bounded, behavior-preserving reduction of present codebase complexity. Both skills are available through the Codex and Claude Code plugin surfaces. Portable layouts for OpenCode v2 and Google Antigravity have the trust restrictions below and no verified native acceptance. The workflows are designed for repositories where false positives, stale scope, premature edits, and recursive “one more improvement” loops are more costly than producing a long list of suggestions.
 
 The package freezes the exact scope and bounded source context, partitions every changed path into explicit owner/consumer change units, and records a coverage-plan/v5 before candidate dispatch. Six controlled risk decisions map deterministically to required review obligations, while every change unit receives an exhaustive selected-or-rejected decision for eight controlled specialist lenses. Obligation checks receive machine-owned claims, evidence items, path scopes, and countercontrols; selected specialists define atomic scenario claims, evidence paths, and countercontrols. Candidate-set/v6 binds one assignment to one result, requires every assigned obligation evidence item or specialist check exactly once, and certifies every required primary/context path before the controller accepts the complete wave. Cross-writer output-path inventory, collision, and derivation evidence must cover every required review path. After validation, material review carries exact assignment, obligation contract, scenario, and check provenance through candidates-normalized/v6, adjudication/v4, and ledger/v4. Every provisionally retained group receives a repair-direction audit bound to the scope, exact candidate IDs, and normalized direction hash. After Gate A, fix-plan/v2 requires the planner to account explicitly for every approved constraint, state/exception, open decision, alternative, and any divergence. The workflow then stops at two mandatory user gates:
 
@@ -16,8 +16,9 @@ Only after Gate B may repair work begin. Each approved finding is handled from a
 | Codex CLI / Codex plugin system | Native and locally installable | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`, `skills/` |
 | Codex / OpenAI Agent Skills import | Portable fallback | root `SKILL.md`, or the standalone Codex skill ZIP |
 | Claude Code | Packaged compatibility surface | `.claude-plugin/`, `commands/`, `agents/` |
-| OpenCode v2 | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in a trusted user-level skill source |
-| Google Antigravity App / CLI | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in a trusted global skill directory |
+| OpenCode v2 | Trusted-workspace evaluation only; untrusted repositories/changes unsupported | Both standalone ZIPs or complete sibling directories in a trusted user-level skill source |
+| Google Antigravity App | Trusted-workspace evaluation only; untrusted repositories/changes unsupported | Both standalone ZIPs or complete sibling directories in a trusted global skill directory |
+| Google Antigravity CLI | Portable layout; native acceptance pending | Both standalone ZIPs or complete sibling directories in the CLI global skill directory |
 | Other Agent Skills hosts | Portable skills | Trusted external installation of both canonical directories, preserving shared dependencies |
 
 The Codex plugin is skill-only: it does not require an app, MCP server, OAuth connection, or external model route.
@@ -28,7 +29,7 @@ Version 1.7.0 publishes the strengthened obligation evidence contract under new 
 
 ## Invocation and activation boundary
 
-Explicit invocation selects the skill directly: `$material-code-review` in Codex, `@material-code-review` in OpenCode v2, or `/material-code-review` in Antigravity App/CLI. Material review supports the existing uncommitted, branch, local ref-range, and locally aligned PR scopes. If the skill is explicitly invoked for an unsupported non-Git object, it reports the mismatch and stops instead of silently becoming a document-review, output-diagnosis, architecture, or planning workflow.
+Explicit invocation requests the skill by its host selector: `$material-code-review` in Codex, `@material-code-review` in OpenCode v2, or `/material-code-review` in Antigravity App/CLI. A selector does not authenticate the loaded source or bypass the compatibility restrictions above. Material review supports the existing uncommitted, branch, local ref-range, and locally aligned PR scopes. If the skill is explicitly invoked for an unsupported non-Git object, it reports the mismatch and stops instead of silently becoming a document-review, output-diagnosis, architecture, or planning workflow.
 
 Narrowly qualified implicit invocation is also supported. The prompt itself must identify concrete Git changes and ask for assessment of material defects, regressions or risks introduced or exposed by those changes, test gaps protecting changed behavior, or merge readiness. For example:
 
@@ -137,9 +138,11 @@ unzip material-code-simplification-codex-skill-1.3.0.zip \
 
 Its `core/` directory embeds shared controller and obligation helper 1.7.0 plus the historical and current shared schemas for runtime provenance and layout. Standalone adapter 1.3.0 still selects only state/v1 and candidate-set/v1 with the explicit `material-code-simplification` profile; material-review state/v6, coverage-plan/v5, candidate-set/v6, assignments, check results, obligations, and specialist policy do not apply to simplification.
 
-## Install in OpenCode v2 or Google Antigravity
+## Portable layouts for OpenCode v2 and Google Antigravity
 
-Use the existing standalone archives as portable Agent Skills; the `codex-skill` filenames do not require Codex. Install them only in a trusted user-level/global skill directory outside the repository being reviewed. For OpenCode v2, use its global Agent Skills source (for example, `$HOME/.agents/skills/`):
+**OpenCode v2 and Antigravity App are limited to trusted-workspace evaluation. Do not use these workflows on untrusted repositories or untrusted changes on those hosts.** Project-controlled skills can replace global copies before any check in the skill body runs. This package does not ship a native guard that prevents that loading. Restoring such use requires independently implemented and verified host-level source enforcement. Antigravity CLI has different precedence, but its native acceptance also remains pending. See [the security model](SECURITY.md#trusted-skill-code).
+
+For trusted evaluation, the existing standalone archives provide complete portable Agent Skills layouts; the `codex-skill` filenames do not require Codex. Install them only in a trusted user-level/global skill directory outside the evaluation repository. For OpenCode v2, its global Agent Skills source can hold the layout (for example, `$HOME/.agents/skills/`); this location does not pin trusted selection:
 
 Both destination paths must be absent before installation, including dangling symlinks. If either exists, stop and reconcile the trusted installation first; do not merge new files into it. The examples check both paths before creating directories, extracting, or copying files.
 
@@ -187,11 +190,11 @@ The source/full-plugin simplification directory requires its sibling `material-c
 └── material-code-simplification/SKILL.md
 ```
 
-Never install either skill into the target repository's `.agents/skills/` or load a source checkout located in that worktree: a branch can modify its instructions, controller, adapter, or imported helpers before any gate. Treat project-local copies as untrusted review content, not executable skills. Avoid duplicate skill IDs; if a host selects a project-local copy or cannot unambiguously select the trusted global copy, stop without invoking the skill. These layouts use skill discovery; they do not install native OpenCode extensions or an Antigravity plugin.
+Never install either skill into the target repository's `.agents/skills/` or load a source checkout located in that worktree: a branch can modify its instructions, controller, adapter, or imported helpers before any gate. Treat project-local copies as untrusted review content, not executable skills. Avoid duplicate skill IDs, but do not treat their absence in one inspection as enforcement. The trusted source must be established before loading any workflow instructions. These layouts use skill discovery; they do not install native OpenCode extensions or an Antigravity plugin.
 
 ### OpenCode v2
 
-Invoke either installed skill in a prompt:
+For a trusted-workspace evaluation only, these prompts request the installed skills by ID:
 
 ```text
 @material-code-review scope:uncommitted external-review:off
@@ -211,15 +214,15 @@ Instead of copying directories, V2 can read a trusted source checkout's `skills/
 }
 ```
 
-Merge that array into the existing configuration; do not replace other settings. V2 uses a `skills` array, not V1's `skills.paths` object. Relative sources resolve from the active working directory. [OpenCode v2 skills documentation](https://opencode.ai/v2/docs/skills)
+Merge that array into the existing configuration; do not replace other settings. V2 uses a `skills` array, not V1's `skills.paths` object. Relative sources resolve from the active working directory. Discovered configs contribute entries and later skill sources can override earlier ones, so this configuration is not a trust boundary or permission to review untrusted changes. [OpenCode v2 skills documentation](https://opencode.ai/v2/docs/skills)
 
 ### Google Antigravity App and CLI
 
-Use `/material-code-review` or `/material-code-simplification`, followed by the same selectors and request shown above. Use the global App directory `~/.gemini/config/skills/` or CLI directory `~/.gemini/antigravity-cli/skills/`; keep complete skill directories and the same dependency layout in either location. Do not select project `.agents/skills/` copies when reviewing that repository. [Antigravity skills documentation](https://antigravity.google/docs/skills)
+The selectors are `/material-code-review` and `/material-code-simplification`, followed by the same arguments shown above. App evaluation is limited to trusted workspaces: workspace skills override copies in the global App directory `~/.gemini/config/skills/`. The CLI-specific `~/.gemini/antigravity-cli/skills/` directory has higher precedence than workspace skills; preserve complete directories and the same dependency layout. This difference does not establish native acceptance or make the App instructions safe for untrusted changes. [Antigravity discovery precedence](https://antigravity.google/docs/customization-discovery#which-customization-wins)
 
 ### Permissions and acceptance
 
-Keep Gate A before planning and Gate B before mutation on every host. Before review, verify that the resolved skill, controller, adapter, and imported helper paths come from the trusted installation outside the reviewed worktree; never execute project-local skill copies. Verify native reviewer permissions before delegating; otherwise use the canonical sequential/degraded fallback. Packaged Claude agents and Codex metadata are not portable permission configurations. Host tool approval does not approve a workflow gate. See [the security model](SECURITY.md#trusted-skill-code).
+Keep Gate A before planning and Gate B before mutation on every host. Establish the trusted source before loading the skill body; after loading, the workflow's resolved-path checks are additional checks, not protection against a replaced body. Verify native reviewer permissions before delegating; otherwise use the canonical sequential/degraded fallback. Packaged Claude agents and Codex metadata are not portable permission configurations. Host tool approval does not approve a workflow gate. See [the security model](SECURITY.md#trusted-skill-code).
 
 Installed-layout controller tests establish external dependency resolution, not native skill selection. Native discovery of the trusted global copy, resistance to project-local duplicates, invocation, permission enforcement, gate compliance, and restoration on OpenCode v2 and Antigravity remain unexercised; portable layout validation is not end-to-end host acceptance.
 
