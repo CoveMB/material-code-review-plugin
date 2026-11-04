@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Restricted portable skill installation guidance to trusted global locations outside the reviewed worktree; project-local skill copies are untrusted review content.
+- Restricted OpenCode v2 and Antigravity App to trusted-workspace evaluation; untrusted repositories and changes are unsupported until independent host-level source enforcement is implemented and verified before skill loading. Antigravity CLI's distinct precedence is documented without claiming native acceptance.
+- Corrected both command wrappers and the root adapter to verify resolved directories and the actual canonical skill file before reading it, including symlink targets.
+- Documented that skill instructions, controllers, adapters, and imported helpers are executable trust inputs; checks inside them cannot enforce native discovery or prevent a malicious replacement from loading.
+- Updated installed-layout and native-host acceptance expectations without changing controller/schema contracts or full-plugin version 1.7.0 and standalone simplification version 1.3.0. Native-host acceptance remains pending.
+
 ## 1.7.0 — 2026-08-06
 
 - Published the strengthened material-review evidence contract under state/v6, coverage-plan/v5, candidate-set/v6, and candidates-normalized/v6 identities.
