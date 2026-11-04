@@ -141,22 +141,42 @@ Its `core/` directory embeds shared controller and obligation helper 1.7.0 plus 
 
 Use the existing standalone archives as portable Agent Skills; the `codex-skill` filenames do not require Codex. Install them only in a trusted user-level/global skill directory outside the repository being reviewed. For OpenCode v2, use its global Agent Skills source (for example, `$HOME/.agents/skills/`):
 
+Both destination paths must be absent before installation, including dangling symlinks. If either exists, stop and reconcile the trusted installation first; do not merge new files into it. The examples check both paths before creating directories, extracting, or copying files.
+
 ```bash
-mkdir -p "$HOME/.agents/skills/material-code-review" "$HOME/.agents/skills/material-code-simplification"
-unzip /path/to/material-code-review-codex-skill-1.7.0.zip \
-  -d "$HOME/.agents/skills/material-code-review"
-unzip /path/to/material-code-simplification-codex-skill-1.3.0.zip \
-  -d "$HOME/.agents/skills/material-code-simplification"
+(
+  for skill_name in material-code-review material-code-simplification; do
+    skill_destination="$HOME/.agents/skills/$skill_name"
+    if [ -e "$skill_destination" ] || [ -L "$skill_destination" ]; then
+      printf 'Stop: %s already exists; reconcile it before installing.\n' "$skill_destination" >&2
+      exit 1
+    fi
+  done
+  mkdir -p "$HOME/.agents/skills" &&
+    unzip /path/to/material-code-review-codex-skill-1.7.0.zip \
+      -d "$HOME/.agents/skills/material-code-review" &&
+    unzip /path/to/material-code-simplification-codex-skill-1.3.0.zip \
+      -d "$HOME/.agents/skills/material-code-simplification"
+)
 ```
 
-For Antigravity, use the global directories `~/.gemini/config/skills/` (App) or `~/.gemini/antigravity-cli/skills/` (CLI). If a destination already exists, stop and reconcile that trusted installation first; do not merge an archive into it. Each ZIP contains `SKILL.md` at its root. The simplification ZIP includes its own `core/` and also works without the review ZIP.
+For Antigravity, replace `$HOME/.agents/skills` throughout the chosen example with `$HOME/.gemini/config/skills` (App) or `$HOME/.gemini/antigravity-cli/skills` (CLI), including its destination checks. Each ZIP contains `SKILL.md` at its root. The simplification ZIP includes its own `core/` and also works without the review ZIP.
 
 Alternatively, copy **both complete sibling directories** from a trusted source checkout or extracted full plugin ZIP into the corresponding global directory. The source checkout/package must itself be outside the target repository and trusted:
 
 ```bash
-mkdir -p "$HOME/.agents/skills"
-cp -R /trusted/path/material-code-review-plugin/skills/material-code-review "$HOME/.agents/skills/"
-cp -R /trusted/path/material-code-review-plugin/skills/material-code-simplification "$HOME/.agents/skills/"
+(
+  for skill_name in material-code-review material-code-simplification; do
+    skill_destination="$HOME/.agents/skills/$skill_name"
+    if [ -e "$skill_destination" ] || [ -L "$skill_destination" ]; then
+      printf 'Stop: %s already exists; reconcile it before installing.\n' "$skill_destination" >&2
+      exit 1
+    fi
+  done
+  mkdir -p "$HOME/.agents/skills" &&
+    cp -R /trusted/path/material-code-review-plugin/skills/material-code-review "$HOME/.agents/skills/" &&
+    cp -R /trusted/path/material-code-review-plugin/skills/material-code-simplification "$HOME/.agents/skills/"
+)
 ```
 
 The source/full-plugin simplification directory requires its sibling `material-code-review` directory for the controller, helpers, schemas, and inherited references. Copying only `SKILL.md` is insufficient. Keep the two identities directly under the skill source:

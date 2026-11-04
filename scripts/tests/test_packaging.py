@@ -5055,6 +5055,7 @@ class StandalonePackagingTests(unittest.TestCase):
                     self.assertIn(member, archive.namelist())
 
     def test_external_skill_installations_initialize_without_executing_project_copies(self) -> None:
+        """Check external controller scope and dependencies, not native host selection."""
         with tempfile.TemporaryDirectory() as temp_directory:
             temp_root = Path(temp_directory)
             fixture_root = self.create_full_plugin_fixture(temp_root)
@@ -5168,6 +5169,10 @@ class StandalonePackagingTests(unittest.TestCase):
                         self.assertEqual(state["phase"], "CONTEXT_FROZEN")
                         self.assertEqual(state["gates"], {})
                         self.assertEqual(state["scope_hash"], frozen["scope_hash"])
+                        frozen_paths = {
+                            entry["path"] for entry in frozen["identity"]["files"]
+                        }
+                        self.assertIn("example.py", frozen_paths)
                         if run_id == "simplification":
                             self.assertEqual(state["profile"], "material-code-simplification")
                             self.assertNotIn("coverage_required", state)
